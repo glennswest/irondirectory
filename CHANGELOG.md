@@ -6,6 +6,16 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-06-29
+- **docs:** Partitioning made FOUNDATIONAL (decisions D8 + D9). D8: multi-domain
+  within a forest — each naming context is its own strongly-consistent Raft
+  cluster, federated by Kerberos cross-realm trust + LDAP referrals + a watch-fed
+  Global Catalog; never a monolithic tree. D9: multi-forest holding-company
+  topology — hundreds of autonomous forests (forest = security boundary, ITAR/M&A)
+  sharing a federated GAL + OIDC brokering. Added the day-one data-model contract
+  (PartitionRegistry, partition-scoped keys, multi-cluster store, rootDSE naming
+  contexts, realm-per-partition KDC), the `iron-partition`/`iron-gc` crates, and a
+  Phase 2.5 federation-operations plan. Work plan reordered so `iron-partition` is
+  built first and every crate is partition-aware from the start.
 - **docs:** Corrected the backend scale analysis in ARCHITECTURE §4 — removed
   Go-etcd folklore (GC pauses, ~8 GB ceiling, 1.5 MB cap) that does not apply to
   a Rust + io_uring etcd; documented redb (on-disk, not RAM-bound) vs wal/iouring

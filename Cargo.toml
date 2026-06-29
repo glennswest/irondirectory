@@ -3,11 +3,14 @@ resolver = "2"
 members = [
     # Phase 1 — Tier 1 identity core. Crates are added as each is implemented;
     # boundaries are fixed here so work can land incrementally.
-    # "crates/store",   # DIT over fastetcd: DN encoding, entries, indexes, watch
+    # "crates/partition", # FOUNDATIONAL (D8): NamingContext/Partition, registry,
+    #                     # partition-id -> fastetcd cluster map. Built first.
+    # "crates/store",   # partition-scoped DIT over fastetcd: keys, entries, indexes, watch
     # "crates/ldap",    # LDAP v3 server + AD-shaped schema + LDAPS (OpenSSL FIPS)
     # "crates/kdc",     # Kerberos KDC (AS/TGS), AES enctypes only, keytab
     # "crates/dns",     # DNS SRV autodiscovery
-    # "crates/oidc",    # OAuth2/OpenID Connect authorization server (OpenShift SSO)
+    # "crates/oidc",    # OAuth2/OpenID Connect authorization server (OpenShift SSO + D9 brokering)
+    # "crates/gc",      # watch-fed Global Catalog / federated GAL aggregator (D8/D9)
     # "crates/crypto",  # FIPS crypto facade over the `ossl` crate
     # "crates/server",  # binary: wires the services together (standalone + k8s)
 ]

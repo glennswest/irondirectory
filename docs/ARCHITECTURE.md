@@ -71,6 +71,9 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
   eventually-consistent replication. We do NOT reimplement DRS multi-master.
 - Documented, deliberate divergence from AD. Multi-site = Raft quorum within a
   failure domain; cross-WAN topologies are a future concern, not a v1 goal.
+- **This does not imply a monolith.** D8/D9 extend it: the directory is many
+  strongly-consistent partitions (one Raft cluster each), *federated* by trust +
+  referrals + watch-fed aggregation — never one big tree, never multi-master.
 
 ### D4 — FIPS: OpenSSL 3.x FIPS provider via the `ossl` crate
 - Standardize on the **OpenSSL 3.x FIPS provider**, matching `rocketsmbd`
@@ -128,6 +131,88 @@ several SSO surfaces so different consumers integrate the way they prefer:
   `Add-Computer` join and macOS `dsconfigad`. The hard ~80%.
 - **Tier 3 (deferred/skip):** DRSUAPI replication with real Windows DCs, full
   Group Policy engine, multi-domain trusts/forests.
+
+### D8 — Partitioning: multi-domain within a forest (FOUNDATIONAL, day one)
+The directory is **never** a single monolithic tree. It is a set of partitions
+(naming contexts), each its own strongly-consistent Raft cluster, federated by
+trust + referrals + watch-fed aggregation. This must be load-bearing from the
+first commit — retrofitting it later means rewriting the DN model, storage keys,
+LDAP referral layer, rootDSE, and KDC realm model simultaneously.
+
+**Mapping (mirrors AD's naming contexts):**
+
+| AD partition | irondirectory | Replication scope | Consistency |
+|---|---|---|---|
+| Domain NC | one dedicated fastetcd Raft cluster | that domain's DCs only | Strong |
+| Schema NC + Configuration NC | a forest-wide fastetcd cluster | whole forest | Strong (rare writes) |
+| Global Catalog (port 3268/3269) | watch-fed read-only partial aggregate of every domain NC | forest | Eventual (staleness OK) |
+
+**Federation primitives (the reusable building blocks):**
+- **Kerberos cross-realm trust** — each domain partition is a Kerberos realm with
+  its own `krbtgt`; parent/child trust = inter-realm keys
+  (`krbtgt/CHILD@PARENT`), transitive referral tickets walk the trust path.
+- **LDAP referrals** — superior (to parent) + subordinate (to children) knowledge
+  references; cross-partition ops return a referral or are chased/chained
+  (RFC 4511).
+- **Watch-fed aggregator** — subscribes to each partition's etcd watch stream and
+  maintains a read-only partial replica. Same code path serves the Global
+  Catalog (D8) and the cross-forest GAL (D9).
+
+**Data-model contract that MUST exist on day one (even with one partition):**
+- `NamingContext` / `Partition` as a core type; a **PartitionRegistry** (the
+  crossRef-equivalent, stored in the forest config partition) listing each NC,
+  its base DN, its fastetcd cluster endpoints + mTLS creds, its Kerberos realm,
+  and its parent/subordinate references.
+- Storage keys are **partition-scoped**: `/iron/<partition-id>/tree/<rdn-path>`
+  and `/iron/<partition-id>/idx/...`. No global single-suffix assumption.
+  Different partitions resolve to different clusters via the registry.
+- A **connection registry** maps partition-id → etcd endpoints, so the store
+  layer is multi-cluster from the start.
+- `iron-ldap` rootDSE publishes `namingContexts`, `defaultNamingContext`,
+  `configurationNamingContext`, `schemaNamingContext`, `rootDomainNamingContext`
+  from the first release; cross-NC operations emit referrals.
+- `iron-kdc` is realm-per-partition with cross-realm key slots from the start.
+- Schema is itself a partition (the schema NC), not hardcoded.
+
+What is deferred (operations, not the model): provisioning additional child
+domains, establishing trusts, and running the GC/GAL aggregator. These layer
+onto a model that already assumes N partitions on N clusters.
+
+### D9 — Multi-forest federation: the holding-company topology
+Real enterprises (e.g. an aerospace holding company with hundreds of
+subsidiaries) run **many autonomous forests**, one per sub-organization, sharing
+only a top-level identity/email namespace — NOT one giant forest.
+
+**Why separate forests, deliberately:**
+- The **forest is the security boundary** (not the domain). ITAR / export
+  control / classified programs / contractual separation between subsidiaries
+  require hard isolation: separate schema, separate enterprise admins, separate
+  blast radius.
+- M&A: acquired companies arrive with their own AD; you federate, never merge
+  hundreds of forests.
+- Divestiture: a subsidiary may be sold; clean separation is mandatory.
+
+**Architecture — recurse D8's primitives one level up:**
+- Each sub-organization is an autonomous forest (its own D8 structure: domains,
+  schema/config, GC), on its own isolated fastetcd cluster(s). Reinforces D1.
+- **Federated GAL** — the D8 watch-fed aggregator, scaled to forests: each forest
+  publishes only **whitelisted attributes** (email, display name, …) to a
+  top-level, read-only address book backing the shared `@holdco.com` GAL and
+  cross-company people search. Shares *only* those attributes — **no
+  directory-content leakage across the ITAR boundary.** This is a federated GAL,
+  not a merged directory.
+- **`iron-oidc` brokering as the cross-company SSO fabric** (ties to D7) —
+  hundreds of forests cannot be full-mesh Kerberos trusts (N² trust links).
+  Instead each forest is an OIDC IdP and a central broker federates them (the
+  Entra pattern). Native Kerberos cross-forest trust is used **selectively**,
+  hub-routed, only where Windows-native cross-org auth is actually required.
+- The holding tier is a thin, centrally-operated service (federated GAL + OIDC
+  broker) — often the *only* shared infrastructure across subsidiaries.
+
+**Bonus — trust to a real AD:** the same Kerberos cross-realm / forest-trust
+mechanism enables a one- or two-way trust with an existing Windows forest
+(`CORP.EXAMPLE.COM`) — both a coexistence story and an incremental migration
+path off Windows AD.
 
 ## 4. Known constraints / risks
 

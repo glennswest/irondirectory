@@ -44,6 +44,11 @@ first-class design constraint rather than a bolt-on.
   crypto boundary.
 - **Deployment:** runs **standalone** (DC appliance) or **in Kubernetes**
   (fastetcd StatefulSet + irondirectory Deployment over mTLS).
+- **Partitioned from day one:** never a monolithic tree. The directory is many
+  strongly-consistent partitions (one Raft cluster per naming context), federated
+  by Kerberos trust + LDAP referrals + watch-fed aggregation. Scales from one
+  domain to a multi-forest holding company (hundreds of autonomous forests
+  sharing a federated GAL + OIDC brokering; forest = security boundary).
 - **No NTLM.** MD4/MD5/RC4 are non-FIPS; Kerberos + SASL/GSSAPI only.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full rationale.

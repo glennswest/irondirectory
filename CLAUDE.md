@@ -29,6 +29,32 @@ Version locations (keep in sync on every bump):
 - **D6** Tier 1 Linux/Mac(light) → Tier 1.5 app SSO → Tier 2 Windows/Mac join.
 - **D7** SSO surfaces: RHEL native Kerberos; OpenShift via native OIDC
   (`iron-oidc`) + LDAP IdP + SPNEGO proxy. Self-contained, no Keycloak.
+- **D8** Partitioning (multi-domain) is **FOUNDATIONAL, day one** — many
+  strongly-consistent Raft clusters, one per naming context, federated by trust
+  + referrals + watch-fed aggregation. Never a monolith.
+- **D9** Multi-forest federation (holding-company topology): hundreds of
+  autonomous forests sharing a federated GAL + OIDC brokering; forest = security
+  boundary (ITAR/M&A). Recurses D8's primitives one level up.
+
+## Foundational invariants (do NOT defer — see D8)
+
+These MUST be load-bearing from the first crate, even when only one partition
+exists. Adding them later means rewriting the DN model, storage keys, referral
+layer, rootDSE, and KDC realm model at once.
+
+1. `NamingContext`/`Partition` is a core type; nothing assumes a single suffix.
+2. **PartitionRegistry** (crossRef-equivalent, in the forest config partition):
+   base DN, fastetcd endpoints + mTLS, Kerberos realm, parent/subordinate refs.
+3. Storage keys are partition-scoped: `/iron/<partition-id>/tree/<rdn-path>`,
+   `/iron/<partition-id>/idx/...`. Partitions may live on different clusters.
+4. Connection registry maps partition-id → etcd endpoints (multi-cluster store).
+5. rootDSE publishes `namingContexts`/`defaultNamingContext`/`configuration`/
+   `schema`/`rootDomain` NCs; cross-NC ops emit referrals.
+6. KDC is realm-per-partition with cross-realm key slots.
+7. Schema is itself a partition (schema NC), not hardcoded.
+
+Deferred = operations only (provision child domain, establish trust, run
+GC/GAL aggregator) — built on a model that already assumes N partitions.
 
 ## Work plan
 
@@ -41,12 +67,18 @@ Version locations (keep in sync on every bump):
 - [ ] fastetcd connection harness (etcd v3 gRPC client, mTLS) — spike
 
 ### Phase 1 — Tier 1 identity core (RHEL/Linux + Mac light path)
-- [ ] `iron-store`: DIT-over-fastetcd (DN encoding, entry serialization,
+- [ ] `iron-partition`: `NamingContext`/`Partition` types, **PartitionRegistry**,
+      connection registry (partition-id → fastetcd cluster). FOUNDATIONAL (D8) —
+      built first; every other crate depends on it.
+- [ ] `iron-store`: **partition-scoped** DIT-over-fastetcd (per-partition keys
+      `/iron/<pid>/tree/...`, multi-cluster, DN encoding, entry serialization,
       secondary indexes, watch-driven change notification)
-- [ ] `iron-ldap`: LDAP v3 server (bind, search, add/mod/del, rootDSE),
+- [ ] `iron-ldap`: LDAP v3 server (bind, search, add/mod/del), rootDSE with
+      `namingContexts`/config/schema/rootDomain NCs, **cross-NC referrals**,
       AD-shaped schema subset + RFC 2307 posix attrs (uidNumber/gidNumber),
       LDAPS/StartTLS via OpenSSL FIPS
-- [ ] `iron-kdc`: Kerberos KDC (AS-REQ/TGS-REQ), AES enctypes only, keytab
+- [ ] `iron-kdc`: Kerberos KDC (AS-REQ/TGS-REQ), **realm-per-partition** with
+      cross-realm key slots, AES enctypes only, keytab
 - [ ] `iron-dns`: SRV autodiscovery records (integrate with microdns where it
       makes sense)
 - [ ] SASL/GSSAPI bind path; end-to-end SSSD + krb5 client validation
@@ -66,8 +98,21 @@ Version locations (keep in sync on every bump):
 - [ ] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake); SYSVOL via rocketsmbd
 - [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind
 
+### Phase 2.5 — Federation operations (model already exists from Phase 1) [D8/D9]
+- [ ] Provision additional child domains (new partition + Raft cluster + realm,
+      registered in PartitionRegistry, superior/subordinate refs wired)
+- [ ] Kerberos cross-realm trust provisioning (inter-realm `krbtgt` keys);
+      transitive referral-ticket routing
+- [ ] `iron-gc`: watch-fed Global Catalog aggregator (read-only partial replica,
+      port 3268/3269) — reused for the D9 federated GAL
+- [ ] Federated GAL: whitelisted-attribute publish from each forest → top-level
+      read-only address book (no cross-boundary directory-content leakage)
+- [ ] `iron-oidc` cross-forest brokering; selective hub-routed Kerberos trust
+- [ ] Trust to a real Windows AD forest (coexistence + migration path)
+
 ### Phase 3 — deferred
-- DRSUAPI multi-master interop, Group Policy engine, trusts/forests.
+- DRSUAPI multi-master interop with real Windows DCs, Group Policy engine,
+  cross-forest selective-auth/SID-filtering hardening.
 
 ## Notes
 
