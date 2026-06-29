@@ -6,6 +6,14 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-06-29
+- **docs:** Corrected the backend scale analysis in ARCHITECTURE §4 — removed
+  Go-etcd folklore (GC pauses, ~8 GB ceiling, 1.5 MB cap) that does not apply to
+  a Rust + io_uring etcd; documented redb (on-disk, not RAM-bound) vs wal/iouring
+  (in-memory) engine profiles; isolated the genuinely fundamental limits
+  (single-Raft-group write serialization, snapshot recovery time) and the
+  directory-layer concerns (index write amplification, large multi-valued attrs).
+
+### 2026-06-29
 - **docs:** SSO surfaces (decision D7) — RHEL native Kerberos/GSSAPI; OpenShift
   via native OIDC (`iron-oidc` crate), LDAP identity provider (day-one), and
   SPNEGO proxy; self-contained (no Keycloak). Added Tier 1.5 (app SSO) and

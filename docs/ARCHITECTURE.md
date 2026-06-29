@@ -131,10 +131,32 @@ several SSO surfaces so different consumers integrate the way they prefer:
 
 ## 4. Known constraints / risks
 
-- **etcd scale:** fastetcd/etcd targets small datasets (recommended DB size on
-  the order of single-digit GB, full key index in RAM, ~1.5 MB request cap).
-  Excellent for homelab / SMB / edge directories (thousands to low-millions of
-  objects); not for an enterprise forest with tens of millions of objects.
+- **Scale — what is NOT a limit (Go-etcd folklore that does not apply):**
+  - *GC pauses / compaction jitter* — fastetcd is Rust, no GC. Upstream etcd's
+    worst large-keyspace pain (stop-the-world pauses) is designed out.
+  - *~8 GB DB ceiling* — an upstream operational guideline tied to bbolt mmap +
+    defrag + GC, not a protocol limit. With the redb engine (on-disk B-tree),
+    the dataset pages from disk and is not RAM-bound.
+  - *~1.5 MB request cap* — a tunable etcd default; directory entries are
+    KB-scale, so it is irrelevant here regardless.
+- **Storage engine choice drives the memory profile:**
+  - `redb` (default): on-disk B-tree; dataset > RAM is fine — use for a sizable
+    directory.
+  - `wal` / `iouring`: hold the full dataset in an in-memory `BTreeMap`
+    (persisted via WAL; `iouring` drives the WAL through io_uring). RAM-bound by
+    design — the latency tier for smaller/hot directories.
+- **Scale — what IS fundamental (true of any single-Raft-group store):**
+  - Writes serialize through one leader/log. Rust + io_uring + no-GC raise the
+    ceiling well above Go etcd, but a ceiling exists; shard into multiple Raft
+    groups only if ever reached.
+  - Raft snapshot transfer/restore time grows with DB size — a recovery-window
+    concern (far-behind follower), mitigated by streamed/chunked snapshots +
+    NVMe, not a steady-state throughput issue.
+- **Directory-layer concerns (ours, not etcd's):**
+  - Write amplification from secondary indexes — each object write also writes
+    its index keys in the same txn; bound the index set deliberately.
+  - Very large multi-valued attributes (e.g. a 100k-member group) — chunk via
+    AD-style linked-value/range retrieval rather than one oversized value.
 - **The Tier 1 → Tier 2 cliff:** Linux-only is clean and small. Windows domain
   join pulls in DCE-RPC, PAC, NT security descriptors, and SMB/SYSVOL — the
   bulk of the effort.
