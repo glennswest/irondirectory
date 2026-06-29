@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    # Phase 1 — Tier 1 identity core. Crates are added as each is implemented;
+    # boundaries are fixed here so work can land incrementally.
+    # "crates/store",   # DIT over fastetcd: DN encoding, entries, indexes, watch
+    # "crates/ldap",    # LDAP v3 server + AD-shaped schema + LDAPS (OpenSSL FIPS)
+    # "crates/kdc",     # Kerberos KDC (AS/TGS), AES enctypes only, keytab
+    # "crates/dns",     # DNS SRV autodiscovery
+    # "crates/crypto",  # FIPS crypto facade over the `ossl` crate
+    # "crates/server",  # binary: wires the services together (standalone + k8s)
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+authors = ["irondirectory contributors"]
+repository = "https://github.com/glennswest/irondirectory"
+homepage = "https://github.com/glennswest/irondirectory"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.41", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+
+# fastetcd / etcd v3 client (wire-compatible)
+etcd-client = "0.14"
+
+# FIPS crypto — OpenSSL 3.x FIPS provider via the `ossl` crate (decision D4).
+# Pinned once the target OpenSSL FIPS build is validated (Phase 0).
+ossl = "*"
+
+# Errors / logging
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
