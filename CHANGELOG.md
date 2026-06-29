@@ -6,6 +6,15 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-06-29
+- **feat(deploy):** Stood up irondirectory's dedicated etcd backend (D1) — 3
+  Fedora 43 cloud VMs on Proxmox (dm1/dm2/dm3.g8.lo @ .41/.42/.43, VMIDs
+  131-133), each with a dedicated /var/lib/etcd data disk, forming a healthy
+  3-node etcd 3.6.12 Raft cluster (dm1 leader; put/get verified). DNS A+PTR
+  records created in g8.lo. `ironetcd.sh` hardened: robust data-disk detection
+  (btrfs-subvol-aware), simultaneous Type=notify start for quorum, node-side
+  verify. Removed obsolete pve.gw.lo record from gw MicroDNS.
+
+### 2026-06-29
 - **feat:** `iron-partition` crate — the foundational naming-context model (D8).
   `Dn` (RFC 4514 parse/normalize/display, suffix-containment routing, serde);
   `Partition`/`PartitionId`/`ForestId`/`PartitionKind`/`ClusterRef`/`TlsRef` with

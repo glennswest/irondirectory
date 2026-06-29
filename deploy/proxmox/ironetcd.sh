@@ -119,14 +119,23 @@ cmd_installetcd() {
     # 1) dedicated data disk -> xfs -> mounted at $ETCD_DATA_DIR
     node_ssh "$ip" "sudo bash -s" <<EOF
 set -e
-DISK=\$(lsblk -dnro NAME,TYPE | awk '\$2=="disk"{print \$1}' | grep -v "\$(lsblk -no PKNAME \$(findmnt -no SOURCE /) | head -1)" | head -1)
-DISK="/dev/\${DISK}"
+ROOTPART=\$(findmnt -nro SOURCE / | sed 's/\[.*\]//')      # strip btrfs subvol suffix
+ROOTDISK=\$(lsblk -no PKNAME "\${ROOTPART}" | head -1)
+[ -n "\${ROOTDISK}" ] || { echo "could not determine root disk"; exit 1; }
+DISKNAME=\$(lsblk -dnro NAME,TYPE | awk '\$2=="disk"{print \$1}' | grep -vx "\${ROOTDISK}" | grep -v '^zram' | head -1)
+[ -n "\${DISKNAME}" ] || { echo "no data disk found"; exit 1; }
+DISK="/dev/\${DISKNAME}"
+echo "data disk: \${DISK} (root on \${ROOTDISK})"
+# self-heal any earlier malformed fstab entry for the data dir
+sudo sed -i "\\#[[:space:]]${ETCD_DATA_DIR}[[:space:]]#{/^UUID=/!d}" /etc/fstab
 if ! blkid "\${DISK}" >/dev/null 2>&1; then
   sudo mkfs.xfs -q "\${DISK}"
 fi
+UUID=\$(blkid -s UUID -o value "\${DISK}")
+[ -n "\${UUID}" ] || { echo "no UUID on \${DISK}"; exit 1; }
 sudo mkdir -p ${ETCD_DATA_DIR}
-grep -q "${ETCD_DATA_DIR}" /etc/fstab || echo "\$(blkid -s UUID -o value \${DISK}) ${ETCD_DATA_DIR} xfs defaults 0 0" | sudo tee -a /etc/fstab >/dev/null
-mountpoint -q ${ETCD_DATA_DIR} || sudo mount ${ETCD_DATA_DIR}
+grep -q "\${UUID}" /etc/fstab || echo "UUID=\${UUID} ${ETCD_DATA_DIR} xfs defaults 0 0" | sudo tee -a /etc/fstab >/dev/null
+mountpoint -q ${ETCD_DATA_DIR} || sudo mount "\${DISK}" ${ETCD_DATA_DIR}
 sudo getent group etcd >/dev/null || sudo groupadd -r etcd
 sudo getent passwd etcd >/dev/null || sudo useradd -r -g etcd -d ${ETCD_DATA_DIR} -s /sbin/nologin etcd
 sudo chown -R etcd:etcd ${ETCD_DATA_DIR}
@@ -171,10 +180,18 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload
-sudo systemctl enable --now etcd
+sudo systemctl enable etcd
 EOF
   done
-  log "etcd started on all nodes (static bootstrap forms the Raft cluster)"
+
+  # Start all nodes together (non-blocking): Type=notify etcd only signals ready
+  # once quorum forms, so they must come up simultaneously, not one-by-one.
+  log "Starting etcd on all nodes simultaneously"
+  for node in "${NODES[@]}"; do
+    local ip; ip="$(n_ip "$node")"
+    node_ssh "$ip" "sudo systemctl restart etcd --no-block"
+  done
+  log "etcd starting (static bootstrap forms the Raft cluster); verify shortly"
 }
 
 # --------------------------------------------------------------------- dns ----
@@ -206,15 +223,19 @@ dns_del() { # zone_id record_name
 
 # ------------------------------------------------------------------ verify ----
 cmd_verify() {
-  download_etcd
-  local eps=""; for node in "${NODES[@]}"; do eps+="http://$(n_ip "$node"):2379,"; done; eps="${eps%,}"
+  # etcdctl is a linux binary, so run it on a node (not the workstation).
+  local eps="" first_ip=""
+  for node in "${NODES[@]}"; do
+    eps+="http://$(n_ip "$node"):2379,"
+    [[ -z "$first_ip" ]] && first_ip="$(n_ip "$node")"
+  done
+  eps="${eps%,}"
   log "Endpoints: ${eps}"
-  echo "--- member list ---"
-  "${CACHE}/etcdctl" --endpoints="$eps" member list -w table || warn "member list failed (cluster may still be forming)"
-  echo "--- endpoint health ---"
-  "${CACHE}/etcdctl" --endpoints="$eps" endpoint health || true
-  echo "--- endpoint status ---"
-  "${CACHE}/etcdctl" --endpoints="$eps" endpoint status -w table || true
+  node_ssh "$first_ip" "
+    echo '--- member list ---';    etcdctl --endpoints=$eps member list -w table || echo '(forming)'
+    echo '--- endpoint health ---'; etcdctl --endpoints=$eps endpoint health || true
+    echo '--- endpoint status ---'; etcdctl --endpoints=$eps endpoint status -w table || true
+  "
 }
 
 # ------------------------------------------------------------------ status ----
