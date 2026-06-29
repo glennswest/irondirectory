@@ -35,3 +35,9 @@ temp/
 !*.tfvars.example
 crash.log
 *.tfplan
+
+# Terragrunt
+.terragrunt-cache/
+**/.terragrunt-cache/
+provider.tf
+backend.tf
