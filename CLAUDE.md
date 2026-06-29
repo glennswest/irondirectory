@@ -35,6 +35,9 @@ Version locations (keep in sync on every bump):
 - **D9** Multi-forest federation (holding-company topology): hundreds of
   autonomous forests sharing a federated GAL + OIDC brokering; forest = security
   boundary (ITAR/M&A). Recurses D8's primitives one level up.
+- **D10** Federation machinery is **in the base** (happy-path tested from day
+  one); only the exhaustive proving test matrix is deferred — never the
+  capability.
 
 ## Foundational invariants (do NOT defer — see D8)
 
@@ -85,10 +88,22 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
 - [ ] RHEL enrollment (realmd/adcli or sssd krb5+ldap) + host keytab; verify
       GSSAPI SSO to SSH and rocketsmbd `sec=krb5`. macOS LDAP/krb5 bind.
 
+#### Phase 1 — federation machinery (IN THE BASE, D8/D9/D10)
+Built as first-class in the base with **happy-path coverage** so the code paths
+are live from day one. Exhaustive proving suites are deferred (see Testing).
+- [ ] Child-domain provisioning: create partition + Raft cluster + realm, register
+      in PartitionRegistry, wire superior/subordinate references
+- [ ] LDAP referral generation + chasing (one hop) across naming contexts
+- [ ] Kerberos cross-realm `krbtgt` keys + one-hop referral-ticket routing
+- [ ] `iron-gc`: watch-fed Global Catalog aggregator (read-only partial replica,
+      port 3268/3269); same engine powers the D9 federated GAL
+- [ ] Federated GAL: whitelisted-attribute publish per forest → top-level
+      read-only address book (no cross-boundary directory-content leakage)
+
 ### Phase 1.5 — App SSO (OpenShift + modern apps)  [D7]
 - [ ] OpenShift **LDAP identity provider** (direct bind) — ship first, no new code
 - [ ] `iron-oidc`: FIPS OAuth2/OpenID Connect authorization server; OpenShift
-      OIDC IdP + token SSO for modern apps
+      OIDC IdP + token SSO for modern apps; cross-forest brokering hook (D9)
 - [ ] **SPNEGO** desktop→console SSO: RequestHeader IdP + mod_auth_gssapi proxy
       integration docs (reuses Tier 1 KDC)
 
@@ -98,19 +113,15 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
 - [ ] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake); SYSVOL via rocketsmbd
 - [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind
 
-### Phase 2.5 — Federation operations (model already exists from Phase 1) [D8/D9]
-- [ ] Provision additional child domains (new partition + Raft cluster + realm,
-      registered in PartitionRegistry, superior/subordinate refs wired)
-- [ ] Kerberos cross-realm trust provisioning (inter-realm `krbtgt` keys);
-      transitive referral-ticket routing
-- [ ] `iron-gc`: watch-fed Global Catalog aggregator (read-only partial replica,
-      port 3268/3269) — reused for the D9 federated GAL
-- [ ] Federated GAL: whitelisted-attribute publish from each forest → top-level
-      read-only address book (no cross-boundary directory-content leakage)
-- [ ] `iron-oidc` cross-forest brokering; selective hub-routed Kerberos trust
-- [ ] Trust to a real Windows AD forest (coexistence + migration path)
+### Deferred — exhaustive federation testing (D10), not capability
+- [ ] Many-partition / many-cluster scale matrices
+- [ ] Deep referral chains; transitive multi-realm trust paths, shortcut trusts
+- [ ] Hundreds-of-forests GAL convergence + staleness bounds
+- [ ] Divestiture/teardown, re-parenting, conflict cases
+- [ ] Cross-forest brokering at fan-out; selective-auth policy
+- [ ] **Real Windows AD interop** (trust, GC, Kerberos PAC)
 
-### Phase 3 — deferred
+### Phase 3 — deferred capability
 - DRSUAPI multi-master interop with real Windows DCs, Group Policy engine,
   cross-forest selective-auth/SID-filtering hardening.
 

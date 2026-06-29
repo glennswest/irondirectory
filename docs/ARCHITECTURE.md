@@ -174,9 +174,13 @@ LDAP referral layer, rootDSE, and KDC realm model simultaneously.
 - `iron-kdc` is realm-per-partition with cross-realm key slots from the start.
 - Schema is itself a partition (the schema NC), not hardcoded.
 
-What is deferred (operations, not the model): provisioning additional child
-domains, establishing trusts, and running the GC/GAL aggregator. These layer
-onto a model that already assumes N partitions on N clusters.
+**Federation is in the base, not deferred.** The machinery — child-domain
+provisioning, cross-realm trust key setup, LDAP referral chasing, and the
+watch-fed GC/GAL aggregator — is built as first-class in the base so the code
+paths are exercised from day one and cannot rot. What *is* deferred is the
+**exhaustive test matrix** (see D10): proving breadth across many topologies,
+trust-transitivity edge cases, GAL convergence, and real-AD interop. Build the
+capability now with happy-path coverage; expand the proving suites later.
 
 ### D9 — Multi-forest federation: the holding-company topology
 Real enterprises (e.g. an aerospace holding company with hundreds of
@@ -213,6 +217,26 @@ only a top-level identity/email namespace — NOT one giant forest.
 mechanism enables a one- or two-way trust with an existing Windows forest
 (`CORP.EXAMPLE.COM`) — both a coexistence story and an incremental migration
 path off Windows AD.
+
+### D10 — Federation in the base; exhaustive testing deferred
+Build the federation capability into the base build (D8/D9 machinery), with
+**happy-path test coverage** from the start. Defer only the breadth-proving
+suites — they validate coverage, they do not shape the architecture, and
+standing them up early would gate the base on test infrastructure.
+
+| Built in the base (with happy-path tests) | Deferred test suites |
+|---|---|
+| `iron-partition` registry + multi-cluster store | many-partition / many-cluster scale matrices |
+| LDAP referral generation + chasing (one hop) | deep subordinate/superior referral chains |
+| Cross-realm `krbtgt` keys + one-hop referral ticket | transitive multi-realm trust paths, shortcut trusts |
+| Watch-fed GC/GAL aggregator (single subscriber) | hundreds-of-forests GAL convergence + staleness bounds |
+| Child-domain provisioning (create partition+realm) | divestiture/teardown, re-parenting, conflict cases |
+| `iron-oidc` brokering hook | cross-forest brokering at fan-out; selective-auth policy |
+| (n/a) | **real Windows AD interop** (trust, GC, Kerberos PAC) |
+
+Each base feature ships with at least one end-to-end happy-path test so the code
+path is live and regression-guarded; the deferred column is tracked as a
+dedicated testing phase, not as missing capability.
 
 ## 4. Known constraints / risks
 

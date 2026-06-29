@@ -6,6 +6,14 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-06-29
+- **docs:** Federation moved INTO THE BASE (decision D10). The federation
+  machinery — child-domain provisioning, LDAP referral chasing, cross-realm
+  trust keys, the watch-fed GC/GAL aggregator, OIDC brokering hook — is built
+  first-class in Phase 1 with happy-path coverage so code paths stay live.
+  Only the exhaustive proving test matrix (many-partition scale, deep referral
+  chains, transitive trust paths, GAL convergence, divestiture/teardown, real
+  Windows AD interop) is deferred — capability is never deferred. Work plan
+  reorganized accordingly; added an `iron-gc` crate.
 - **docs:** Partitioning made FOUNDATIONAL (decisions D8 + D9). D8: multi-domain
   within a forest — each naming context is its own strongly-consistent Raft
   cluster, federated by Kerberos cross-realm trust + LDAP referrals + a watch-fed
