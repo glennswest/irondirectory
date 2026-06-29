@@ -6,6 +6,11 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-06-29
+- **docs:** SSO surfaces (decision D7) — RHEL native Kerberos/GSSAPI; OpenShift
+  via native OIDC (`iron-oidc` crate), LDAP identity provider (day-one), and
+  SPNEGO proxy; self-contained (no Keycloak). Added Tier 1.5 (app SSO) and
+  posix/RFC 2307 schema attrs; clarified Windows/macOS domain join under Tier 2
+  and macOS LDAP/krb5 light path under Tier 1.
 - **docs:** Initial project scaffolding — README, architecture & decision
   record, project CLAUDE.md work plan, changelog, `.gitignore`, and Cargo
   workspace skeleton.

@@ -7,6 +7,7 @@ members = [
     # "crates/ldap",    # LDAP v3 server + AD-shaped schema + LDAPS (OpenSSL FIPS)
     # "crates/kdc",     # Kerberos KDC (AS/TGS), AES enctypes only, keytab
     # "crates/dns",     # DNS SRV autodiscovery
+    # "crates/oidc",    # OAuth2/OpenID Connect authorization server (OpenShift SSO)
     # "crates/crypto",  # FIPS crypto facade over the `ossl` crate
     # "crates/server",  # binary: wires the services together (standalone + k8s)
 ]

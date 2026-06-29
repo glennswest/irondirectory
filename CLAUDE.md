@@ -26,7 +26,9 @@ Version locations (keep in sync on every bump):
 - **D4** OpenSSL 3.x FIPS provider via the **`ossl` crate**. AES-only Kerberos.
   No NTLM/RC4/DES/MD4/MD5.
 - **D5** Runs standalone or in Kubernetes.
-- **D6** Tier 1 Linux clients → Tier 2 Windows join → Tier 3 deferred.
+- **D6** Tier 1 Linux/Mac(light) → Tier 1.5 app SSO → Tier 2 Windows/Mac join.
+- **D7** SSO surfaces: RHEL native Kerberos; OpenShift via native OIDC
+  (`iron-oidc`) + LDAP IdP + SPNEGO proxy. Self-contained, no Keycloak.
 
 ## Work plan
 
@@ -38,20 +40,31 @@ Version locations (keep in sync on every bump):
 - [ ] Validate `ossl` crate + OpenSSL FIPS provider build on target platform
 - [ ] fastetcd connection harness (etcd v3 gRPC client, mTLS) — spike
 
-### Phase 1 — Tier 1 identity core (Linux clients)
+### Phase 1 — Tier 1 identity core (RHEL/Linux + Mac light path)
 - [ ] `iron-store`: DIT-over-fastetcd (DN encoding, entry serialization,
       secondary indexes, watch-driven change notification)
 - [ ] `iron-ldap`: LDAP v3 server (bind, search, add/mod/del, rootDSE),
-      AD-shaped schema subset, LDAPS/StartTLS via OpenSSL FIPS
+      AD-shaped schema subset + RFC 2307 posix attrs (uidNumber/gidNumber),
+      LDAPS/StartTLS via OpenSSL FIPS
 - [ ] `iron-kdc`: Kerberos KDC (AS-REQ/TGS-REQ), AES enctypes only, keytab
 - [ ] `iron-dns`: SRV autodiscovery records (integrate with microdns where it
       makes sense)
 - [ ] SASL/GSSAPI bind path; end-to-end SSSD + krb5 client validation
+- [ ] RHEL enrollment (realmd/adcli or sssd krb5+ldap) + host keytab; verify
+      GSSAPI SSO to SSH and rocketsmbd `sec=krb5`. macOS LDAP/krb5 bind.
 
-### Phase 2 — Tier 2 Windows join (later)
-- [ ] MS schema objects, SID/RID allocation, `nTSecurityDescriptor`
-- [ ] Kerberos PAC generation
-- [ ] Minimal SAMR/NETLOGON over DCE-RPC; SYSVOL via rocketsmbd
+### Phase 1.5 — App SSO (OpenShift + modern apps)  [D7]
+- [ ] OpenShift **LDAP identity provider** (direct bind) — ship first, no new code
+- [ ] `iron-oidc`: FIPS OAuth2/OpenID Connect authorization server; OpenShift
+      OIDC IdP + token SSO for modern apps
+- [ ] **SPNEGO** desktop→console SSO: RequestHeader IdP + mod_auth_gssapi proxy
+      integration docs (reuses Tier 1 KDC)
+
+### Phase 2 — Tier 2 Windows/Mac domain join (later)
+- [ ] MS schema objects, rootDSE attrs, SID/RID allocation, `nTSecurityDescriptor`
+- [ ] Kerberos PAC generation (group SIDs)
+- [ ] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake); SYSVOL via rocketsmbd
+- [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind
 
 ### Phase 3 — deferred
 - DRSUAPI multi-master interop, Group Policy engine, trusts/forests.

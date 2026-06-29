@@ -95,12 +95,37 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
   irondirectory as a Deployment, communicating over mTLS. Same binary; only the
   etcd connection string and topology differ.
 
+### D7 — SSO surfaces
+irondirectory is a self-contained IdP (no Keycloak dependency). It exposes
+several SSO surfaces so different consumers integrate the way they prefer:
+
+| Consumer | Mechanism | Tier | Notes |
+|---|---|---|---|
+| RHEL / Linux hosts | Kerberos TGT → GSSAPI/SPNEGO | 1 | Native; SSH/HTTP/NFS/SMB SSO |
+| OpenShift (now) | LDAP identity provider | 1 | Direct bind; form login, no cross-app SSO |
+| OpenShift (SSO) | **Native OIDC** (`iron-oidc`) | 1.5 | Token SSO; serves modern apps too |
+| OpenShift (console) | RequestHeader + SPNEGO proxy | 1.5 | Kerberos desktop→console SSO (mod_auth_gssapi) |
+| Windows | Domain join (Kerberos+PAC+DCE-RPC) | 2 | Full AD-join; see D6 |
+| macOS | LDAP/krb5 bind **or** AD bind | 1 / 2 | Light path (Tier 1) or `dsconfigad` (Tier 2) |
+
+- **Native OIDC** is a new crate (`iron-oidc`): a FIPS OAuth2/OpenID Connect
+  authorization server. Self-contained — no external Keycloak runtime.
+- **LDAP IdP** requires no new code beyond Tier 1; it is the day-one path.
+- **SPNEGO** reuses the Tier 1 KDC; integration is an external authenticating
+  proxy (RequestHeader IdP), documented rather than built here.
+- Posix attributes (RFC 2307: `uidNumber`/`gidNumber`) or SID→uid mapping are
+  required in the schema for RHEL/Mac login — part of the `iron-ldap` work.
+
 ### D6 — Client targets, phased
-- **Tier 1 (Linux/Unix):** SSSD, MIT/Heimdal krb5, LDAP clients authenticate
-  directly. This is a complete, FIPS-clean IdP on its own (~20% of total work).
-- **Tier 2 (Windows join):** rootDSE + real MS schema objects, SID/RID
-  allocation, `nTSecurityDescriptor` ACLs, Kerberos **PAC** generation, minimal
-  SAMR/NETLOGON over DCE-RPC, SYSVOL via rocketsmbd. The hard ~80%.
+- **Tier 1 (Linux/Unix + Mac light path):** SSSD, MIT/Heimdal krb5, LDAP
+  clients authenticate directly; RHEL and macOS get Kerberos SSO via LDAP+krb5
+  bind. Complete, FIPS-clean IdP on its own (~20% of total work).
+- **Tier 1.5 (app SSO):** `iron-oidc` OAuth2/OIDC server + LDAP IdP + SPNEGO
+  proxy support — covers OpenShift and modern apps (see D7).
+- **Tier 2 (Windows/Mac domain join):** rootDSE + real MS schema objects,
+  SID/RID allocation, `nTSecurityDescriptor` ACLs, Kerberos **PAC** generation,
+  SAMR/LSARPC/NETLOGON over DCE-RPC, SYSVOL via rocketsmbd. Enables Windows
+  `Add-Computer` join and macOS `dsconfigad`. The hard ~80%.
 - **Tier 3 (deferred/skip):** DRSUAPI replication with real Windows DCs, full
   Group Policy engine, multi-domain trusts/forests.
 
