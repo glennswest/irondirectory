@@ -1,0 +1,101 @@
+#cloud-config
+hostname: ${hostname}
+fqdn: ${fqdn}
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: true
+
+users:
+  - name: ${ci_user}
+    groups: [wheel, adm, systemd-journal]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+%{ for key in ssh_keys ~}
+      - ${key}
+%{ endfor ~}
+
+ssh_pwauth: false
+disable_root: false
+
+package_update: true
+package_upgrade: false
+packages:
+  - qemu-guest-agent
+
+write_files:
+  - path: /etc/etcd/etcd.conf
+    permissions: "0644"
+    content: |
+      ETCD_NAME=${hostname}
+      ETCD_DATA_DIR=${data_dir}
+      ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS=http://${node_ip}:2380
+      ETCD_ADVERTISE_CLIENT_URLS=http://${node_ip}:2379
+      ETCD_INITIAL_CLUSTER=${initial_cluster}
+      ETCD_INITIAL_CLUSTER_TOKEN=${cluster_token}
+      ETCD_INITIAL_CLUSTER_STATE=new
+  - path: /etc/systemd/system/etcd.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=irondirectory etcd (${hostname})
+      Documentation=https://github.com/glennswest/irondirectory
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=notify
+      User=etcd
+      EnvironmentFile=/etc/etcd/etcd.conf
+      ExecStart=/usr/local/bin/etcd
+      Restart=on-failure
+      RestartSec=5
+      LimitNOFILE=65536
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/sbin/iron-etcd-install.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Format the dedicated data disk, install the etcd binaries, and enable
+      # the service. Idempotent. The 3 nodes boot together so the Type=notify
+      # units reach quorum and signal ready.
+      set -euo pipefail
+      DATA_DIR="${data_dir}"
+      VER="${etcd_version}"
+
+      # 1) dedicated data disk -> xfs -> $DATA_DIR
+      ROOTPART=$(findmnt -nro SOURCE / | sed 's/\[.*\]//')
+      ROOTDISK=$(lsblk -no PKNAME "$ROOTPART" | head -1)
+      DISKNAME=$(lsblk -dnro NAME,TYPE | awk '$2=="disk"{print $1}' | grep -vx "$ROOTDISK" | grep -v '^zram' | head -1)
+      DISK="/dev/$DISKNAME"
+      blkid "$DISK" >/dev/null 2>&1 || mkfs.xfs -q "$DISK"
+      UUID=$(blkid -s UUID -o value "$DISK")
+      mkdir -p "$DATA_DIR"
+      grep -q "$UUID" /etc/fstab || echo "UUID=$UUID $DATA_DIR xfs defaults 0 0" >> /etc/fstab
+      mountpoint -q "$DATA_DIR" || mount "$DISK" "$DATA_DIR"
+
+      # 2) etcd user + binaries
+      getent group etcd >/dev/null || groupadd -r etcd
+      getent passwd etcd >/dev/null || useradd -r -g etcd -d "$DATA_DIR" -s /sbin/nologin etcd
+      chown -R etcd:etcd "$DATA_DIR"
+      if [ ! -x /usr/local/bin/etcd ]; then
+        cd /tmp
+        curl -fsSL --retry 5 --retry-delay 3 \
+          "https://github.com/etcd-io/etcd/releases/download/$VER/etcd-$VER-linux-amd64.tar.gz" -o etcd.tgz
+        tar -xzf etcd.tgz --strip-components=1 "etcd-$VER-linux-amd64/etcd" "etcd-$VER-linux-amd64/etcdctl"
+        install -m0755 etcd etcdctl /usr/local/bin/
+        rm -f etcd etcdctl etcd.tgz
+      fi
+
+      # 3) enable (boot-start). All nodes booting together form the cluster.
+      systemctl daemon-reload
+      systemctl enable etcd
+      systemctl start etcd --no-block
+
+runcmd:
+  - [ systemctl, enable, --now, qemu-guest-agent ]
+  - [ /usr/local/sbin/iron-etcd-install.sh ]
+
+final_message: "${fqdn} etcd cloud-init complete in $UPTIME seconds"
