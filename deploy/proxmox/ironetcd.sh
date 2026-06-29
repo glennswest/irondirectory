@@ -222,20 +222,31 @@ dns_del() { # zone_id record_name
 }
 
 # ------------------------------------------------------------------ verify ----
+endpoints_csv() {
+  local eps=""; for node in "${NODES[@]}"; do eps+="http://$(n_ip "$node"):2379,"; done; echo "${eps%,}"
+}
+
+cmd_endpoints() {
+  echo "export ETCDCTL_ENDPOINTS=$(endpoints_csv)"
+}
+
 cmd_verify() {
-  # etcdctl is a linux binary, so run it on a node (not the workstation).
-  local eps="" first_ip=""
-  for node in "${NODES[@]}"; do
-    eps+="http://$(n_ip "$node"):2379,"
-    [[ -z "$first_ip" ]] && first_ip="$(n_ip "$node")"
-  done
-  eps="${eps%,}"
+  local eps; eps="$(endpoints_csv)"
   log "Endpoints: ${eps}"
-  node_ssh "$first_ip" "
-    echo '--- member list ---';    etcdctl --endpoints=$eps member list -w table || echo '(forming)'
-    echo '--- endpoint health ---'; etcdctl --endpoints=$eps endpoint health || true
-    echo '--- endpoint status ---'; etcdctl --endpoints=$eps endpoint status -w table || true
-  "
+  if command -v etcdctl >/dev/null 2>&1; then
+    # Native (e.g. macOS) etcdctl on the workstation.
+    etcdctl --endpoints="$eps" member list -w table || warn "member list failed (forming?)"
+    etcdctl --endpoints="$eps" endpoint health || true
+    etcdctl --endpoints="$eps" endpoint status -w table || true
+  else
+    # Fall back to a node's installed etcdctl.
+    local first_ip; first_ip="$(n_ip "${NODES[0]}")"
+    node_ssh "$first_ip" "
+      etcdctl --endpoints=$eps member list -w table || echo '(forming)'
+      etcdctl --endpoints=$eps endpoint health || true
+      etcdctl --endpoints=$eps endpoint status -w table || true
+    "
+  fi
 }
 
 # ------------------------------------------------------------------ status ----
@@ -289,9 +300,10 @@ case "${1:-}" in
   installetcd) cmd_installetcd ;;
   dns)         cmd_dns ;;
   verify)      cmd_verify ;;
+  endpoints)   cmd_endpoints ;;
   status)      cmd_status ;;
   down)        cmd_down ;;
   wipe)        cmd_wipe ;;
   ssh)         shift; cmd_ssh "$@" ;;
-  *) die "usage: $0 {up|create|installetcd|dns|verify|status|down|wipe|ssh <node>}" ;;
+  *) die "usage: $0 {up|create|installetcd|dns|verify|endpoints|status|down|wipe|ssh <node>}" ;;
 esac
