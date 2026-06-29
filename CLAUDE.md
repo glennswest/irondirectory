@@ -70,9 +70,10 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
 - [ ] fastetcd connection harness (etcd v3 gRPC client, mTLS) — spike
 
 ### Phase 1 — Tier 1 identity core (RHEL/Linux + Mac light path)
-- [ ] `iron-partition`: `NamingContext`/`Partition` types, **PartitionRegistry**,
+- [x] `iron-partition`: `NamingContext`/`Partition` types, **PartitionRegistry**,
       connection registry (partition-id → fastetcd cluster). FOUNDATIONAL (D8) —
-      built first; every other crate depends on it.
+      built first; every other crate depends on it. *(DN, keys, registry, realm
+      derivation; 23 tests, clippy-clean.)*
 - [ ] `iron-store`: **partition-scoped** DIT-over-fastetcd (per-partition keys
       `/iron/<pid>/tree/...`, multi-cluster, DN encoding, entry serialization,
       secondary indexes, watch-driven change notification)

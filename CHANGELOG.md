@@ -6,6 +6,15 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-06-29
+- **feat:** `iron-partition` crate — the foundational naming-context model (D8).
+  `Dn` (RFC 4514 parse/normalize/display, suffix-containment routing, serde);
+  `Partition`/`PartitionId`/`ForestId`/`PartitionKind`/`ClusterRef`/`TlsRef` with
+  realm-from-DN derivation; partition-scoped key encoding (`/iron/<pid>/tree/…`
+  reverse-ordered so a subtree is a key prefix; escaped index keys);
+  `PartitionRegistry` (crossRef-equivalent) with longest-suffix `resolve`,
+  superior/subordinate navigation, per-forest schema/config lookup, and rootDSE
+  naming-contexts listing. 23 unit tests, clippy-clean. First crate in the
+  workspace; everything depends on it.
 - **docs:** Federation moved INTO THE BASE (decision D10). The federation
   machinery — child-domain provisioning, LDAP referral chasing, cross-realm
   trust keys, the watch-fed GC/GAL aggregator, OIDC brokering hook — is built

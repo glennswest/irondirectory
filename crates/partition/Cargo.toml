@@ -1,0 +1,17 @@
+[package]
+name = "iron-partition"
+description = "Foundational naming-context / partition model for irondirectory (D8): NamingContext/Partition types, the PartitionRegistry (crossRef-equivalent), DN handling, and partition-scoped key encoding. Every other crate depends on this."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
