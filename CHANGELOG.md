@@ -5,6 +5,16 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-06-30
+- **feat(deploy):** Single health-checked endpoint **`etcd.g8.lo:2379`** for the
+  backend — 3 MicroDNS A records (.41/.42/.43), each with an etcd `http
+  :2379/health` health_check; reproducible via `deploy/dns/etcd-lb.sh`. After the
+  g8 MicroDNS LB monitor was enabled (mkube-generated config), **verified
+  end-to-end failover**: stopping etcd on dm3 dropped .43 from resolution within
+  ~3 probe cycles (service stayed up), and restarting it auto-rejoined — last-
+  alive failsafe guarantees the name never returns NODATA. iron-store will use
+  this single endpoint. Recorded the live backend in CLAUDE.md.
+
 ### 2026-06-29
 - **feat(deploy):** Stood up irondirectory's dedicated etcd backend (D1) — 3
   Fedora 43 cloud VMs on Proxmox (dm1/dm2/dm3.g8.lo @ .41/.42/.43, VMIDs

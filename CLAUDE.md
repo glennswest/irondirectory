@@ -65,9 +65,28 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
 - [x] Capture architecture & decisions (`docs/ARCHITECTURE.md`)
 - [x] README, CHANGELOG, `.gitignore`, project CLAUDE.md
 - [x] Cargo workspace skeleton (crate boundaries)
-- [ ] Create GitHub repo + push
+- [x] Create GitHub repo + push
+- [x] Stand up the dedicated etcd backend (D1) — see Live infrastructure below
 - [ ] Validate `ossl` crate + OpenSSL FIPS provider build on target platform
-- [ ] fastetcd connection harness (etcd v3 gRPC client, mTLS) — spike
+- [ ] fastetcd connection harness (etcd v3 gRPC client, mTLS) — spike against the
+      live cluster; swap upstream etcd → fastetcd
+
+## Live infrastructure
+
+**etcd backend (D1)** — dedicated 3-node etcd cluster, Proxmox VMs on g8, managed
+by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
+(`deploy/terragrunt/etcd/`; do NOT copy .tf — reference the pinned module).
+- Nodes: dm1/dm2/dm3.g8.lo → VMID 131/132/133 → 192.168.8.41/.42/.43.
+- etcd `v3.6.12` (fastetcd is a drop-in swap — same flags/env).
+- **Single endpoint for iron-store: `etcd.g8.lo:2379`** — MicroDNS health-checked
+  LB (3 A records, `http :2379/health`), reproducible via `deploy/dns/etcd-lb.sh`.
+  The LB *monitor* is enabled in mkube (launches the g8 microdns container); no
+  REST toggle. Until on, the name round-robins (etcd clients are cluster-aware).
+- Keyspace prefix: `/iron/...` (Kubernetes etcd uses `/registry/...` — disjoint,
+  and this is a separate cluster anyway per D1).
+- Workstation: `brew install etcd` for a native etcdctl; `ETCDCTL_ENDPOINTS=http://etcd.g8.lo:2379`.
+- Bootstrap bash (`deploy/proxmox/ironetcd.sh`) proved the steps; Terragrunt is
+  the going-forward tool.
 
 ### Phase 1 — Tier 1 identity core (RHEL/Linux + Mac light path)
 - [x] `iron-partition`: `NamingContext`/`Partition` types, **PartitionRegistry**,
