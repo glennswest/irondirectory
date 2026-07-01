@@ -18,17 +18,22 @@ ZONE_ID="9bed60c8-1664-4183-88f9-a1a21b927edc"   # g8.lo
 NAME="etcd"
 IPS=(192.168.8.41 192.168.8.42 192.168.8.43)
 PORT=2379
+# TCP-connect probe: fastetcd does not serve etcd's HTTP GET /health on the
+# client port (see fastetcd#5), so an http probe marks all backends unhealthy.
+# TCP :2379 works today; switch to http :2379/health once fastetcd#5 lands.
+PROBE_TYPE="tcp"
+PROBE_ENDPOINT=":2379"
 
 records_json() { curl -fsS --max-time 6 "${DNS_API}/zones/${ZONE_ID}/records?limit=500"; }
 
 cmd_up() {
   for ip in "${IPS[@]}"; do
-    echo "-> ${NAME}.g8.lo A ${ip} (health: http :${PORT}/health)"
+    echo "-> ${NAME}.g8.lo A ${ip} (health: ${PROBE_TYPE} ${PROBE_ENDPOINT})"
     curl -fsS --max-time 6 -X POST "${DNS_API}/zones/${ZONE_ID}/records" \
       -H 'Content-Type: application/json' \
       -d "{\"name\":\"${NAME}\",\"ttl\":60,\"enabled\":true,
            \"data\":{\"type\":\"A\",\"data\":\"${ip}\"},
-           \"health_check\":{\"probe_type\":\"http\",\"interval_secs\":10,\"timeout_secs\":5,\"unhealthy_threshold\":3,\"healthy_threshold\":2,\"endpoint\":\":${PORT}/health\"}}" \
+           \"health_check\":{\"probe_type\":\"${PROBE_TYPE}\",\"interval_secs\":10,\"timeout_secs\":5,\"unhealthy_threshold\":3,\"healthy_threshold\":2,\"endpoint\":\"${PROBE_ENDPOINT}\"}}" \
       -o /dev/null -w '   [HTTP %{http_code}]\n' || true   # 201 created, or already exists
   done
 }

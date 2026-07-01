@@ -1,10 +1,10 @@
-# Unit: irondirectory backing etcd cluster (D1) — dm1/dm2/dm3.g8.lo
+# Unit: irondirectory backing fastetcd cluster (D1) — dm1/dm2/dm3.g8.lo
 #
 # References the shared, versioned proxmox-fedora-vm module (pinned ?ref) — no
-# copied .tf. Per-node etcd install is driven through the module's `user_data`
-# hook with a rendered cloud-config; the nodes boot together and form a 3-node
-# Raft cluster. fastetcd is a drop-in swap (same flags/env; change the install
-# source in the template).
+# copied .tf. Per-node install is driven through the module's `user_data` hook
+# with a rendered cloud-config that `dnf install`s the RELEASED fastetcd RPM
+# (no hand-build, no container). Nodes boot together and form a 3-node Raft
+# cluster. fastetcd is the backing store (D1) — never upstream etcd.
 
 include "root" {
   path = find_in_parent_folders("root.hcl")
@@ -15,10 +15,12 @@ terraform {
 }
 
 locals {
-  etcd_version  = "v3.6.12"
-  cluster_token = "irondir-etcd"
-  data_dir      = "/var/lib/etcd"
-  ssh_key       = trimspace(file(pathexpand("~/.ssh/id_rsa.pub")))
+  # Released fastetcd RPM (pinned). Published at:
+  #   https://github.com/glennswest/fastetcd/releases/tag/v0.6.0
+  fastetcd_version = "v0.6.0"
+  fastetcd_rpm_url = "https://github.com/glennswest/fastetcd/releases/download/v0.6.0/fastetcd-0.6.0-1.x86_64.rpm"
+  cluster_token    = "irondir-etcd"
+  ssh_key          = trimspace(file(pathexpand("~/.ssh/id_rsa.pub")))
 
   # etcd nodes: fixed MAC -> reserved IP (outside the g8 DHCP pool .100-.200).
   nodes = {
@@ -45,15 +47,15 @@ inputs = {
       memory    = 2048
       disk_size = 30
       user_data = templatefile("${get_terragrunt_dir()}/templates/etcd-user-data.yaml.tftpl", {
-        hostname        = k
-        fqdn            = "${k}.g8.lo"
-        ci_user         = "fedora"
-        ssh_keys        = [local.ssh_key]
-        node_ip         = v.ip
-        initial_cluster = local.initial_cluster
-        cluster_token   = local.cluster_token
-        etcd_version    = local.etcd_version
-        data_dir        = local.data_dir
+        hostname         = k
+        fqdn             = "${k}.g8.lo"
+        ci_user          = "fedora"
+        ssh_keys         = [local.ssh_key]
+        node_ip          = v.ip
+        initial_cluster  = local.initial_cluster
+        cluster_token    = local.cluster_token
+        fastetcd_version = local.fastetcd_version
+        fastetcd_rpm_url = local.fastetcd_rpm_url
       })
     }
   }

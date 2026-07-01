@@ -5,6 +5,21 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-07-01
+- **feat(deploy):** Backend is now **fastetcd v0.6.0** (the system under test),
+  not upstream etcd. Terragrunt recreates dm1/dm2/dm3 and cloud-init installs the
+  **released fastetcd RPM** via `dnf` (no hand-build, no container nesting); the
+  RPM's `fastetcd.service` reads `/etc/fastetcd/fastetcd.conf` with etcd-compatible
+  `ETCD_*` env. 3-node Raft cluster formed; reads/health OK.
+- **fix(deploy):** `etcd.g8.lo` LB probe switched `http` → **`tcp :2379`**
+  (fastetcd has no HTTP `/health` — fastetcd#5); LB 3/3 healthy. Removed the bash
+  `deploy/proxmox/ironetcd.sh` bootstrap (it installed *upstream etcd* — a footgun
+  now that Terragrunt + the fastetcd RPM is the tool).
+- **chore:** Filed dogfooding findings upstream — **fastetcd#4** (multi-node
+  client writes fail: leader forwarding addr empty — BLOCKER for iron-store
+  writes) and **fastetcd#5** (no HTTP `/health`). Created 20 roadmap issues on
+  the irondirectory repo (Phase 0/1/1.5/2 + deferred D10), `roadmap` label.
+
 ### 2026-06-30
 - **feat(deploy):** Single health-checked endpoint **`etcd.g8.lo:2379`** for the
   backend — 3 MicroDNS A records (.41/.42/.43), each with an etcd `http

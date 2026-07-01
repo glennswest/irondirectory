@@ -24,65 +24,30 @@ packages:
   - qemu-guest-agent
 
 write_files:
-  - path: /etc/etcd/etcd.conf
+  # fastetcd cluster config, read by the RPM's fastetcd.service via
+  # EnvironmentFile=-/etc/fastetcd/fastetcd.conf. Written BEFORE the package
+  # installs, so the RPM postinstall's `enable --now` starts fastetcd already
+  # configured for the 3-node cluster (etcd-compatible ETCD_* names; fastetcd
+  # v0.6.0 reads them natively). Data dir lives under the unit's RW path.
+  - path: /etc/fastetcd/fastetcd.conf
     permissions: "0644"
     content: |
       ETCD_NAME=${hostname}
-      ETCD_DATA_DIR=${data_dir}
-      ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      ETCD_DATA_DIR=/var/lib/fastetcd/data
       ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       ETCD_INITIAL_ADVERTISE_PEER_URLS=http://${node_ip}:2380
       ETCD_ADVERTISE_CLIENT_URLS=http://${node_ip}:2379
       ETCD_INITIAL_CLUSTER=${initial_cluster}
       ETCD_INITIAL_CLUSTER_TOKEN=${cluster_token}
       ETCD_INITIAL_CLUSTER_STATE=new
-  - path: /etc/systemd/system/etcd.service
-    permissions: "0644"
-    content: |
-      [Unit]
-      Description=irondirectory etcd (${hostname})
-      Documentation=https://github.com/glennswest/irondirectory
-      After=network-online.target
-      Wants=network-online.target
-      [Service]
-      Type=notify
-      User=etcd
-      EnvironmentFile=/etc/etcd/etcd.conf
-      ExecStart=/usr/local/bin/etcd
-      Restart=on-failure
-      RestartSec=5
-      LimitNOFILE=65536
-      [Install]
-      WantedBy=multi-user.target
-  - path: /usr/local/sbin/iron-etcd-install.sh
-    permissions: "0755"
-    content: |
-      #!/usr/bin/env bash
-      # Install etcd binaries and enable the service. The data dir lives on the
-      # root disk (the shared module exposes a single disk; a dedicated data
-      # disk is tracked as an enhancement on terraform-modules). Idempotent.
-      # All nodes boot together so the Type=notify units reach quorum.
-      set -euo pipefail
-      DATA_DIR="${data_dir}"
-      VER="${etcd_version}"
-      getent group etcd >/dev/null || groupadd -r etcd
-      getent passwd etcd >/dev/null || useradd -r -g etcd -d "$DATA_DIR" -s /sbin/nologin etcd
-      mkdir -p "$DATA_DIR"
-      chown -R etcd:etcd "$DATA_DIR"
-      if [ ! -x /usr/local/bin/etcd ]; then
-        cd /tmp
-        curl -fsSL --retry 5 --retry-delay 3 \
-          "https://github.com/etcd-io/etcd/releases/download/$VER/etcd-$VER-linux-amd64.tar.gz" -o etcd.tgz
-        tar -xzf etcd.tgz --strip-components=1 "etcd-$VER-linux-amd64/etcd" "etcd-$VER-linux-amd64/etcdctl"
-        install -m0755 etcd etcdctl /usr/local/bin/
-        rm -f etcd etcdctl etcd.tgz
-      fi
-      systemctl daemon-reload
-      systemctl enable etcd
-      systemctl start etcd --no-block
 
 runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]
-  - [ /usr/local/sbin/iron-etcd-install.sh ]
+  # Install the released fastetcd RPM straight from the GitHub release (pinned).
+  # Its postinstall creates the fastetcd user + /var/lib/fastetcd and does
+  # `enable --now fastetcd.service`. All three nodes install together, so the
+  # Type=simple units come up and form the Raft cluster.
+  - [ dnf, install, -y, "${fastetcd_rpm_url}" ]
 
-final_message: "${fqdn} etcd cloud-init complete in $UPTIME seconds"
+final_message: "${fqdn} fastetcd ${fastetcd_version} cloud-init complete in $UPTIME seconds"

@@ -66,27 +66,35 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
 - [x] README, CHANGELOG, `.gitignore`, project CLAUDE.md
 - [x] Cargo workspace skeleton (crate boundaries)
 - [x] Create GitHub repo + push
-- [x] Stand up the dedicated etcd backend (D1) — see Live infrastructure below
+- [x] Stand up the dedicated **fastetcd** backend (D1) — see Live infrastructure below
 - [ ] Validate `ossl` crate + OpenSSL FIPS provider build on target platform
 - [ ] fastetcd connection harness (etcd v3 gRPC client, mTLS) — spike against the
-      live cluster; swap upstream etcd → fastetcd
+      live cluster **(blocked: fastetcd#4 multi-node writes)**
 
 ## Live infrastructure
 
-**etcd backend (D1)** — dedicated 3-node etcd cluster, Proxmox VMs on g8, managed
+**fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
+etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
 (`deploy/terragrunt/etcd/`; do NOT copy .tf — reference the pinned module).
 - Nodes: dm1/dm2/dm3.g8.lo → VMID 131/132/133 → 192.168.8.41/.42/.43.
-- etcd `v3.6.12` (fastetcd is a drop-in swap — same flags/env).
+- **fastetcd `v0.6.0`**, installed from the released RPM via cloud-init
+  (`dnf install <github release rpm url>`) — NEVER hand-built, never a container
+  nested on the VM. RPM ships `/usr/bin/fastetcd` + `fastetcd.service`
+  (reads `/etc/fastetcd/fastetcd.conf`). Config uses etcd-compatible `ETCD_*`
+  env names (fastetcd v0.6.0 reads them natively).
 - **Single endpoint for iron-store: `etcd.g8.lo:2379`** — MicroDNS health-checked
-  LB (3 A records, `http :2379/health`), reproducible via `deploy/dns/etcd-lb.sh`.
-  The LB *monitor* is enabled in mkube (launches the g8 microdns container); no
-  REST toggle. Until on, the name round-robins (etcd clients are cluster-aware).
+  LB (3 A records), reproducible via `deploy/dns/etcd-lb.sh`. Probe is **`tcp
+  :2379`** (fastetcd has no HTTP `/health` yet — fastetcd#5); monitor enabled via
+  mkube. Failover verified against upstream etcd earlier; TCP probe green on
+  fastetcd.
+- **Known fastetcd gaps (dogfooding finds, filed upstream):** multi-node client
+  writes fail — leader forwarding addr empty (**fastetcd#4, BLOCKER** for
+  iron-store writes); no HTTP `/health` (**fastetcd#5**). Reads/health OK.
 - Keyspace prefix: `/iron/...` (Kubernetes etcd uses `/registry/...` — disjoint,
-  and this is a separate cluster anyway per D1).
-- Workstation: `brew install etcd` for a native etcdctl; `ETCDCTL_ENDPOINTS=http://etcd.g8.lo:2379`.
-- Bootstrap bash (`deploy/proxmox/ironetcd.sh`) proved the steps; Terragrunt is
-  the going-forward tool.
+  separate cluster anyway per D1).
+- Workstation: `brew install etcd` for a native (wire-compat) etcdctl;
+  `ETCDCTL_ENDPOINTS=http://etcd.g8.lo:2379`.
 
 ### Phase 1 — Tier 1 identity core (RHEL/Linux + Mac light path)
 - [x] `iron-partition`: `NamingContext`/`Partition` types, **PartitionRegistry**,
