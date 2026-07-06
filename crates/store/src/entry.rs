@@ -95,3 +95,27 @@ pub async fn next_subtree_event(
     }
     Ok(None)
 }
+
+/// A watched change, decoded into an [`crate::model::Entry`] on `Put`.
+#[derive(Debug)]
+pub enum EntryChange {
+    Put { key: String, entry: crate::model::Entry },
+    Delete { key: String },
+}
+
+/// Like [`next_subtree_event`], but decodes `Put` values as
+/// [`crate::model::Entry`] rather than raw bytes.
+pub async fn next_entry_change(
+    stream: &mut etcd_client::WatchStream,
+) -> Result<Option<EntryChange>, StoreError> {
+    let Some(event) = next_subtree_event(stream).await? else {
+        return Ok(None);
+    };
+    Ok(Some(match event.kind {
+        EventType::Delete => EntryChange::Delete { key: event.key },
+        EventType::Put => EntryChange::Put {
+            key: event.key,
+            entry: crate::model::Entry::decode(&event.value)?,
+        },
+    }))
+}
