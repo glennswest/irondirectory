@@ -6,6 +6,20 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-07-06
+- **feat(crypto):** Closed roadmap #1 — validated the `ossl` crate against
+  the target platform's real FIPS provider. Added `crates/crypto`
+  (`iron-crypto`): digest (SHA-256/384/512), HMAC (SHA-256/512), and
+  AES-256-GCM AEAD, all through `ossl` dynamically linked against system
+  OpenSSL. Key finding: `ossl`'s own `fips` cargo feature is a dead end on
+  this platform (requires OpenSSL >= 4.0, vendors a non-CMVP-validated test
+  build) — real compliance comes from the OS's already-validated `fips.so`,
+  loaded via standard OpenSSL provider config. `FipsContext::new()` checks
+  `OSSL_PROVIDER_available` and fails closed if the fips provider isn't
+  active, rather than silently running unvalidated crypto. Also found and
+  worked around a memory-safety bug in `ossl` 1.5.2's
+  `load_configuration_file` (non-NUL-terminated pointer passed to a C API).
+  Full writeup: `docs/FIPS.md`. Verified with 7 passing known-answer/
+  roundtrip tests on dev.g8.lo.
 - **fix(deploy):** Rolling-upgraded the live dm1/dm2/dm3 cluster from fastetcd
   v0.6.0 to **v0.8.0** (followers first, leader last; `dnf install <rpm url>`,
   each node's postun `try-restart` picks up the new binary — no downtime, no

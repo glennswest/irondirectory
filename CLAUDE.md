@@ -70,11 +70,21 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
 - [x] Unblock #2 — fastetcd#4/#5 fixed upstream (v0.7.0), dm1/dm2/dm3 rolling-
       upgraded to **v0.8.0** and verified: writes via every node forward/commit
       correctly, `GET /health` returns 200, DNS LB probe switched tcp→http.
-- [ ] Validate `ossl` crate + OpenSSL FIPS provider build on target platform
+- [x] Validate `ossl` crate + OpenSSL FIPS provider build on target platform
+      (#1) — `crates/crypto` (`iron-crypto`), verified on dev.g8.lo against
+      the real Red Hat–validated `fips.so`; see `docs/FIPS.md`.
 - [ ] fastetcd connection harness (etcd v3 gRPC client, mTLS) — spike against the
       live cluster
 
 ## Live infrastructure
+
+**FIPS crypto (D4)** — `crates/crypto` (`iron-crypto`): digest/HMAC/AES-256-
+GCM over the `ossl` crate, dynamically linked against the system OpenSSL
+3.5 (NOT `ossl`'s own `fips` cargo feature — that needs OpenSSL >= 4.0 and
+isn't CMVP-validated). `FipsContext::new()` verifies the OS's validated
+`fips.so` provider is actually active and fails closed otherwise. Build/test
+needs `openssl-devel` + `clang` + `OPENSSL_CONF` pointing at a config that
+activates `fips.so` — see `docs/FIPS.md`. Verified on dev.g8.lo.
 
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed

@@ -90,6 +90,17 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
 - **No NTLM.** MD4/MD5/RC4 are non-FIPS and simply absent. Kerberos +
   SASL/GSSAPI only. (Mirrors rocketsmbd #30 making MD4/RC4 build-optional.)
 - **Directory password storage:** FIPS-approved KDF (PBKDF2 via OpenSSL).
+- **Validated on target 2026-07-06** (roadmap #1): the `ossl` crate's own
+  `fips` cargo feature is NOT what provides FIPS compliance here — it
+  requires OpenSSL >= 4.0 and vendor-builds a non-CMVP-validated test
+  module. The real path is `ossl` with `default-features = false, features
+  = ["ossl-sys", "dynamic"]` (dynamically link system `libcrypto`), which
+  picks up the OS's already-validated FIPS provider (Fedora/RHEL ship
+  `/usr/lib64/ossl-modules/fips.so`, an active CMVP-certified build) via
+  standard OpenSSL provider config — no kernel `fips=1` boot flag needed.
+  Implemented as `crates/crypto` (`iron-crypto`); full writeup in
+  `docs/FIPS.md`, including a memory-safety bug found in `ossl` 1.5.2's
+  config-loading API and how this crate avoids it.
 
 ### D5 — Deployment: standalone or Kubernetes
 - **Standalone:** irondirectory + a co-located/embedded dedicated fastetcd as a
