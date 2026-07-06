@@ -73,8 +73,18 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
 - [x] Validate `ossl` crate + OpenSSL FIPS provider build on target platform
       (#1) — `crates/crypto` (`iron-crypto`), verified on dev.g8.lo against
       the real Red Hat–validated `fips.so`; see `docs/FIPS.md`.
-- [ ] fastetcd connection harness (etcd v3 gRPC client, mTLS) — spike against the
-      live cluster
+- [x] fastetcd connection harness (etcd v3 gRPC client, mTLS) (#2) —
+      `crates/store` (`iron-store`): `connect()` (plaintext or mTLS from a
+      `ClusterRef`) + partition-scoped put/get/scan/watch on `iron_partition`
+      keys. Plaintext path verified against the live dm1/dm2/dm3 cluster
+      (`tests/live_cluster.rs`, put/get/scan/watch all pass). mTLS path
+      verified against a throwaway single-node instance (client identity
+      required and honored correctly by `iron-store`'s side) — but found
+      **fastetcd doesn't actually enforce `--client-cert-auth`** (writes
+      succeed with no client cert presented at all); filed upstream as
+      fastetcd#6, not fixed here. The live cluster stays plaintext for now;
+      do not flip it to `--client-cert-auth` expecting real enforcement
+      until fastetcd#6 lands.
 
 ## Live infrastructure
 
@@ -85,6 +95,17 @@ isn't CMVP-validated). `FipsContext::new()` verifies the OS's validated
 `fips.so` provider is actually active and fails closed otherwise. Build/test
 needs `openssl-devel` + `clang` + `OPENSSL_CONF` pointing at a config that
 activates `fips.so` — see `docs/FIPS.md`. Verified on dev.g8.lo.
+
+**iron-store connection harness (D1/D2)** — `crates/store` (`iron-store`):
+`connect(&ClusterRef)` → `etcd_client::Client` (plaintext or mTLS), plus
+partition-scoped `put_entry`/`get_entry`/`scan_subtree`/`watch_subtree` on
+`iron_partition`'s key encoding. `tests/live_cluster.rs` (ignored by
+default) is the spike against the real `etcd.g8.lo:2379` — run with
+`cargo test -p iron-store --test live_cluster -- --ignored
+--test-threads=1`. mTLS is validated separately (`tests/mtls_spike.rs`,
+env-var-gated) since the live cluster has no TLS configured — see
+fastetcd#6 (client-cert-auth doesn't actually enforce a client cert)
+before ever turning TLS on there.
 
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed

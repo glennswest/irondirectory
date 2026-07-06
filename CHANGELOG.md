@@ -6,6 +6,19 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-07-06
+- **feat(store):** Closed roadmap #2 — `crates/store` (`iron-store`):
+  `connect()` turns a `ClusterRef` into a live `etcd_client::Client`
+  (plaintext or mTLS), plus partition-scoped `put_entry`/`get_entry`/
+  `scan_subtree`/`watch_subtree` on `iron_partition`'s key encoding.
+  Plaintext path verified against the live dm1/dm2/dm3 cluster
+  (`etcd.g8.lo:2379`): put/get roundtrip, subtree scan, and watch all pass.
+  mTLS path verified against a throwaway single-node fastetcd instance —
+  `iron-store`'s client-identity handling is correct, but this surfaced a
+  real bug: fastetcd's `--client-cert-auth` doesn't actually require a
+  client certificate (a `put` succeeds with no client cert presented at
+  all, on both the gRPC KV path and `/health`). Filed upstream as
+  fastetcd#6; the live cluster stays plaintext until that lands. Bumped
+  `etcd-client` 0.14 → 0.19 (latest stable, `tls` feature enabled).
 - **feat(crypto):** Closed roadmap #1 — validated the `ossl` crate against
   the target platform's real FIPS provider. Added `crates/crypto`
   (`iron-crypto`): digest (SHA-256/384/512), HMAC (SHA-256/512), and
