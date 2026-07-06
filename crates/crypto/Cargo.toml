@@ -1,0 +1,17 @@
+[package]
+name = "iron-crypto"
+description = "FIPS crypto facade over the `ossl` crate (decision D4): digest, HMAC, and AES-GCM AEAD, backed by the system's OpenSSL 3 FIPS provider."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+ossl = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+hex = "0.4"

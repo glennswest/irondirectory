@@ -11,7 +11,7 @@ members = [
     # "crates/dns",     # DNS SRV autodiscovery
     # "crates/oidc",    # OAuth2/OpenID Connect authorization server (OpenShift SSO + D9 brokering)
     # "crates/gc",      # watch-fed Global Catalog / federated GAL aggregator (D8/D9)
-    # "crates/crypto",  # FIPS crypto facade over the `ossl` crate
+    "crates/crypto",   # FIPS crypto facade over the `ossl` crate — validated (#1)
     # "crates/server",  # binary: wires the services together (standalone + k8s)
 ]
 
@@ -35,8 +35,12 @@ async-trait = "0.1"
 etcd-client = "0.14"
 
 # FIPS crypto — OpenSSL 3.x FIPS provider via the `ossl` crate (decision D4).
-# Pinned once the target OpenSSL FIPS build is validated (Phase 0).
-ossl = "*"
+# Validated on target (#1, see docs/FIPS.md): dynamic-link the system
+# libcrypto via `ossl-sys`/`dynamic`. Do NOT add the crate's own `fips`
+# feature — it requires OpenSSL >= 4.0 vendored from source and produces a
+# self-built, non-CMVP-validated module. Real FIPS compliance comes from
+# the OS-shipped, already-validated fips.so provider, loaded at runtime.
+ossl = { version = "1.5.2", default-features = false, features = ["ossl-sys", "dynamic"] }
 
 # Errors / logging
 anyhow = "1"
