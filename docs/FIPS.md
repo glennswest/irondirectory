@@ -113,11 +113,11 @@ variant. Not filed upstream yet — worth doing if this crate sees more use.
 ## Running the test suite
 
 Needs `openssl-devel` (Fedora/RHEL) or `libssl-dev` (Debian), plus `clang`
-(for `ossl-sys`'s `bindgen`-generated FFI). Point `OPENSSL_CONF` at a config
-like the one above:
+(for `ossl-sys`'s `bindgen`-generated FFI). A checked-in config (the one
+above) lives at `crates/crypto/testdata/fips-dev.cnf`:
 
 ```sh
-OPENSSL_CONF=/path/to/fips.cnf cargo test -p iron-crypto
+OPENSSL_CONF=$(pwd)/crates/crypto/testdata/fips-dev.cnf cargo test -p iron-crypto
 ```
 
 ## What's deliberately out of scope here

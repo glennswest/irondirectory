@@ -1,0 +1,24 @@
+# OpenSSL provider config that activates the OS-shipped, CMVP-validated
+# FIPS provider for a single process (via OPENSSL_CONF) without touching
+# system-wide crypto-policies or requiring a reboot. See ../../docs/FIPS.md.
+#
+# Usage: OPENSSL_CONF=$(pwd)/crates/crypto/testdata/fips-dev.cnf cargo test -p iron-crypto
+#
+# Assumes a Fedora/RHEL host with /usr/lib64/ossl-modules/fips.so (dnf
+# install openssl-libs; check with `ls /usr/lib64/ossl-modules/`).
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+fips = fips_sect
+base = base_sect
+
+[base_sect]
+activate = 1
+
+[fips_sect]
+module = /usr/lib64/ossl-modules/fips.so
+activate = 1
+tls1-prf-ems-check = 1
