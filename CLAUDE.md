@@ -107,6 +107,22 @@ env-var-gated) since the live cluster has no TLS configured — see
 fastetcd#6 (client-cert-auth doesn't actually enforce a client cert)
 before ever turning TLS on there.
 
+**iron-store DIT layer (D2/D8, #3)** — on top of the connection harness:
+`model::Entry` (multi-valued attribute map, JSON-serialized value at each
+entry key), `index::{put_entry_indexed, delete_entry_indexed,
+lookup_by_index}` (secondary indexes at `/iron/<pid>/idx/...` kept
+consistent with the entry via one etcd `Txn` per write — stale index
+entries from a changed attribute value are removed atomically), and
+`store::Store` (invariant #4's connection registry: resolves a DN to its
+partition via `PartitionRegistry` and holds one connected client per
+partition's cluster). `tests/indexed_entries.rs` (ignored by default) is
+the spike against the live cluster — `cargo test -p iron-store --test
+indexed_entries -- --ignored --test-threads=1`. Run these `--ignored`
+tests from a host with a working route to the g8 node IPs (dev.g8.lo is
+known-good — this Mac's tonic/hyper connector once failed with "No route
+to host" against 192.168.8.41 despite plain `nc` succeeding; untriaged,
+transient, unrelated to `iron-store`'s code).
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
@@ -140,9 +156,13 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       connection registry (partition-id → fastetcd cluster). FOUNDATIONAL (D8) —
       built first; every other crate depends on it. *(DN, keys, registry, realm
       derivation; 23 tests, clippy-clean.)*
-- [ ] `iron-store`: **partition-scoped** DIT-over-fastetcd (per-partition keys
-      `/iron/<pid>/tree/...`, multi-cluster, DN encoding, entry serialization,
-      secondary indexes, watch-driven change notification)
+- [x] `iron-store`: **partition-scoped** DIT-over-fastetcd (#2/#3) — per-
+      partition keys `/iron/<pid>/tree/...`, multi-cluster `Store`
+      (DN→partition→client), DN encoding (via `iron_partition`), entry
+      serialization (`model::Entry`), secondary indexes (`index::*`, one
+      atomic `Txn` per write), watch-driven change notification
+      (`entry::next_entry_change`). Verified against the live dm1/dm2/dm3
+      cluster; see `docs/` note in Live infrastructure below.
 - [ ] `iron-ldap`: LDAP v3 server (bind, search, add/mod/del), rootDSE with
       `namingContexts`/config/schema/rootDomain NCs, **cross-NC referrals**,
       AD-shaped schema subset + RFC 2307 posix attrs (uidNumber/gidNumber),

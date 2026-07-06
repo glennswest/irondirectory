@@ -6,6 +6,20 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-07-06
+- **feat(store):** Closed roadmap #3 — the real DIT layer on top of #2's
+  connection harness. `model::Entry` (multi-valued attribute map,
+  JSON-serialized). `index::{put_entry_indexed, delete_entry_indexed,
+  lookup_by_index}`: secondary indexes at `/iron/<pid>/idx/...` kept
+  consistent with the entry tree via one etcd `Txn` per write, so a stale
+  index entry from a changed attribute value is removed atomically, not
+  left dangling. `store::Store`: the multi-cluster connection registry
+  (invariant #4) — resolves a DN to its partition via `PartitionRegistry`
+  and holds one connected client per partition's cluster, so callers work
+  directly on DNs. `entry::next_entry_change` decodes watch `Put` events
+  into `Entry` rather than raw bytes. Verified against the live dm1/dm2/dm3
+  cluster: put/get/delete roundtrip, index tracks an attribute value
+  change (old index entry removed, new one present), typed watch decode —
+  all pass (`tests/indexed_entries.rs`, `--ignored`).
 - **feat(store):** Closed roadmap #2 — `crates/store` (`iron-store`):
   `connect()` turns a `ClusterRef` into a live `etcd_client::Client`
   (plaintext or mTLS), plus partition-scoped `put_entry`/`get_entry`/
