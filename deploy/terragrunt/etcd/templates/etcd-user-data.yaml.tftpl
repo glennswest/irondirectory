@@ -28,7 +28,7 @@ write_files:
   # EnvironmentFile=-/etc/fastetcd/fastetcd.conf. Written BEFORE the package
   # installs, so the RPM postinstall's `enable --now` starts fastetcd already
   # configured for the 3-node cluster (etcd-compatible ETCD_* names; fastetcd
-  # v0.6.0 reads them natively). Data dir lives under the unit's RW path.
+  # fastetcd reads them natively). Data dir lives under the unit's RW path.
   - path: /etc/fastetcd/fastetcd.conf
     permissions: "0644"
     content: |

@@ -16,9 +16,13 @@ terraform {
 
 locals {
   # Released fastetcd RPM (pinned). Published at:
-  #   https://github.com/glennswest/fastetcd/releases/tag/v0.6.0
-  fastetcd_version = "v0.6.0"
-  fastetcd_rpm_url = "https://github.com/glennswest/fastetcd/releases/download/v0.6.0/fastetcd-0.6.0-1.x86_64.rpm"
+  #   https://github.com/glennswest/fastetcd/releases/tag/v0.8.0
+  # v0.8.0 carries the v0.7.0 fixes for fastetcd#4 (client writes on a
+  # non-leader now forward correctly) and fastetcd#5 (HTTP GET /health on
+  # the client port) — the live dm1/dm2/dm3 cluster was upgraded in place
+  # (rolling dnf upgrade, followers then leader) and verified.
+  fastetcd_version = "v0.8.0"
+  fastetcd_rpm_url = "https://github.com/glennswest/fastetcd/releases/download/v0.8.0/fastetcd-0.8.0-1.x86_64.rpm"
   cluster_token    = "irondir-etcd"
   ssh_key          = trimspace(file(pathexpand("~/.ssh/id_rsa.pub")))
 

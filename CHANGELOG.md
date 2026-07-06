@@ -5,6 +5,22 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-07-06
+- **fix(deploy):** Rolling-upgraded the live dm1/dm2/dm3 cluster from fastetcd
+  v0.6.0 to **v0.8.0** (followers first, leader last; `dnf install <rpm url>`,
+  each node's postun `try-restart` picks up the new binary — no downtime, no
+  data loss). Verified the two upstream fixes against the real cluster: a
+  `put` via every node (leader or follower) now commits and replicates
+  (fastetcd#4), and `GET :2379/health` returns 200 from all three
+  (fastetcd#5).
+- **fix(deploy):** `etcd.g8.lo` LB probe switched back **`tcp` → `http
+  :2379/health`** now that fastetcd serves it; MicroDNS LB monitor reports
+  `healthy: 3/3`.
+- **chore:** Pinned `deploy/terragrunt/etcd/terragrunt.hcl`'s
+  `fastetcd_version`/`fastetcd_rpm_url` to v0.8.0 so a future node recreate
+  doesn't regress to the broken v0.6.0. Unblocks issue #2 (iron-store ↔
+  fastetcd connection harness).
+
 ### 2026-07-01
 - **feat(deploy):** Backend is now **fastetcd v0.6.0** (the system under test),
   not upstream etcd. Terragrunt recreates dm1/dm2/dm3 and cloud-init installs the

@@ -18,11 +18,9 @@ ZONE_ID="9bed60c8-1664-4183-88f9-a1a21b927edc"   # g8.lo
 NAME="etcd"
 IPS=(192.168.8.41 192.168.8.42 192.168.8.43)
 PORT=2379
-# TCP-connect probe: fastetcd does not serve etcd's HTTP GET /health on the
-# client port (see fastetcd#5), so an http probe marks all backends unhealthy.
-# TCP :2379 works today; switch to http :2379/health once fastetcd#5 lands.
-PROBE_TYPE="tcp"
-PROBE_ENDPOINT=":2379"
+# HTTP GET :2379/health — fastetcd#5 landed in v0.7.0, cluster running v0.8.0.
+PROBE_TYPE="http"
+PROBE_ENDPOINT=":2379/health"
 
 records_json() { curl -fsS --max-time 6 "${DNS_API}/zones/${ZONE_ID}/records?limit=500"; }
 
