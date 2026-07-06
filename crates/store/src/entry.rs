@@ -1,0 +1,97 @@
+//! Partition-scoped entry put/get/watch, built on `iron_partition::key`'s
+//! encoding (D2: `/iron/<pid>/tree/<reversed-rdn-path>`).
+
+use crate::StoreError;
+use etcd_client::{Client, EventType, GetOptions, WatchOptions};
+use iron_partition::{key, Dn, PartitionId};
+
+/// Writes the raw entry value at `dn` within partition `pid`.
+pub async fn put_entry(
+    client: &mut Client,
+    pid: &PartitionId,
+    dn: &Dn,
+    value: impl Into<Vec<u8>>,
+) -> Result<(), StoreError> {
+    client.put(key::entry_key(pid, dn), value.into(), None).await?;
+    Ok(())
+}
+
+/// Reads the raw entry value at `dn` within partition `pid`, if present.
+pub async fn get_entry(
+    client: &mut Client,
+    pid: &PartitionId,
+    dn: &Dn,
+) -> Result<Option<Vec<u8>>, StoreError> {
+    let resp = client.get(key::entry_key(pid, dn), None).await?;
+    Ok(resp.kvs().first().map(|kv| kv.value().to_vec()))
+}
+
+/// Range-scans every entry in the subtree rooted at `dn` (inclusive of
+/// `dn` itself), within partition `pid`. Returns `(dn_suffix, value)`
+/// pairs in lexicographic key order.
+pub async fn scan_subtree(
+    client: &mut Client,
+    pid: &PartitionId,
+    dn: &Dn,
+) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+    let base = key::entry_key(pid, dn);
+    let prefix = key::subtree_prefix(pid, dn);
+    let resp = client
+        .get(prefix.clone(), Some(GetOptions::new().with_prefix()))
+        .await?;
+    let mut out: Vec<(String, Vec<u8>)> = resp
+        .kvs()
+        .iter()
+        .map(|kv| (kv.key_str().unwrap_or_default().to_string(), kv.value().to_vec()))
+        .collect();
+    // The base entry itself doesn't match the `<prefix>/` scan; fetch it
+    // separately so callers get the whole subtree, not just descendants.
+    if let Some(v) = get_entry(client, pid, dn).await? {
+        out.insert(0, (base, v));
+    }
+    Ok(out)
+}
+
+/// One observed change under a watched subtree.
+#[derive(Debug)]
+pub struct SubtreeEvent {
+    pub key: String,
+    pub kind: EventType,
+    pub value: Vec<u8>,
+}
+
+/// Watches every key change under the subtree rooted at `dn` (inclusive),
+/// within partition `pid`. Returns the raw watch stream's first (creation)
+/// response consumed internally; call `.message()` on the returned stream
+/// for subsequent events, or use [`next_subtree_event`] for a
+/// higher-level poll.
+pub async fn watch_subtree(
+    client: &mut Client,
+    pid: &PartitionId,
+    dn: &Dn,
+) -> Result<etcd_client::WatchStream, StoreError> {
+    let prefix = key::subtree_prefix(pid, dn);
+    let stream = client
+        .watch(prefix, Some(WatchOptions::new().with_prefix()))
+        .await?;
+    Ok(stream)
+}
+
+/// Pulls the next data event (put/delete) off a subtree watch stream,
+/// skipping bookkeeping-only responses (creation acks, progress notifies).
+pub async fn next_subtree_event(
+    stream: &mut etcd_client::WatchStream,
+) -> Result<Option<SubtreeEvent>, StoreError> {
+    while let Some(resp) = stream.message().await? {
+        if let Some(event) = resp.events().first() {
+            if let Some(kv) = event.kv() {
+                return Ok(Some(SubtreeEvent {
+                    key: kv.key_str().unwrap_or_default().to_string(),
+                    kind: event.event_type(),
+                    value: kv.value().to_vec(),
+                }));
+            }
+        }
+    }
+    Ok(None)
+}

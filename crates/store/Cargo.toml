@@ -1,0 +1,20 @@
+[package]
+name = "iron-store"
+description = "iron-store <-> fastetcd connection harness (etcd v3 gRPC, mTLS) and partition-scoped entry/watch operations (#2)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+iron-partition = { path = "../partition" }
+etcd-client = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

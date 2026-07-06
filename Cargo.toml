@@ -5,7 +5,8 @@ members = [
     # boundaries are fixed here so work can land incrementally.
     "crates/partition", # FOUNDATIONAL (D8): NamingContext/Partition, registry,
                         # partition-id -> fastetcd cluster map. Built first.
-    # "crates/store",   # partition-scoped DIT over fastetcd: keys, entries, indexes, watch
+    "crates/store",     # partition-scoped DIT over fastetcd: connection
+                        # harness (etcd v3 gRPC, mTLS), entries, watch (#2)
     # "crates/ldap",    # LDAP v3 server + AD-shaped schema + LDAPS (OpenSSL FIPS)
     # "crates/kdc",     # Kerberos KDC (AS/TGS), AES enctypes only, keytab
     # "crates/dns",     # DNS SRV autodiscovery
@@ -31,8 +32,9 @@ tokio-stream = "0.1"
 futures = "0.3"
 async-trait = "0.1"
 
-# fastetcd / etcd v3 client (wire-compatible)
-etcd-client = "0.14"
+# fastetcd / etcd v3 client (wire-compatible). `tls` feature = tonic's
+# rustls-backed transport, used for mTLS to the fastetcd cluster (D1).
+etcd-client = { version = "0.19", features = ["tls"] }
 
 # FIPS crypto — OpenSSL 3.x FIPS provider via the `ossl` crate (decision D4).
 # Validated on target (#1, see docs/FIPS.md): dynamic-link the system
