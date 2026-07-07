@@ -266,6 +266,19 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
 - DRSUAPI multi-master interop with real Windows DCs, Group Policy engine,
   cross-forest selective-auth/SID-filtering hardening.
 
+### Deployment TODO
+- [ ] **OpenShift-based deployment** (Helm chart or Operator, per D5
+      "standalone or Kubernetes" — mirror fastetcd's `deploy/charts/fastetcd`
+      precedent). Container images per service; `iron-ldapd`'s real HTTP
+      `/health` (`crates/ldap/src/health.rs`) reuses directly as a readiness/
+      liveness probe. LDAP isn't HTTP, so exposure is a plain Service or a
+      Route with TLS passthrough for LDAPS, not a normal HTTP Route.
+      cert-manager for the LDAPS/OpenSSL-FIPS cert instead of hand-rolled dev
+      certs. iron-ldap replicas are stateless (state lives in fastetcd's
+      Raft) so no StatefulSet needed there, unlike fastetcd's own cluster.
+      Not blocking current work — noted so it isn't forgotten once the
+      VM-based deployment (Proxmox, see Live infrastructure above) matures.
+
 ## Notes
 
 - fastetcd lives at `../../project*/fastetcd` style sibling paths; it is etcd v3
