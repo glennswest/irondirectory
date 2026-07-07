@@ -581,18 +581,27 @@ mod tests {
     }
 
     // RFC 3962 Appendix B -- PBKDF2 + DK("kerberos") string-to-key.
+    //
+    // **Found on target:** the FIPS provider also enforces a minimum
+    // PBKDF2 iteration count of 1000 (rejects with "invalid iteration
+    // count") and a minimum salt length of 16 bytes (rejects with
+    // "invalid key length"/"invalid salt length") -- both confirmed by
+    // brute-forcing against the live provider, same method as
+    // `iron_crypto::pbkdf2`'s minimum-password-length finding (see
+    // docs/FIPS.md). This rules out running RFC 3962's own iter=1/2/5
+    // test vectors through this provider; the default iteration counts
+    // this module actually uses (4096 for RFC 3962, 32768 for RFC 8009)
+    // are already safely above the floor, so only the deliberately-tiny
+    // RFC test vectors are affected. The salt-length floor is the more
+    // operationally significant one: a Kerberos principal's default
+    // salt (realm + principal name) can easily be under 16 bytes for
+    // short realms, which is exactly why real KDCs support sending an
+    // explicit salt via PA-ETYPE-INFO2 instead of relying on the
+    // client's guessed default -- `iron-kdc` always does this, sidestepping
+    // the constraint by design rather than by weakening it.
     #[test]
     fn rfc3962_string_to_key() {
         let ctx = FipsContext::new().unwrap();
-        let key128 = string_to_key(&ctx, Enctype::Aes128CtsHmacSha1_96, b"password", b"ATHENA.MIT.EDUraeburn", Some(1)).unwrap();
-        assert_eq!(key128, hex("42263c6e89f4fc28b8df68ee09799f15"));
-
-        let key256 = string_to_key(&ctx, Enctype::Aes256CtsHmacSha1_96, b"password", b"ATHENA.MIT.EDUraeburn", Some(1)).unwrap();
-        assert_eq!(
-            key256,
-            hex("fe697b52bc0d3ce14432ba036a92e65bbb52280990a2fa27883998d72af3016")
-        );
-
         let key128_1200 = string_to_key(&ctx, Enctype::Aes128CtsHmacSha1_96, b"password", b"ATHENA.MIT.EDUraeburn", Some(1200)).unwrap();
         assert_eq!(key128_1200, hex("4c01cd46d632d01e6dbe230a01ed642a"));
     }
@@ -600,15 +609,19 @@ mod tests {
     // RFC 3962 Appendix B -- AES-128 CBC-CTS test vector (the well-known
     // "chicken teriyaki" vector; here checked via the raw CTS primitive,
     // not the full Kerberos encrypt() wrapper, since it has no HMAC/
-    // confounder wrapping applied).
+    // confounder wrapping applied). Input is 17 bytes -- "I would like
+    // the " WITH the trailing space, per the RFC's exact byte dump --
+    // one byte over the AES block size is exactly what exercises real
+    // ciphertext stealing rather than the single-block/ECB-equivalent
+    // path RFC 3962 §5 specifies for inputs of exactly one block.
     #[test]
     fn rfc3962_cts_vector() {
         let ctx = FipsContext::new().unwrap();
         let key = hex("636869636b656e207465726979616b69");
         let iv = [0u8; 16];
-        let input = b"I would like the";
+        let input = b"I would like the ";
         let (out, _next_iv) = aes_cts_encrypt(&ctx, &key, &iv, input).unwrap();
-        assert_eq!(out, hex("c635 3568f2bf8cb4d8a580362da7ff7f97".replace(' ', "").as_str()));
+        assert_eq!(out, hex("c6353568f2bf8cb4d8a580362da7ff7f97"));
     }
 
     // RFC 8009 Appendix A -- string-to-key.
@@ -618,8 +631,11 @@ mod tests {
         // saltp already includes the enctype-name prefix in the RFC's
         // vector; string_to_key() builds that prefix itself, so pass the
         // raw salt ("ATHENA.MIT.EDUraeburn" prefixed by the 16 random
-        // bytes given in the vector) and let it construct saltp.
-        let random_salt_prefix = hex("df9dd783e5bc8acea1730e74355f6141");
+        // bytes given in the vector) and let it construct saltp. The
+        // random prefix is "10 DF 9D D7 83 E5 BC 8A CE A1 73 0E 74 35 5F
+        // 61" per the RFC's raw hex dump -- easy to mis-transcribe since
+        // it immediately follows the saltp's 0x00 separator byte.
+        let random_salt_prefix = hex("10df9dd783e5bc8acea1730e74355f61");
         let mut salt = random_salt_prefix.clone();
         salt.extend_from_slice(b"ATHENA.MIT.EDUraeburn");
         let key128 = string_to_key(&ctx, Enctype::Aes128CtsHmacSha256_128, b"password", &salt, Some(32768)).unwrap();
@@ -687,7 +703,12 @@ mod tests {
             Enctype::Aes128CtsHmacSha256_128,
             Enctype::Aes256CtsHmacSha384_192,
         ] {
-            let key = string_to_key(&ctx, enctype, b"hunter22", b"IRON.LOtest", None).unwrap();
+            // Salt must be >= 16 bytes -- the FIPS provider's PBKDF2
+            // minimum salt length (see the finding documented on
+            // rfc3962_string_to_key above); iron-kdc always sends an
+            // explicit >= 16-byte salt via PA-ETYPE-INFO2 for exactly
+            // this reason.
+            let key = string_to_key(&ctx, enctype, b"hunter22", b"IRON.LOtestuser1", None).unwrap();
             for plaintext in [&b""[..], b"short", b"exactly sixteen!", b"this is longer than one AES block by a fair bit"] {
                 let ct = encrypt(&ctx, enctype, &key, 3, plaintext).unwrap();
                 let pt = decrypt(&ctx, enctype, &key, 3, &ct).unwrap();
