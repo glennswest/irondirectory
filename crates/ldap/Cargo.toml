@@ -1,6 +1,6 @@
 [package]
 name = "iron-ldap"
-description = "LDAP v3 server + iron-ldapd daemon: rootDSE, bind, search, LDAPS, over the iron-store DIT (#4)."
+description = "LDAP v3 server + iron-ldapd daemon: rootDSE, bind, search, modify, compare, modify-DN, StartTLS/LDAPS, referrals, schema validation, over the iron-store DIT (#4)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

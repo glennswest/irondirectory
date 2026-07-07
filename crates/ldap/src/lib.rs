@@ -1,15 +1,19 @@
 //! iron-ldap: LDAP v3 server over the iron-store DIT (#4).
 //!
-//! Implemented so far: rootDSE, anonymous + authenticated simple bind
-//! (PBKDF2 via `iron-crypto`, D4), search (base/one/subtree scope, core
-//! filter kinds), add, delete, modify, compare, LDAPS. Not yet: modify-DN,
-//! extended ops besides none, StartTLS, cross-NC referrals, AD-shaped
-//! schema, RFC 2307 posix attrs.
+//! Implemented: rootDSE, anonymous + authenticated simple bind (PBKDF2
+//! via `iron-crypto`, D4), search (base/one/subtree scope, core filter
+//! kinds), add, delete, modify, compare, modify-DN (leaf entries only),
+//! StartTLS, LDAPS, cross-NC referrals (`AppState::referrals`), and
+//! built-in AD-shaped + RFC 2307 posix schema validation (`schema`
+//! module) on add/modify. Not yet: subtree rename, extended ops besides
+//! StartTLS, full schema-subentry publishing (`cn=subschema`).
 
+pub mod conn;
 pub mod filter;
 pub mod framing;
 pub mod health;
 pub mod rootdse;
+pub mod schema;
 pub mod session;
 pub mod tls;
 
@@ -17,6 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use iron_crypto::FipsContext;
+use iron_partition::Dn;
 use iron_store::index::IndexSpec;
 use iron_store::store::Store;
 use openssl::ssl::{Ssl, SslAcceptor};
@@ -32,10 +37,26 @@ pub struct AppState {
     /// bind and password-setting then fail closed (see `session::handle_bind`)
     /// rather than falling back to storing/checking plaintext.
     pub fips: Option<FipsContext>,
+    /// TLS acceptor for StartTLS on the plaintext listener. `None` if no
+    /// TLS cert/key is configured at all (StartTLS then reports
+    /// `ProtocolError` rather than attempting a handshake). The same
+    /// acceptor `serve_ldaps` uses for implicit TLS, if that's enabled too.
+    pub tls_acceptor: Option<Arc<SslAcceptor>>,
+    /// Naming contexts not hosted by this `Store` (its `PartitionRegistry`
+    /// only knows about locally-connected partitions today -- there's no
+    /// "referral-only, no cluster" partition kind yet), paired with the
+    /// LDAP URL to send clients to instead. Checked whenever an operation
+    /// resolves to `StoreError::NoPartitionFor` (see `session::referral_for`).
+    pub referrals: Vec<(Dn, String)>,
 }
 
 impl AppState {
-    pub fn new(store: Store, index_spec: IndexSpec) -> Arc<Self> {
+    pub fn new(
+        store: Store,
+        index_spec: IndexSpec,
+        tls_acceptor: Option<Arc<SslAcceptor>>,
+        referrals: Vec<(Dn, String)>,
+    ) -> Arc<Self> {
         let fips = match FipsContext::new() {
             Ok(f) => Some(f),
             Err(e) => {
@@ -51,19 +72,23 @@ impl AppState {
             store: Mutex::new(store),
             index_spec,
             fips,
+            tls_acceptor,
+            referrals,
         })
     }
 }
 
 /// Accepts plaintext connections on `listener` and serves each on its own
-/// task, until the listener errors.
+/// task, until the listener errors. StartTLS is available on these
+/// connections whenever `app.tls_acceptor` is set.
 pub async fn serve(listener: TcpListener, app: Arc<AppState>) -> std::io::Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
         tracing::info!(%peer, "accepted LDAP connection");
         let app = app.clone();
+        let tls_acceptor = app.tls_acceptor.clone();
         tokio::spawn(async move {
-            session::handle_connection(stream, app).await;
+            session::handle_connection(stream, app, tls_acceptor).await;
             tracing::info!(%peer, "LDAP connection closed");
         });
     }
@@ -71,7 +96,9 @@ pub async fn serve(listener: TcpListener, app: Arc<AppState>) -> std::io::Result
 
 /// Accepts LDAPS (implicit TLS) connections on `listener`, terminating
 /// TLS via `acceptor` (see [`tls::build_acceptor`]) before handing the
-/// stream to the same session handler `serve` uses.
+/// stream to the same session handler `serve` uses. StartTLS is not
+/// offered on these connections (`None`) -- meaningless over a
+/// connection that's already TLS from the first byte.
 pub async fn serve_ldaps(
     listener: TcpListener,
     acceptor: Arc<SslAcceptor>,
@@ -101,7 +128,7 @@ pub async fn serve_ldaps(
                 tracing::warn!(%peer, "TLS handshake failed: {e}");
                 return;
             }
-            session::handle_connection(stream, app).await;
+            session::handle_connection(stream, app, None).await;
             tracing::info!(%peer, "LDAPS connection closed");
         });
     }
