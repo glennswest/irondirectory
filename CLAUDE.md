@@ -264,8 +264,13 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       atomic `Txn` per write), watch-driven change notification
       (`entry::next_entry_change`). Verified against the live dm1/dm2/dm3
       cluster; see `docs/` note in Live infrastructure below.
-- [x] `iron-ldap` (#4): LDAP v3 server, all originally-scoped items done.
-      rootDSE (`namingContexts`), anonymous + **authenticated** bind
+- [x] `iron-ldap` (#4, CLOSED): LDAP v3 server, all acceptance criteria
+      met, including v0.5.0's last fix (rootDSE `defaultNamingContext`/
+      `configurationNamingContext`/`schemaNamingContext`/
+      `rootDomainNamingContext`, not just `namingContexts` — config/
+      schema partitions aren't provisioned yet, so those two stay absent
+      until #9/#17 land, but the mechanism picks them up automatically).
+      anonymous + **authenticated** bind
       (PBKDF2 via the FIPS provider, D4 — 210k iterations/SHA-256, fails
       closed if FIPS isn't active; found the provider enforces an
       undocumented 8-byte minimum password length), search (base/one/
