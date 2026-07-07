@@ -5,9 +5,24 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
-## [v0.2.0] — 2026-07-07
-
 ### 2026-07-07
+- **feat(deploy):** LDAP redundancy: 3 dedicated VMs (il1/il2/il3.g8.lo),
+  Terraform-provisioned (`deploy/terragrunt/ldap/`, mirrors the etcd
+  unit), each running `iron-ldapd` independently against the shared
+  fastetcd cluster (`etcd.g8.lo`) — no coordination between replicas,
+  iron-ldap is stateless. Single endpoint `ldap.g8.lo:389` via a
+  MicroDNS health-checked LB (`deploy/dns/ldap-lb.sh`) probing
+  `iron-ldapd`'s real `/health`. Verified real `ldapsearch` against the
+  LB name and each node; stopped one node's service and confirmed
+  queries via the LB name kept succeeding, then restarted it.
+- **known gap:** RPM distribution via `dnf install <github release url>`
+  assumes a public repo (fastetcd's pattern) — irondirectory is private,
+  so cloud-init's install step 404s. Worked around for this deployment
+  by `scp`-ing the built RPM directly; needs a real decision (public
+  repo? token in cloud-init? internal artifact host?) before the next
+  VM recreate.
+
+## [v0.2.0] — 2026-07-07
 - **feat(ldap):** `iron-ldapd` is now a real deployable daemon, not just a
   spike binary: env-var config (`IRON_LDAP_*`, systemd `EnvironmentFile=`-
   friendly), a real HTTP `/health` on a separate port (does an actual

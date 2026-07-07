@@ -169,6 +169,42 @@ modify/compare/modify-DN/extended ops, cross-NC referrals, AD-shaped
 schema + RFC 2307 posix attrs, StartTLS (LDAPS/implicit-TLS is done;
 StartTLS is the explicit-upgrade-on-389 variant, not yet built).
 
+**iron-ldap redundancy (D1-shaped: N stateless replicas + health-checked
+LB, not a Raft cluster like fastetcd)** — 3 dedicated VMs, **il1/il2/il3.g8.lo**
+→ VMID 134/135/136 → 192.168.8.44/.45/.46, Terraform-provisioned
+(`deploy/terragrunt/ldap/`, mirrors the etcd unit exactly). Each replica
+independently connects to the *same* fastetcd cluster (`etcd.g8.lo:2379`,
+partition `g10`) — no coordination between replicas, unlike fastetcd's
+own Raft group. **Single endpoint: `ldap.g8.lo:389`** — MicroDNS
+health-checked LB (3 A records, `deploy/dns/ldap-lb.sh`), probe is
+`http :8080/` against iron-ldapd's real `/health`
+(`crates/ldap/src/health.rs`, does a live fastetcd `Status` RPC, not just
+TCP liveness). Verified: real `ldapsearch` against `ldap.g8.lo` and each
+node individually; stopped `iron-ldapd` on il1 and confirmed queries via
+`ldap.g8.lo` kept succeeding (client-side multi-A-record retry), then
+restarted it — LB status back to `healthy: 6/6` (etcd + ldap groups).
+Applied from `dev.g8.lo` (on the g8 LAN — this Mac's route to the Proxmox
+API at `pve.g8.lo:8006` is intermittently unreachable, unrelated to any
+code here); needed a fresh `PROXMOX_API_TOKEN` (created via `pveum user
+token add root@pam terraform-cli`, since the existing `terraform`/
+`irondir` tokens' secrets were never persisted anywhere retrievable —
+Proxmox never re-displays a token secret after creation) and a new
+`~/.ssh/id_rsa` keypair on dev.g8.lo authorized on `pve.g8.lo` (root.hcl
+hardcodes `~/.ssh/id_rsa`, dev.g8.lo only had an ed25519 key).
+
+**KNOWN GAP — RPM distribution assumes a public repo, irondirectory is
+private:** unlike fastetcd (public), `dnf install <github release rpm
+url>` 404s on a private repo's release assets for anonymous/unauthenticated
+clients — cloud-init on il1/il2/il3 had to be worked around by `scp`-ing
+the already-built RPM from dev.g8.lo and installing the local file
+instead of the intended `dnf install <url>`. This needs a real decision,
+not a silent workaround baked into Terraform: make the repo public (like
+fastetcd), bake a scoped GitHub token into cloud-init for authenticated
+`gh release download`, or host built packages on an internal artifact
+server instead of GitHub Releases. `deploy/terragrunt/ldap/`'s cloud-init
+template still references the public-style URL — it will 404 on a fresh
+VM recreate until this is decided and fixed.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
