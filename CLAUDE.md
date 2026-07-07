@@ -171,14 +171,19 @@ etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, mana
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
 (`deploy/terragrunt/etcd/`; do NOT copy .tf — reference the pinned module).
 - Nodes: dm1/dm2/dm3.g8.lo → VMID 131/132/133 → 192.168.8.41/.42/.43.
-- **fastetcd `v0.8.0`**, installed from the released RPM via cloud-init
+- **fastetcd `v0.8.1`**, installed from the released RPM via cloud-init
   (`dnf install <github release rpm url>`) — NEVER hand-built, never a container
   nested on the VM. RPM ships `/usr/bin/fastetcd` + `fastetcd.service`
   (reads `/etc/fastetcd/fastetcd.conf`). Config uses etcd-compatible `ETCD_*`
-  env names (fastetcd reads them natively). Upgraded in place 2026-07-06 from
-  v0.6.0 via rolling `dnf install <rpm url>` (followers dm1/dm3 first, leader
-  dm2 last) — no data loss, no downtime; each node's postun `try-restart`
-  picks up the new binary automatically.
+  env names (fastetcd reads them natively). Upgraded in place: v0.6.0 → v0.8.0
+  (2026-07-06), then v0.8.0 → v0.8.1 (same day, rolling `dnf install <rpm
+  url>`, followers first, leader last each time) — no data loss, no
+  downtime; each node's postun `try-restart` picks up the new binary
+  automatically. v0.8.1 fixes **fastetcd#6** (`--client-cert-auth` had no
+  env binding, so `ETCD_CLIENT_CERT_AUTH` was silently ignored and never
+  enforced) — found while validating `iron-store`'s mTLS path (#2). The
+  live cluster is still plaintext (TLS not enabled here), but the bug
+  that blocked ever safely turning it on is fixed.
 - **Single endpoint for iron-store: `etcd.g8.lo:2379`** — MicroDNS health-checked
   LB (3 A records), reproducible via `deploy/dns/etcd-lb.sh`. Probe is **`http
   :2379/health`** (fastetcd#5 landed in v0.7.0); monitor confirms

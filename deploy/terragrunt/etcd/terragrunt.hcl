@@ -16,13 +16,16 @@ terraform {
 
 locals {
   # Released fastetcd RPM (pinned). Published at:
-  #   https://github.com/glennswest/fastetcd/releases/tag/v0.8.0
-  # v0.8.0 carries the v0.7.0 fixes for fastetcd#4 (client writes on a
-  # non-leader now forward correctly) and fastetcd#5 (HTTP GET /health on
-  # the client port) — the live dm1/dm2/dm3 cluster was upgraded in place
-  # (rolling dnf upgrade, followers then leader) and verified.
-  fastetcd_version = "v0.8.0"
-  fastetcd_rpm_url = "https://github.com/glennswest/fastetcd/releases/download/v0.8.0/fastetcd-0.8.0-1.x86_64.rpm"
+  #   https://github.com/glennswest/fastetcd/releases/tag/v0.8.1
+  # v0.8.1 fixes fastetcd#6 (--client-cert-auth / ETCD_CLIENT_CERT_AUTH
+  # had no env binding, so it was silently ignored and never actually
+  # enforced client certs) — found while validating iron-store's mTLS
+  # path (irondirectory#2). The live dm1/dm2/dm3 cluster was upgraded in
+  # place (rolling dnf upgrade, followers then leader) and verified; TLS
+  # itself is still off on the live cluster (plaintext), but the
+  # enforcement bug that blocked ever turning it on is now fixed.
+  fastetcd_version = "v0.8.1"
+  fastetcd_rpm_url = "https://github.com/glennswest/fastetcd/releases/download/v0.8.1/fastetcd-0.8.1-1.x86_64.rpm"
   cluster_token    = "irondir-etcd"
   ssh_key          = trimspace(file(pathexpand("~/.ssh/id_rsa.pub")))
 

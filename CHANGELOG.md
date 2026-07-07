@@ -6,6 +6,14 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-07-06
+- **fix(deploy):** Rolling-upgraded the live dm1/dm2/dm3 cluster from
+  fastetcd v0.8.0 to **v0.8.1**, which fixes fastetcd#6 (the bug found
+  while validating `iron-store`'s mTLS path: `--client-cert-auth` had no
+  env binding, so `ETCD_CLIENT_CERT_AUTH` was silently ignored and never
+  enforced). Verified: all three nodes healthy post-upgrade, writes via
+  every node still commit/replicate. Pinned
+  `deploy/terragrunt/etcd/terragrunt.hcl` to v0.8.1. TLS itself remains
+  off on the live cluster for now.
 - **feat(ldap):** LDAPS for `iron-ldap` (part of #4, still open). Uses the
   plain `openssl` crate (rust-openssl's full libssl bindings) — not
   `ossl`/kryoptic, which only binds libcrypto's EVP APIs and has no TLS
