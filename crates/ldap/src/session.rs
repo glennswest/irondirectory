@@ -9,9 +9,10 @@ use iron_store::model::Entry;
 use iron_store::store::Store;
 use rasn::types::SetOf;
 use rasn_ldap::{
-    AddRequest, AddResponse, AuthenticationChoice, BindRequest, BindResponse, DelRequest,
-    DelResponse, LdapMessage, LdapResult, PartialAttribute, ProtocolOp, ResultCode, SearchRequest,
-    SearchRequestScope, SearchResultDone, SearchResultEntry,
+    AddRequest, AddResponse, AuthenticationChoice, BindRequest, BindResponse, CompareResponse,
+    DelRequest, DelResponse, ExtendedResponse, LdapMessage, LdapResult, ModifyDnResponse,
+    ModifyResponse, PartialAttribute, ProtocolOp, ResultCode, SearchRequest, SearchRequestScope,
+    SearchResultDone, SearchResultEntry,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
@@ -70,12 +71,70 @@ where
                     return;
                 }
             }
-            // Modify/Compare/ModifyDn/Extended: not yet implemented (#4
-            // tracks the rest of the scope). Abandon has no response per
-            // RFC 4511 §4.11 and is silently ignored.
+            // Not yet implemented (#4 tracks the rest of the scope), but
+            // every one of these has a defined response -- a client must
+            // not be left hanging waiting for one that never comes.
+            ProtocolOp::ModifyRequest(_) => {
+                let resp = LdapMessage::new(
+                    message_id,
+                    ProtocolOp::ModifyResponse(ModifyResponse(unwilling("modify is not implemented yet"))),
+                );
+                if write_message(&mut stream, &resp).await.is_err() {
+                    return;
+                }
+            }
+            ProtocolOp::CompareRequest(_) => {
+                let resp = LdapMessage::new(
+                    message_id,
+                    ProtocolOp::CompareResponse(CompareResponse(unwilling(
+                        "compare is not implemented yet",
+                    ))),
+                );
+                if write_message(&mut stream, &resp).await.is_err() {
+                    return;
+                }
+            }
+            ProtocolOp::ModDnRequest(_) => {
+                let resp = LdapMessage::new(
+                    message_id,
+                    ProtocolOp::ModDnResponse(ModifyDnResponse(unwilling(
+                        "modify-DN is not implemented yet",
+                    ))),
+                );
+                if write_message(&mut stream, &resp).await.is_err() {
+                    return;
+                }
+            }
+            ProtocolOp::ExtendedReq(_) => {
+                let resp = LdapMessage::new(
+                    message_id,
+                    ProtocolOp::ExtendedResp(ExtendedResponse {
+                        result_code: ResultCode::ProtocolError,
+                        matched_dn: String::new().into(),
+                        diagnostic_message: "extended operations are not implemented yet".into(),
+                        referral: None,
+                        response_name: None,
+                        response_value: None,
+                    }),
+                );
+                if write_message(&mut stream, &resp).await.is_err() {
+                    return;
+                }
+            }
+            // Abandon has no response per RFC 4511 §4.11. IntermediateResponse
+            // and any future/unknown op the client sends: nothing sensible to
+            // reply with, so drop it rather than guess.
             _ => {}
         }
     }
+}
+
+fn unwilling(diagnostic: &str) -> LdapResult {
+    LdapResult::new(
+        ResultCode::UnwillingToPerform,
+        String::new().into(),
+        diagnostic.into(),
+    )
 }
 
 fn handle_bind(req: &BindRequest) -> BindResponse {
