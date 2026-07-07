@@ -19,6 +19,9 @@ async fn dispatch(app: &AppState, bytes: &[u8]) -> Vec<u8> {
             KdcResponse::Error(malformed_request_error(&app.realm, &e))
         }
     };
+    if let KdcResponse::Error(e) = &response {
+        tracing::info!(error_code = e.error_code, e_text = ?e.e_text, "returning KRB-ERROR");
+    }
     match response.encode() {
         Ok(b) => b,
         Err(e) => {
