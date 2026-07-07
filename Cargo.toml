@@ -9,7 +9,7 @@ members = [
                         # harness (etcd v3 gRPC, mTLS), entries, watch (#2)
     "crates/ldap",      # LDAP v3 server: rootDSE, bind, search (#4);
                         # AD-shaped schema + LDAPS come later in the same issue
-    # "crates/kdc",     # Kerberos KDC (AS/TGS), AES enctypes only, keytab
+    "crates/kdc",       # Kerberos KDC (AS/TGS), AES enctypes only, keytab (#5)
     # "crates/dns",     # DNS SRV autodiscovery
     # "crates/oidc",    # OAuth2/OpenID Connect authorization server (OpenShift SSO + D9 brokering)
     # "crates/gc",      # watch-fed Global Catalog / federated GAL aggregator (D8/D9)
@@ -59,6 +59,14 @@ serde = { version = "1", features = ["derive"] }
 # the `rasn` framework, rather than hand-rolling BER (#4).
 rasn = "0.28"
 rasn-ldap = "0.28"
+
+# Kerberos 5 wire protocol (RFC 4120) -- ASN.1/DER types from the same
+# `librasn/rasn` org as rasn-ldap, same rationale (#5): don't hand-roll
+# the message types, only the crypto/protocol logic they don't cover.
+rasn-kerberos = "0.28"
+
+# Kerberos timestamps: rasn's GeneralizedTime is chrono::DateTime<FixedOffset>.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 # LDAPS/StartTLS (D4: "TLS via OpenSSL FIPS provider, not rustls+ring").
 # Note this is the plain `openssl` crate (rust-openssl, full libssl/TLS

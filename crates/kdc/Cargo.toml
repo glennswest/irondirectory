@@ -1,0 +1,63 @@
+[package]
+name = "iron-kdc"
+description = "Kerberos 5 KDC (AS/TGS), AES-only enctypes, keytab -- over the iron-store DIT (#5)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+iron-partition = { path = "../partition" }
+iron-store = { path = "../store" }
+iron-crypto = { path = "../crypto" }
+rasn = { workspace = true }
+rasn-kerberos = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+hex = "0.4"
+
+# ---------------------------------------------------------------
+# Packaging (cargo-generate-rpm), mirrors iron-ldapd:
+#   cargo build --release -p iron-kdc --bin iron-kdcd
+#   cargo generate-rpm -p crates/kdc
+# ---------------------------------------------------------------
+
+[package.metadata.generate-rpm]
+name = "iron-kdcd"
+license = "Apache-2.0"
+summary = "irondirectory Kerberos 5 KDC"
+assets = [
+    { source = "target/release/iron-kdcd", dest = "/usr/bin/iron-kdcd", mode = "755" },
+    { source = "target/release/iron-kdc-ctl", dest = "/usr/bin/iron-kdc-ctl", mode = "755" },
+    { source = "deploy/systemd/iron-kdcd.service", dest = "/usr/lib/systemd/system/iron-kdcd.service", mode = "644" },
+    { source = "deploy/systemd/iron-kdcd.conf.example", dest = "/usr/share/doc/iron-kdcd/iron-kdcd.conf.example", mode = "644" },
+]
+post_install_script = """
+getent group iron-kdcd >/dev/null || groupadd --system iron-kdcd
+getent passwd iron-kdcd >/dev/null || useradd --system --gid iron-kdcd \\
+  --no-create-home --shell /sbin/nologin iron-kdcd
+mkdir -p /etc/iron-kdcd
+systemctl daemon-reload >/dev/null 2>&1 || :
+systemctl enable --now iron-kdcd.service >/dev/null 2>&1 || :
+"""
+pre_uninstall_script = """
+if [ $1 -eq 0 ]; then
+  systemctl --no-reload disable --now iron-kdcd.service >/dev/null 2>&1 || :
+fi
+"""
+post_uninstall_script = """
+systemctl daemon-reload >/dev/null 2>&1 || :
+if [ $1 -ge 1 ]; then
+  systemctl try-restart iron-kdcd.service >/dev/null 2>&1 || :
+fi
+"""

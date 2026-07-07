@@ -56,7 +56,7 @@ impl Enctype {
         }
     }
 
-    fn key_len(self) -> usize {
+    pub fn key_len(self) -> usize {
         match self.aes_size() {
             AesSize::Aes128 => 16,
             AesSize::Aes256 => 32,
@@ -110,6 +110,34 @@ impl Enctype {
             4096
         }
     }
+}
+
+impl TryFrom<i32> for Enctype {
+    type Error = ();
+    fn try_from(v: i32) -> Result<Self, ()> {
+        match v {
+            17 => Ok(Enctype::Aes128CtsHmacSha1_96),
+            18 => Ok(Enctype::Aes256CtsHmacSha1_96),
+            19 => Ok(Enctype::Aes128CtsHmacSha256_128),
+            20 => Ok(Enctype::Aes256CtsHmacSha384_192),
+            _ => Err(()),
+        }
+    }
+}
+
+/// The FIPS provider's minimum PBKDF2 salt length (see module docs) --
+/// every salt this crate generates or accepts for Kerberos string-to-key
+/// must be at least this long.
+pub const MIN_SALT_LEN: usize = 16;
+
+/// Generates `len` random bytes via the FIPS provider's DRBG -- for
+/// session keys, salts, and confounders that need real randomness
+/// outside of [`encrypt`]'s own internal confounder generation.
+pub fn random_bytes(ctx: &FipsContext, len: usize) -> Result<Vec<u8>, Error> {
+    let mut rng = ossl::rand::EvpRandCtx::new_hmac_drbg(ctx.inner(), DigestAlg::Sha2_256, b"iron-kdc random")?;
+    let mut out = vec![0u8; len];
+    rng.generate(&[], &mut out)?;
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------
