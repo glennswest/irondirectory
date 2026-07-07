@@ -10,7 +10,7 @@ provides the **SMB file-server** half (SYSVOL/NETLOGON shares, Kerberos service
 acceptor). Together they form a clean-room, FIPS-clean alternative to a Windows
 or Samba domain controller.
 
-> **Status:** `v0.4.0` — Phase 0 done, Phase 1 underway. `iron-partition`
+> **Status:** `v0.5.0` — Phase 0 done, Phase 1 underway. `iron-partition`
 > (naming-context model), `iron-store` (partition-scoped DIT over fastetcd,
 > mTLS connection harness), `iron-crypto` (FIPS crypto facade over `ossl`,
 > incl. PBKDF2 password hashing), and `iron-ldap` (rootDSE, anonymous +

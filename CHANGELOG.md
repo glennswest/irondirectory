@@ -5,6 +5,16 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.5.0] — 2026-07-07
+
+### 2026-07-07 (post-v0.4.0)
+- **feat(ldap):** rootDSE now exposes the AD-shaped naming context
+  attributes called for in #4's acceptance criteria --
+  `defaultNamingContext`, `configurationNamingContext`,
+  `schemaNamingContext`, `rootDomainNamingContext` -- alongside the
+  existing `namingContexts`. New `PartitionRegistry::root_domain_partition`
+  (the forest's `Domain`-kind partition with no superior).
+
 ## [v0.4.0] — 2026-07-07
 
 ### 2026-07-07 (post-v0.3.0)

@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.4.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.5.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap: rootDSE/bind/search/add/delete/
 modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via PBKDF2 +
 cross-NC referrals + AD/RFC2307 schema validation, redundant deployment
