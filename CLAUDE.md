@@ -140,11 +140,31 @@ op) hanging forever until this was fixed. Verified end-to-end against
 the live cluster with **real `openldap-clients`** (`ldapsearch`,
 `ldapadd`, `ldapdelete`) via the throwaway `iron-ldapd` binary
 (`cargo run -p iron-ldap --bin iron-ldapd -- 127.0.0.1:3890
-http://etcd.g8.lo:2379 <pid> <base-dn>`) — not the production entry
-point (`crates/server` isn't built yet). Remaining #4 scope: authenticated
-bind (needs a credential model), modify/compare/modify-DN/extended ops,
-cross-NC referrals, AD-shaped schema + RFC 2307 posix attrs, LDAPS/
-StartTLS via the OpenSSL FIPS provider (`iron-crypto`).
+http://etcd.g8.lo:2379 <pid> <base-dn> [ldaps-addr cert key]`) — not the
+production entry point (`crates/server` isn't built yet).
+
+**LDAPS (`tls.rs`, D4)** — via the plain `openssl` crate (rust-openssl's
+full libssl bindings), **not** `ossl`/kryoptic (`iron-crypto`'s
+dependency) — `ossl` only binds libcrypto's EVP APIs, no TLS state
+machine at all. Dynamically links system libssl (no `vendored`), so it
+resolves through the same OS-validated `fips.so` as `iron-crypto`
+whenever `OPENSSL_CONF` activates it — same operational requirement, no
+per-connection plumbing. Verified live under a FIPS-*only* provider set
+(base+fips, no default — `crates/crypto/testdata/fips-dev.cnf`): real
+`ldapsearch -H ldaps://` round-trips correctly. One real finding along
+the way — OpenSSL 3.5's default TLS 1.3 group list offers a hybrid PQC
+group (`X25519MLKEM768`) first, and `openssl list
+-key-exchange-algorithms` under the FIPS-only provider set shows
+X25519/X448 tagged `@ fips` — meaning the module *implements* them, not
+that they're on the CMVP certificate's *approved* list (X25519 isn't a
+NIST SP 800-56A curve). Rather than assert unverified compliance,
+`build_acceptor` pins `set_groups_list("P-256:P-384:P-521")`; confirmed
+via `openssl s_client -brief` the handshake now negotiates `ECDH,
+prime256v1` (P-256) with `TLS_AES_256_GCM_SHA384` — unambiguous.
+Remaining #4 scope: authenticated bind (needs a credential model),
+modify/compare/modify-DN/extended ops, cross-NC referrals, AD-shaped
+schema + RFC 2307 posix attrs, StartTLS (LDAPS/implicit-TLS is done;
+StartTLS is the explicit-upgrade-on-389 variant, not yet built).
 
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
@@ -188,11 +208,14 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       cluster; see `docs/` note in Live infrastructure below.
 - [~] `iron-ldap` (#4, in progress): LDAP v3 server. **Done:** rootDSE
       (`namingContexts`), anonymous bind, search (base/one/subtree scope,
-      core filters), add, del — verified with real `ldapsearch`/`ldapadd`/
-      `ldapdelete` against the live cluster. **Remaining:** authenticated
-      bind, modify/compare/modify-DN/extended ops, cross-NC referrals,
-      AD-shaped schema subset + RFC 2307 posix attrs (uidNumber/gidNumber),
-      LDAPS/StartTLS via OpenSSL FIPS (`iron-crypto`)
+      core filters), add, del, **LDAPS via OpenSSL** (pinned to NIST
+      curves P-256/P-384/P-521, not OpenSSL's default TLS1.3 hybrid-PQC
+      group) — verified with real `ldapsearch`/`ldapadd`/`ldapdelete`
+      (incl. over `ldaps://`) against the live cluster. **Remaining:**
+      authenticated bind, modify/compare/modify-DN/extended ops,
+      cross-NC referrals, AD-shaped schema subset + RFC 2307 posix attrs
+      (uidNumber/gidNumber), StartTLS (explicit upgrade on 389; LDAPS/
+      implicit-TLS on its own port is done)
 - [ ] `iron-kdc`: Kerberos KDC (AS-REQ/TGS-REQ), **realm-per-partition** with
       cross-realm key slots, AES enctypes only, keytab
 - [ ] `iron-dns`: SRV autodiscovery records (integrate with microdns where it

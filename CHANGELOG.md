@@ -6,6 +6,21 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-07-06
+- **feat(ldap):** LDAPS for `iron-ldap` (part of #4, still open). Uses the
+  plain `openssl` crate (rust-openssl's full libssl bindings) — not
+  `ossl`/kryoptic, which only binds libcrypto's EVP APIs and has no TLS
+  state machine. Dynamically links system libssl, so it resolves through
+  the same OS-validated `fips.so` as `iron-crypto` whenever
+  `OPENSSL_CONF` activates it. Verified live under a FIPS-only provider
+  set (base+fips, no default): real `ldapsearch -H ldaps://` round-trips.
+  Found and fixed a real gap along the way — OpenSSL 3.5's default TLS
+  1.3 group list offers a hybrid PQC group (`X25519MLKEM768`) first, and
+  the FIPS provider implements X25519/X448 (confirmed via `openssl list
+  -key-exchange-algorithms`) without that meaning they're on the CMVP
+  certificate's *approved* list (X25519 isn't a NIST SP 800-56A curve).
+  `build_acceptor` now pins `set_groups_list("P-256:P-384:P-521")`;
+  confirmed the handshake negotiates `ECDH, prime256v1` with
+  `TLS_AES_256_GCM_SHA384` — unambiguous.
 - **feat(ldap):** First vertical slice of roadmap #4 (still open —
   substantial scope remains). `crates/ldap` (`iron-ldap`): LDAP v3 over
   `iron-store`, built on `rasn`/`rasn-ldap` (RFC 4511 ASN.1 types + BER
