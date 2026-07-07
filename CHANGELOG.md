@@ -5,6 +5,8 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.3.0] — 2026-07-07
+
 ### 2026-07-07
 - **feat(deploy):** LDAP redundancy: 3 dedicated VMs (il1/il2/il3.g8.lo),
   Terraform-provisioned (`deploy/terragrunt/ldap/`, mirrors the etcd
