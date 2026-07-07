@@ -10,7 +10,10 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.1.0` — pre-implementation (docs/scaffolding only).
+`0.2.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+underway (#3 DIT layer, #4 iron-ldap first vertical slice incl. LDAPS).
+See CHANGELOG.md for the running list; Live infrastructure below has the
+verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`

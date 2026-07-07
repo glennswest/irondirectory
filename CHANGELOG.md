@@ -5,6 +5,28 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.2.0] — 2026-07-07
+
+### 2026-07-07
+- **feat(ldap):** `iron-ldapd` is now a real deployable daemon, not just a
+  spike binary: env-var config (`IRON_LDAP_*`, systemd `EnvironmentFile=`-
+  friendly), a real HTTP `/health` on a separate port (does an actual
+  fastetcd `Status` RPC via `Store::ping`, not just TCP liveness), RPM
+  packaging (`cargo-generate-rpm`) + a systemd unit. Deliberately
+  glibc-linked with system libssl dynamically linked (not fastetcd's
+  musl-static pattern) — D4's FIPS posture needs the OS's validated
+  `fips.so`, which a vendored/static OpenSSL would defeat; confirmed the
+  generated RPM correctly declares `libssl.so.3`/`libcrypto.so.3` as
+  runtime deps. Verified installed via `dnf install`: creates the
+  `iron-ldapd` system user, binds privileged port 389 as non-root via
+  `CAP_NET_BIND_SERVICE`, and answers real `ldapsearch` — all under
+  systemd.
+- **fix(store):** Fixed a real concurrency bug found while wiring up
+  `iron-ldapd`'s multiple listeners (plaintext/LDAPS/health): awaiting
+  them in a sequential `for` loop blocked forever on the first one, since
+  each is an infinite accept loop. `futures::join_all` runs them
+  concurrently instead.
+
 ### 2026-07-06
 - **fix(deploy):** Rolling-upgraded the live dm1/dm2/dm3 cluster from
   fastetcd v0.8.0 to **v0.8.1**, which fixes fastetcd#6 (the bug found

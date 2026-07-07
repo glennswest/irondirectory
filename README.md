@@ -10,8 +10,13 @@ provides the **SMB file-server** half (SYSVOL/NETLOGON shares, Kerberos service
 acceptor). Together they form a clean-room, FIPS-clean alternative to a Windows
 or Samba domain controller.
 
-> **Status:** `v0.1.0` — pre-implementation. Architecture and decisions are
-> recorded in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). No code yet.
+> **Status:** `v0.2.0` — Phase 0 done, Phase 1 underway. `iron-partition`
+> (naming-context model), `iron-store` (partition-scoped DIT over fastetcd,
+> mTLS connection harness), `iron-crypto` (FIPS crypto facade over `ossl`),
+> and a first `iron-ldap` vertical slice (rootDSE, bind, search, add/delete,
+> LDAPS) are real and verified against a live fastetcd cluster with real
+> `openldap-clients` tools. Architecture and decisions are recorded in
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## What it is (and isn't)
 
