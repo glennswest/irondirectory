@@ -26,13 +26,12 @@ terraform {
 
 locals {
   # Released iron-ldapd RPM (pinned). Published at:
-  #   https://github.com/glennswest/irondirectory/releases/tag/v0.4.0
-  # v0.4.0 adds modify-DN, StartTLS, cross-NC referrals, and AD/RFC 2307
-  # schema validation on top of v0.3.0's authenticated bind/modify/
-  # compare -- the live il1/il2/il3 nodes were upgraded in place (dnf
-  # install <rpm url>).
-  iron_ldapd_version = "v0.4.0"
-  iron_ldapd_rpm_url  = "https://github.com/glennswest/irondirectory/releases/download/v0.4.0/iron-ldapd-0.4.0-1.x86_64.rpm"
+  #   https://github.com/glennswest/irondirectory/releases/tag/v0.5.0
+  # v0.5.0 adds AD-shaped rootDSE naming contexts (defaultNamingContext,
+  # rootDomainNamingContext, etc.) closing out #4's last gap -- the live
+  # il1/il2/il3 nodes were upgraded in place (dnf install <rpm url>).
+  iron_ldapd_version = "v0.5.0"
+  iron_ldapd_rpm_url  = "https://github.com/glennswest/irondirectory/releases/download/v0.5.0/iron-ldapd-0.5.0-1.x86_64.rpm"
 
   # The shared fastetcd backend (D1) -- same cluster iron-store's tests
   # target, health-checked LB at etcd.g8.lo.
