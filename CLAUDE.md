@@ -10,10 +10,11 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.3.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.4.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap: rootDSE/bind/search/add/delete/
-modify/compare/LDAPS + authenticated bind via PBKDF2, redundant
-deployment live on il1/il2/il3.g8.lo). See CHANGELOG.md for the running
+modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via PBKDF2 +
+cross-NC referrals + AD/RFC2307 schema validation, redundant deployment
+live on il1/il2/il3.g8.lo). See CHANGELOG.md for the running
 list; Live infrastructure below has the verification details.
 
 Version locations (keep in sync on every bump):
@@ -263,20 +264,29 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       atomic `Txn` per write), watch-driven change notification
       (`entry::next_entry_change`). Verified against the live dm1/dm2/dm3
       cluster; see `docs/` note in Live infrastructure below.
-- [~] `iron-ldap` (#4, in progress): LDAP v3 server. **Done:** rootDSE
-      (`namingContexts`), anonymous + **authenticated** bind (PBKDF2 via
-      the FIPS provider, D4 — 210k iterations/SHA-256, fails closed if
-      FIPS isn't active; found the provider enforces an undocumented
-      8-byte minimum password length), search (base/one/subtree scope,
-      core filters), add, del, **modify** (add/delete/replace), **compare**,
-      **LDAPS via OpenSSL** (pinned to NIST curves P-256/P-384/P-521, not
-      OpenSSL's default TLS1.3 hybrid-PQC group) — all verified with real
-      `ldapsearch`/`ldapadd`/`ldapmodify`/`ldapcompare`/`ldapdelete`
-      (incl. over `ldaps://` and authenticated bind) against the live
-      cluster and the redundant `il1/il2/il3` deployment. **Remaining:**
-      modify-DN, extended ops besides none, cross-NC referrals,
-      AD-shaped schema subset + RFC 2307 posix attrs (uidNumber/gidNumber),
-      StartTLS (explicit upgrade on 389; LDAPS/implicit-TLS is done)
+- [x] `iron-ldap` (#4): LDAP v3 server, all originally-scoped items done.
+      rootDSE (`namingContexts`), anonymous + **authenticated** bind
+      (PBKDF2 via the FIPS provider, D4 — 210k iterations/SHA-256, fails
+      closed if FIPS isn't active; found the provider enforces an
+      undocumented 8-byte minimum password length), search (base/one/
+      subtree scope, core filters), add, del, **modify** (add/delete/
+      replace), **compare**, **modify-DN** (leaf entries; refuses
+      non-leaf moves with the standard `NotAllowedOnNonLeaf`, not a
+      stub), **StartTLS** (new `Conn<S>` enum for in-place plaintext→TLS
+      upgrade) + **LDAPS via OpenSSL** (pinned to NIST curves
+      P-256/P-384/P-521, not OpenSSL's default TLS1.3 hybrid-PQC group),
+      **cross-NC referrals** (`IRON_LDAP_REFERRALS`, real `Referral`
+      result code + LDAP URL), **AD-shaped + RFC 2307 posix schema
+      validation** (`crates/ldap/src/schema.rs`, `ObjectClassViolation`
+      on a missing MUST attribute) — all verified with real
+      `ldapsearch`/`ldapadd`/`ldapmodify`/`ldapcompare`/`ldapdelete`/
+      `ldapmodrdn` (incl. over `ldaps://`, `-ZZ` StartTLS, and
+      authenticated bind) against a live instance and the redundant
+      `il1/il2/il3` deployment. **Remaining (deliberately out of scope
+      for this pass):** subtree rename (moving a non-leaf entry), other
+      extended ops besides StartTLS, full schema-subentry publishing
+      (`cn=subschema`) — schema is enforced but not yet discoverable by
+      clients that query it
 - [ ] `iron-kdc`: Kerberos KDC (AS-REQ/TGS-REQ), **realm-per-partition** with
       cross-realm key slots, AES enctypes only, keytab
 - [ ] `iron-dns`: SRV autodiscovery records (integrate with microdns where it

@@ -5,6 +5,8 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.4.0] — 2026-07-07
+
 ### 2026-07-07 (post-v0.3.0)
 - **feat(deploy):** Rolled the live il1/il2/il3 redundant deployment to
   v0.3.0 and enabled authenticated bind there: each node now has
@@ -12,6 +14,12 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
   `OPENSSL_CONF` pointing at it. Verified authenticated bind (correct and
   wrong password) through the live `ldap.g8.lo` LB. Updated the Terraform
   cloud-init template to write this from boot for future VM recreates.
+- **feat(ldap):** Modify-DN (leaf entries; refuses non-leaf moves with
+  `NotAllowedOnNonLeaf`), StartTLS (new `Conn<S>` enum for in-place
+  plaintext→TLS upgrade), cross-NC referrals (`IRON_LDAP_REFERRALS`),
+  and built-in AD-shaped + RFC 2307 posix schema validation on add/modify
+  (`ObjectClassViolation` on a missing MUST attribute). All verified with
+  real `ldapmodrdn`/`ldapsearch -ZZ`/`ldapadd` against a live instance.
 
 ## [v0.3.0] — 2026-07-07
 
