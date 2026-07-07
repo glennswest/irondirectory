@@ -5,6 +5,14 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-07-07 (post-v0.3.0)
+- **feat(deploy):** Rolled the live il1/il2/il3 redundant deployment to
+  v0.3.0 and enabled authenticated bind there: each node now has
+  `/etc/iron-ldapd/fips.cnf` (activates the FIPS provider) and
+  `OPENSSL_CONF` pointing at it. Verified authenticated bind (correct and
+  wrong password) through the live `ldap.g8.lo` LB. Updated the Terraform
+  cloud-init template to write this from boot for future VM recreates.
+
 ## [v0.3.0] — 2026-07-07
 
 ### 2026-07-07

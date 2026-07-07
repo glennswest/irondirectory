@@ -193,6 +193,19 @@ Proxmox never re-displays a token secret after creation) and a new
 `~/.ssh/id_rsa` keypair on dev.g8.lo authorized on `pve.g8.lo` (root.hcl
 hardcodes `~/.ssh/id_rsa`, dev.g8.lo only had an ed25519 key).
 
+**Authenticated bind rollout (v0.3.0):** the live il1/il2/il3 were
+provisioned before authenticated bind existed, so their config had no
+`OPENSSL_CONF` — `iron-ldap` correctly failed closed (logged a clear
+warning, disabled authenticated bind/password-setting, kept anonymous
+bind/search/add/delete/modify/compare working) rather than silently
+running without FIPS. Rolling-upgraded to v0.3.0, then gave each node
+`/etc/iron-ldapd/fips.cnf` (activates `/usr/lib64/ossl-modules/fips.so`)
++ `OPENSSL_CONF=/etc/iron-ldapd/fips.cnf` in its conf and restarted.
+Verified authenticated bind (`ldapsearch -D ... -w ...`, both correct and
+wrong password) through the live `ldap.g8.lo` LB. The Terraform
+cloud-init template now writes `fips.cnf` + sets `OPENSSL_CONF` from
+boot, so a fresh VM recreate gets this without a manual patch step.
+
 **RPM distribution gap — resolved 2026-07-07:** cloud-init's `dnf install
 <github release rpm url>` 404'd on il1/il2/il3 because irondirectory was
 still a **private** repo (fastetcd's identical pattern works because

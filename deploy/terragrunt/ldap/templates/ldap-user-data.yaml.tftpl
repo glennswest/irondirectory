@@ -36,6 +36,26 @@ write_files:
       IRON_LDAP_FASTETCD_ENDPOINT=${fastetcd_endpoint}
       IRON_LDAP_PARTITION_ID=${partition_id}
       IRON_LDAP_BASE_DN=${base_dn}
+      OPENSSL_CONF=/etc/iron-ldapd/fips.cnf
+  # Activates the OS-shipped, CMVP-validated fips.so provider for this
+  # process (see docs/FIPS.md) -- without it, authenticated bind and
+  # password-setting fail closed (a clear warning + disabled, not a
+  # crash) rather than ever falling back to unvalidated crypto.
+  - path: /etc/iron-ldapd/fips.cnf
+    permissions: "0644"
+    content: |
+      openssl_conf = openssl_init
+      [openssl_init]
+      providers = provider_sect
+      [provider_sect]
+      fips = fips_sect
+      base = base_sect
+      [base_sect]
+      activate = 1
+      [fips_sect]
+      module = /usr/lib64/ossl-modules/fips.so
+      activate = 1
+      tls1-prf-ems-check = 1
 
 runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]

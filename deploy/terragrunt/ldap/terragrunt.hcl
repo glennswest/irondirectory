@@ -26,9 +26,14 @@ terraform {
 
 locals {
   # Released iron-ldapd RPM (pinned). Published at:
-  #   https://github.com/glennswest/irondirectory/releases/tag/v0.2.0
-  iron_ldapd_version = "v0.2.0"
-  iron_ldapd_rpm_url  = "https://github.com/glennswest/irondirectory/releases/download/v0.2.0/iron-ldapd-0.2.0-1.x86_64.rpm"
+  #   https://github.com/glennswest/irondirectory/releases/tag/v0.3.0
+  # v0.3.0 adds authenticated simple bind (PBKDF2 via the FIPS provider),
+  # modify, and compare -- the live il1/il2/il3 nodes were upgraded in
+  # place (dnf install <rpm url>) and each given an OPENSSL_CONF pointing
+  # at a fips.cnf activating /usr/lib64/ossl-modules/fips.so, matching
+  # what this cloud-init template now does for a fresh recreate.
+  iron_ldapd_version = "v0.3.0"
+  iron_ldapd_rpm_url  = "https://github.com/glennswest/irondirectory/releases/download/v0.3.0/iron-ldapd-0.3.0-1.x86_64.rpm"
 
   # The shared fastetcd backend (D1) -- same cluster iron-store's tests
   # target, health-checked LB at etcd.g8.lo.
