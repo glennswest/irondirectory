@@ -11,6 +11,7 @@
 pub mod aead;
 pub mod digest;
 pub mod hmac;
+pub mod kerberos;
 pub mod pbkdf2;
 
 use ossl::bindings::OSSL_PROVIDER_available;
@@ -32,6 +33,8 @@ pub enum Error {
     FipsProviderNotActive,
     #[error("password is {actual} bytes, shorter than the FIPS PBKDF2 minimum of {min}")]
     PasswordTooShort { min: usize, actual: usize },
+    #[error("integrity check failed (Kerberos HMAC mismatch or tampered ciphertext)")]
+    IntegrityCheckFailed,
 }
 
 impl From<ossl::Error> for Error {
