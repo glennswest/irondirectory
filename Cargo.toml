@@ -59,3 +59,13 @@ serde = { version = "1", features = ["derive"] }
 # the `rasn` framework, rather than hand-rolling BER (#4).
 rasn = "0.28"
 rasn-ldap = "0.28"
+
+# LDAPS/StartTLS (D4: "TLS via OpenSSL FIPS provider, not rustls+ring").
+# Note this is the plain `openssl` crate (rust-openssl, full libssl/TLS
+# bindings), NOT the `ossl` crate above -- `ossl`/kryoptic only binds
+# libcrypto's EVP APIs, it has no SSL/TLS state machine at all. Default
+# features dynamically link the system libssl/libcrypto (no `vendored`),
+# so it picks up the same OS-validated fips.so provider as iron-crypto
+# when OPENSSL_CONF activates it (see docs/FIPS.md).
+openssl = "0.10"
+tokio-openssl = "0.6"

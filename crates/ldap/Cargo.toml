@@ -19,5 +19,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+openssl = { workspace = true }
+tokio-openssl = { workspace = true }
 
 [dev-dependencies]
