@@ -7,7 +7,8 @@ members = [
                         # partition-id -> fastetcd cluster map. Built first.
     "crates/store",     # partition-scoped DIT over fastetcd: connection
                         # harness (etcd v3 gRPC, mTLS), entries, watch (#2)
-    # "crates/ldap",    # LDAP v3 server + AD-shaped schema + LDAPS (OpenSSL FIPS)
+    "crates/ldap",      # LDAP v3 server: rootDSE, bind, search (#4);
+                        # AD-shaped schema + LDAPS come later in the same issue
     # "crates/kdc",     # Kerberos KDC (AS/TGS), AES enctypes only, keytab
     # "crates/dns",     # DNS SRV autodiscovery
     # "crates/oidc",    # OAuth2/OpenID Connect authorization server (OpenShift SSO + D9 brokering)
@@ -19,7 +20,8 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+# Bumped 1.82 -> 1.85 for rasn/rasn-ldap (#4), which use edition 2024.
+rust-version = "1.85"
 license = "Apache-2.0"
 authors = ["irondirectory contributors"]
 repository = "https://github.com/glennswest/irondirectory"
@@ -52,3 +54,8 @@ tracing-subscriber = "0.3"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
+
+# LDAP v3 wire protocol (RFC 4511) -- ASN.1/BER types + codec generated via
+# the `rasn` framework, rather than hand-rolling BER (#4).
+rasn = "0.28"
+rasn-ldap = "0.28"

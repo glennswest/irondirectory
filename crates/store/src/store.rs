@@ -82,4 +82,21 @@ impl Store {
         let client = self.client_mut(&pid)?;
         crate::index::lookup_by_index(client, &pid, attr, value).await
     }
+
+    /// Every entry in the subtree rooted at `dn` (inclusive), decoded.
+    /// DNs are reconstructed from storage keys, so their case may be
+    /// normalized rather than the original display case (see
+    /// [`crate::entry::dn_from_tree_key`]).
+    pub async fn scan_subtree(&mut self, dn: &Dn) -> Result<Vec<(Dn, Entry)>, StoreError> {
+        let pid = self.resolve(dn)?.id.clone();
+        let client = self.client_mut(&pid)?;
+        let rows = crate::entry::scan_subtree(client, &pid, dn).await?;
+        rows.into_iter()
+            .map(|(k, v)| {
+                let dn = crate::entry::dn_from_tree_key(&pid, &k)?;
+                let entry = Entry::decode(&v)?;
+                Ok((dn, entry))
+            })
+            .collect()
+    }
 }

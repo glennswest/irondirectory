@@ -3,7 +3,27 @@
 
 use crate::StoreError;
 use etcd_client::{Client, EventType, GetOptions, WatchOptions};
-use iron_partition::{key, Dn, PartitionId};
+use iron_partition::{key, Dn, PartitionError, PartitionId};
+
+/// Reconstructs a [`Dn`] from a raw fastetcd key under a partition's tree
+/// (as returned by [`scan_subtree`]).
+///
+/// Storage keys are case-normalized (see `iron_partition::dn`'s module
+/// docs: attribute values are case-folded for the key, not display case),
+/// so the returned `Dn`'s components may not match the original entry's
+/// display case. Fine for routing/equality; a follow-up (stash an exact-
+/// case `entryDN` pseudo-attribute on write) would fix display fidelity.
+pub fn dn_from_tree_key(pid: &PartitionId, raw_key: &str) -> Result<Dn, StoreError> {
+    let root = key::tree_root(pid);
+    let suffix = raw_key.strip_prefix(&root).ok_or_else(|| {
+        StoreError::Partition(PartitionError::InvalidDn {
+            input: raw_key.to_string(),
+            reason: "key is not under this partition's tree root".into(),
+        })
+    })?;
+    let comma_form: String = suffix.split('/').rev().collect::<Vec<_>>().join(",");
+    Dn::parse(&comma_form).map_err(StoreError::Partition)
+}
 
 /// Writes the raw entry value at `dn` within partition `pid`.
 pub async fn put_entry(
