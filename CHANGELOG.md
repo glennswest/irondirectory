@@ -6,6 +6,26 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-07-06
+- **feat(ldap):** First vertical slice of roadmap #4 (still open —
+  substantial scope remains). `crates/ldap` (`iron-ldap`): LDAP v3 over
+  `iron-store`, built on `rasn`/`rasn-ldap` (RFC 4511 ASN.1 types + BER
+  codec) rather than hand-rolled BER — only the message framing (tag+
+  length header) is hand-written. Implemented: rootDSE (`namingContexts`
+  from the `PartitionRegistry`), anonymous simple bind, search (base/
+  one/subtree scope; present/equality/and/or/not filters), add, delete.
+  Every unimplemented op (modify, compare, modify-DN, extended) now
+  returns a defined error response instead of being silently dropped —
+  found via `ldapwhoami` (sends an Extended WhoAmI request) hanging
+  forever before that fix. Verified end-to-end against the live cluster
+  with **real `openldap-clients`**: `ldapsearch` (rootDSE, base/one-level/
+  subtree with an equality filter and attribute selection), `ldapadd`,
+  `ldapdelete` — all pass, via the throwaway `iron-ldapd` binary (not the
+  production entry point). `iron-store` gained `Store::scan_subtree` and
+  `entry::dn_from_tree_key` to support this. Bumped workspace
+  `rust-version` 1.82 → 1.85 (`rasn`/`rasn-ldap` use edition 2024).
+  Remaining #4 scope: authenticated bind, modify/compare/modify-DN/
+  extended ops, cross-NC referrals, AD-shaped schema + RFC 2307 posix
+  attrs, LDAPS/StartTLS via `iron-crypto`'s FIPS provider.
 - **feat(store):** Closed roadmap #3 — the real DIT layer on top of #2's
   connection harness. `model::Entry` (multi-valued attribute map,
   JSON-serialized). `index::{put_entry_indexed, delete_entry_indexed,

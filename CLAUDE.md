@@ -123,6 +123,29 @@ known-good — this Mac's tonic/hyper connector once failed with "No route
 to host" against 192.168.8.41 despite plain `nc` succeeding; untriaged,
 transient, unrelated to `iron-store`'s code).
 
+**iron-ldap (D2/D8, #4 — first vertical slice)** — `crates/ldap`: LDAP v3
+over `iron-store`. Built on `rasn`/`rasn-ldap` (RFC 4511 ASN.1 types +
+BER codec, MIT/Apache-2.0, actively maintained) rather than hand-rolled
+BER — only the outer message tag+length framing is hand-written
+(`framing.rs`; the outer SEQUENCE tag is always a single byte, so this is
+small and avoids depending on a third-party decoder's incomplete-vs-
+malformed error semantics). Implemented: rootDSE (`namingContexts` from
+`PartitionRegistry`), anonymous simple bind, search (base/one/subtree
+scope; filter kinds present/equality/and/or/not — substrings/ordering/
+approx/extensible conservatively evaluate false, not an error), add,
+delete. Every op without an implementation still sends back a defined
+error response (`UnwillingToPerform`/`ProtocolError`) rather than
+dropping the request — found via `ldapwhoami` (sends an Extended WhoAmI
+op) hanging forever until this was fixed. Verified end-to-end against
+the live cluster with **real `openldap-clients`** (`ldapsearch`,
+`ldapadd`, `ldapdelete`) via the throwaway `iron-ldapd` binary
+(`cargo run -p iron-ldap --bin iron-ldapd -- 127.0.0.1:3890
+http://etcd.g8.lo:2379 <pid> <base-dn>`) — not the production entry
+point (`crates/server` isn't built yet). Remaining #4 scope: authenticated
+bind (needs a credential model), modify/compare/modify-DN/extended ops,
+cross-NC referrals, AD-shaped schema + RFC 2307 posix attrs, LDAPS/
+StartTLS via the OpenSSL FIPS provider (`iron-crypto`).
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
@@ -163,10 +186,13 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       atomic `Txn` per write), watch-driven change notification
       (`entry::next_entry_change`). Verified against the live dm1/dm2/dm3
       cluster; see `docs/` note in Live infrastructure below.
-- [ ] `iron-ldap`: LDAP v3 server (bind, search, add/mod/del), rootDSE with
-      `namingContexts`/config/schema/rootDomain NCs, **cross-NC referrals**,
+- [~] `iron-ldap` (#4, in progress): LDAP v3 server. **Done:** rootDSE
+      (`namingContexts`), anonymous bind, search (base/one/subtree scope,
+      core filters), add, del — verified with real `ldapsearch`/`ldapadd`/
+      `ldapdelete` against the live cluster. **Remaining:** authenticated
+      bind, modify/compare/modify-DN/extended ops, cross-NC referrals,
       AD-shaped schema subset + RFC 2307 posix attrs (uidNumber/gidNumber),
-      LDAPS/StartTLS via OpenSSL FIPS
+      LDAPS/StartTLS via OpenSSL FIPS (`iron-crypto`)
 - [ ] `iron-kdc`: Kerberos KDC (AS-REQ/TGS-REQ), **realm-per-partition** with
       cross-realm key slots, AES enctypes only, keytab
 - [ ] `iron-dns`: SRV autodiscovery records (integrate with microdns where it
