@@ -30,6 +30,8 @@ pub enum Error {
          (see docs/FIPS.md)"
     )]
     FipsProviderNotActive,
+    #[error("password is {actual} bytes, shorter than the FIPS PBKDF2 minimum of {min}")]
+    PasswordTooShort { min: usize, actual: usize },
 }
 
 impl From<ossl::Error> for Error {

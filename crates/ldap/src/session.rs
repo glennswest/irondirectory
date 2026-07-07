@@ -243,10 +243,42 @@ impl AttrLike for &PartialAttribute {
     }
 }
 
+/// Maps an `iron_crypto::Error` from hashing a `userPassword` value to the
+/// LDAP result it should produce -- `ConstraintViolation` (a real,
+/// client-fixable constraint: pick a longer password) is a materially
+/// different situation from `UnwillingToPerform` (a server-side
+/// precondition, the FIPS provider isn't active).
+fn password_error_result(e: &iron_crypto::Error) -> LdapResult {
+    match e {
+        iron_crypto::Error::PasswordTooShort { min, actual } => LdapResult::new(
+            ResultCode::ConstraintViolation,
+            String::new().into(),
+            format!("password is {actual} bytes, shorter than the required minimum of {min}").into(),
+        ),
+        iron_crypto::Error::FipsProviderNotActive => {
+            unwilling("FIPS provider not active -- cannot hash userPassword")
+        }
+        _ => unwilling("failed to hash userPassword"),
+    }
+}
+
+fn hash_password_values(
+    fips: Option<&iron_crypto::FipsContext>,
+    values: &[String],
+) -> Result<Vec<String>, iron_crypto::Error> {
+    let Some(fips) = fips else {
+        return Err(iron_crypto::Error::FipsProviderNotActive);
+    };
+    values
+        .iter()
+        .map(|v| iron_crypto::pbkdf2::hash_password(fips, v.as_bytes()))
+        .collect()
+}
+
 fn entry_from_attributes<A: AttrLike>(
     attrs: impl IntoIterator<Item = A>,
     fips: Option<&iron_crypto::FipsContext>,
-) -> Result<Entry, &'static str> {
+) -> Result<Entry, iron_crypto::Error> {
     let mut entry = Entry::new();
     for a in attrs {
         let values: Vec<String> = a
@@ -255,17 +287,7 @@ fn entry_from_attributes<A: AttrLike>(
             .map(|v| String::from_utf8_lossy(v).into_owned())
             .collect();
         if a.type_name().eq_ignore_ascii_case(USER_PASSWORD_ATTR) {
-            let Some(fips) = fips else {
-                return Err("FIPS provider not active -- cannot hash userPassword");
-            };
-            let hashed: Result<Vec<String>, _> = values
-                .iter()
-                .map(|v| iron_crypto::pbkdf2::hash_password(fips, v.as_bytes()))
-                .collect();
-            match hashed {
-                Ok(h) => entry.set(a.type_name(), h),
-                Err(_) => return Err("failed to hash userPassword"),
-            }
+            entry.set(a.type_name(), hash_password_values(fips, &values)?);
         } else {
             entry.set(a.type_name(), values);
         }
@@ -285,7 +307,7 @@ async fn handle_add(
     };
     let entry = match entry_from_attributes(&req.attributes, fips) {
         Ok(e) => e,
-        Err(msg) => return AddResponse(unwilling(msg)),
+        Err(e) => return AddResponse(password_error_result(&e)),
     };
 
     let result = match store.put_entry(&dn, &entry, spec).await {
@@ -335,12 +357,9 @@ async fn handle_modify(
         match change.operation {
             ChangeOperation::Add => {
                 if attr.eq_ignore_ascii_case(USER_PASSWORD_ATTR) {
-                    let Some(fips) = fips else {
-                        return ModifyResponse(unwilling("FIPS provider not active -- cannot hash userPassword"));
-                    };
-                    match values.iter().map(|v| iron_crypto::pbkdf2::hash_password(fips, v.as_bytes())).collect::<Result<Vec<_>, _>>() {
+                    match hash_password_values(fips, &values) {
                         Ok(h) => entry.add_values(attr, h),
-                        Err(_) => return ModifyResponse(unwilling("failed to hash userPassword")),
+                        Err(e) => return ModifyResponse(password_error_result(&e)),
                     }
                 } else {
                     entry.add_values(attr, values);
@@ -351,12 +370,9 @@ async fn handle_modify(
                 if values.is_empty() {
                     entry.delete_values(attr, &[]);
                 } else if attr.eq_ignore_ascii_case(USER_PASSWORD_ATTR) {
-                    let Some(fips) = fips else {
-                        return ModifyResponse(unwilling("FIPS provider not active -- cannot hash userPassword"));
-                    };
-                    match values.iter().map(|v| iron_crypto::pbkdf2::hash_password(fips, v.as_bytes())).collect::<Result<Vec<_>, _>>() {
+                    match hash_password_values(fips, &values) {
                         Ok(h) => entry.set(attr, h),
-                        Err(_) => return ModifyResponse(unwilling("failed to hash userPassword")),
+                        Err(e) => return ModifyResponse(password_error_result(&e)),
                     }
                 } else {
                     entry.set(attr, values);

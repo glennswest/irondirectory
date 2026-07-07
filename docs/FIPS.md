@@ -110,6 +110,23 @@ appended to the path). `iron-crypto` avoids this entirely by using
 `OPENSSL_CONF`/the compiled-in default path) instead of the path-taking
 variant. Not filed upstream yet — worth doing if this crate sees more use.
 
+## PBKDF2 has an undocumented minimum password length
+
+`iron_crypto::pbkdf2` (D4's password-storage KDF) hits a real FIPS
+provider constraint: passwords under **8 bytes** fail
+`kdf_pbkdf2_set_ctx_params` with `"invalid key length"`
+(`providers/implementations/kdfs/pbkdf2.c`) — not documented anywhere in
+upstream OpenSSL's PBKDF2 docs, found by brute-forcing lengths 0..20
+against the live provider (`OsslContext` + `Pbkdf2Derive`, no
+`iron-crypto` wrapper) until the exact threshold appeared. `hash_password`
+checks this length up front and returns `Error::PasswordTooShort { min,
+actual }` with the real numbers, rather than letting the caller hit an
+opaque `Ossl` error or trust a caller-side length check that could drift
+out of sync with what the provider actually enforces. `iron-ldap` maps
+this to LDAP's `ConstraintViolation` result code (a real, client-fixable
+problem — pick a longer password), distinct from `UnwillingToPerform`
+(the FIPS provider isn't active at all, a server-side precondition).
+
 ## Running the test suite
 
 Needs `openssl-devel` (Fedora/RHEL) or `libssl-dev` (Debian), plus `clang`
@@ -126,7 +143,7 @@ OPENSSL_CONF=$(pwd)/crates/crypto/testdata/fips-dev.cnf cargo test -p iron-crypt
   exposes `EncAlg::AesCts(AesSize, AesCtsMode)`, so `iron-kdc` can build
   directly on `ossl` when that crate lands; no need to duplicate it in
   `iron-crypto` ahead of time.
-- LDAPS/TLS — handled by the OpenSSL-backed TLS stack chosen for `iron-ldap`
-  (not yet built), not by this crate.
-- PBKDF2 password KDF (D4) — same: add when `iron-store`/`iron-ldap` need
-  it, following the same `ossl`-dynamic, OS-FIPS-provider pattern.
+- LDAPS/TLS — `iron-ldap` uses the plain `openssl` crate (rust-openssl,
+  full libssl bindings) instead, since `ossl`/kryoptic only binds
+  libcrypto's EVP APIs and has no TLS state machine at all. See
+  `crates/ldap/src/tls.rs`.
