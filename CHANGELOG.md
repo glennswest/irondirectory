@@ -15,12 +15,13 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
   `iron-ldapd`'s real `/health`. Verified real `ldapsearch` against the
   LB name and each node; stopped one node's service and confirmed
   queries via the LB name kept succeeding, then restarted it.
-- **known gap:** RPM distribution via `dnf install <github release url>`
-  assumes a public repo (fastetcd's pattern) — irondirectory is private,
-  so cloud-init's install step 404s. Worked around for this deployment
-  by `scp`-ing the built RPM directly; needs a real decision (public
-  repo? token in cloud-init? internal artifact host?) before the next
-  VM recreate.
+- **chore:** Made the irondirectory repo **public** (matching fastetcd/
+  rocketsmbd), resolving the RPM-distribution gap above — cloud-init's
+  `dnf install <github release url>` needs anonymous access to the
+  release asset, which a private repo doesn't allow. Scanned full git
+  history for secrets first (clean: only placeholder token strings, no
+  real credentials or private keys). Confirmed the release RPM is now
+  fetchable anonymously.
 
 ## [v0.2.0] — 2026-07-07
 - **feat(ldap):** `iron-ldapd` is now a real deployable daemon, not just a

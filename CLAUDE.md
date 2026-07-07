@@ -192,18 +192,17 @@ Proxmox never re-displays a token secret after creation) and a new
 `~/.ssh/id_rsa` keypair on dev.g8.lo authorized on `pve.g8.lo` (root.hcl
 hardcodes `~/.ssh/id_rsa`, dev.g8.lo only had an ed25519 key).
 
-**KNOWN GAP — RPM distribution assumes a public repo, irondirectory is
-private:** unlike fastetcd (public), `dnf install <github release rpm
-url>` 404s on a private repo's release assets for anonymous/unauthenticated
-clients — cloud-init on il1/il2/il3 had to be worked around by `scp`-ing
-the already-built RPM from dev.g8.lo and installing the local file
-instead of the intended `dnf install <url>`. This needs a real decision,
-not a silent workaround baked into Terraform: make the repo public (like
-fastetcd), bake a scoped GitHub token into cloud-init for authenticated
-`gh release download`, or host built packages on an internal artifact
-server instead of GitHub Releases. `deploy/terragrunt/ldap/`'s cloud-init
-template still references the public-style URL — it will 404 on a fresh
-VM recreate until this is decided and fixed.
+**RPM distribution gap — resolved 2026-07-07:** cloud-init's `dnf install
+<github release rpm url>` 404'd on il1/il2/il3 because irondirectory was
+still a **private** repo (fastetcd's identical pattern works because
+fastetcd is public) — worked around at the time by `scp`-ing the
+already-built RPM from dev.g8.lo. Decision: **made irondirectory public**
+(matching fastetcd/rocketsmbd), after scanning full git history for
+secrets first (clean — only placeholder/example token strings, no real
+credentials, no private key blocks). Confirmed the release asset is now
+anonymously fetchable (`curl` 200). `deploy/terragrunt/ldap/`'s cloud-init
+template's `dnf install <url>` now works as originally intended on a
+fresh VM recreate — no more scp workaround needed.
 
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
