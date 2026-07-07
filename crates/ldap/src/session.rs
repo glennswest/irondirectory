@@ -1,28 +1,31 @@
 //! Per-connection LDAP session: reads framed `LdapMessage`s and dispatches
-//! bind/search (the operations implemented so far -- see crate docs).
+//! bind/search/add/delete/modify/compare (the operations implemented so
+//! far -- see crate docs).
 
 use std::sync::Arc;
 
 use iron_partition::Dn;
-use iron_store::index::IndexSpec;
 use iron_store::model::Entry;
 use iron_store::store::Store;
-use rasn::types::SetOf;
+use rasn::types::{OctetString, SetOf};
 use rasn_ldap::{
-    AddRequest, AddResponse, AuthenticationChoice, BindRequest, BindResponse, CompareResponse,
-    DelRequest, DelResponse, ExtendedResponse, LdapMessage, LdapResult, ModifyDnResponse,
-    ModifyResponse, PartialAttribute, ProtocolOp, ResultCode, SearchRequest, SearchRequestScope,
-    SearchResultDone, SearchResultEntry,
+    AddRequest, AddResponse, Attribute, AuthenticationChoice, BindRequest, BindResponse,
+    ChangeOperation, CompareRequest, CompareResponse, DelRequest, DelResponse, ExtendedResponse,
+    LdapMessage, LdapResult, ModifyDnResponse, ModifyRequest, ModifyResponse, PartialAttribute,
+    ProtocolOp, ResultCode, SearchRequest, SearchRequestScope, SearchResultDone, SearchResultEntry,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::Mutex;
 
 use crate::framing::{read_message, write_message};
-use crate::{filter, rootdse};
+use crate::{filter, rootdse, AppState};
+
+/// LDAP attribute holding the PBKDF2-hashed password (D4). Lowercase to
+/// match `Entry`'s case-folded storage.
+const USER_PASSWORD_ATTR: &str = "userpassword";
 
 /// Handles one LDAP client connection until it unbinds, disconnects, or a
 /// framing error occurs.
-pub async fn handle_connection<S>(mut stream: S, store: Arc<Mutex<Store>>, index_spec: IndexSpec)
+pub async fn handle_connection<S>(mut stream: S, app: Arc<AppState>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -41,13 +44,14 @@ where
         match msg.protocol_op {
             ProtocolOp::UnbindRequest(_) => return,
             ProtocolOp::BindRequest(req) => {
-                let resp = LdapMessage::new(message_id, ProtocolOp::BindResponse(handle_bind(&req)));
+                let resp = handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req).await;
+                let resp = LdapMessage::new(message_id, ProtocolOp::BindResponse(resp));
                 if write_message(&mut stream, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::SearchRequest(req) => {
-                let mut store = store.lock().await;
+                let mut store = app.store.lock().await;
                 let ops = handle_search(&mut store, &req).await;
                 drop(store);
                 for op in ops {
@@ -58,15 +62,29 @@ where
                 }
             }
             ProtocolOp::AddRequest(req) => {
-                let resp = handle_add(&mut *store.lock().await, &req, &index_spec).await;
+                let resp = handle_add(&mut *app.store.lock().await, app.fips.as_ref(), &req, &app.index_spec).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::AddResponse(resp));
                 if write_message(&mut stream, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::DelRequest(req) => {
-                let resp = handle_delete(&mut *store.lock().await, &req, &index_spec).await;
+                let resp = handle_delete(&mut *app.store.lock().await, &req, &app.index_spec).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::DelResponse(resp));
+                if write_message(&mut stream, &resp).await.is_err() {
+                    return;
+                }
+            }
+            ProtocolOp::ModifyRequest(req) => {
+                let resp = handle_modify(&mut *app.store.lock().await, app.fips.as_ref(), &req, &app.index_spec).await;
+                let resp = LdapMessage::new(message_id, ProtocolOp::ModifyResponse(resp));
+                if write_message(&mut stream, &resp).await.is_err() {
+                    return;
+                }
+            }
+            ProtocolOp::CompareRequest(req) => {
+                let resp = handle_compare(&mut *app.store.lock().await, &req).await;
+                let resp = LdapMessage::new(message_id, ProtocolOp::CompareResponse(resp));
                 if write_message(&mut stream, &resp).await.is_err() {
                     return;
                 }
@@ -74,26 +92,6 @@ where
             // Not yet implemented (#4 tracks the rest of the scope), but
             // every one of these has a defined response -- a client must
             // not be left hanging waiting for one that never comes.
-            ProtocolOp::ModifyRequest(_) => {
-                let resp = LdapMessage::new(
-                    message_id,
-                    ProtocolOp::ModifyResponse(ModifyResponse(unwilling("modify is not implemented yet"))),
-                );
-                if write_message(&mut stream, &resp).await.is_err() {
-                    return;
-                }
-            }
-            ProtocolOp::CompareRequest(_) => {
-                let resp = LdapMessage::new(
-                    message_id,
-                    ProtocolOp::CompareResponse(CompareResponse(unwilling(
-                        "compare is not implemented yet",
-                    ))),
-                );
-                if write_message(&mut stream, &resp).await.is_err() {
-                    return;
-                }
-            }
             ProtocolOp::ModDnRequest(_) => {
                 let resp = LdapMessage::new(
                     message_id,
@@ -137,26 +135,74 @@ fn unwilling(diagnostic: &str) -> LdapResult {
     )
 }
 
-fn handle_bind(req: &BindRequest) -> BindResponse {
+fn success() -> LdapResult {
+    LdapResult::new(ResultCode::Success, String::new().into(), String::new().into())
+}
+
+fn operations_error(diagnostic: &str) -> LdapResult {
+    LdapResult::new(ResultCode::OperationsError, String::new().into(), diagnostic.into())
+}
+
+fn invalid_dn() -> LdapResult {
+    LdapResult::new(ResultCode::InvalidDnSyntax, String::new().into(), "invalid DN".into())
+}
+
+async fn handle_bind(
+    store: &mut Store,
+    fips: Option<&iron_crypto::FipsContext>,
+    req: &BindRequest,
+) -> BindResponse {
     let (code, diagnostic) = if req.version != 3 {
-        (ResultCode::ProtocolError, "only LDAPv3 is supported")
+        (ResultCode::ProtocolError, "only LDAPv3 is supported".to_string())
     } else {
         match &req.authentication {
             AuthenticationChoice::Simple(password) if req.name.is_empty() && password.is_empty() => {
-                (ResultCode::Success, "")
+                (ResultCode::Success, String::new())
             }
-            AuthenticationChoice::Simple(_) => (
-                ResultCode::InvalidCredentials,
-                "authenticated simple bind is not implemented yet",
-            ),
+            AuthenticationChoice::Simple(password) => {
+                (authenticate_simple(store, fips, &req.name, password).await, String::new())
+            }
             AuthenticationChoice::Sasl(_) => (
                 ResultCode::AuthMethodNotSupported,
-                "SASL bind is not implemented yet",
+                "SASL bind is not implemented yet".to_string(),
             ),
-            _ => (ResultCode::AuthMethodNotSupported, "unrecognized authentication choice"),
+            _ => (
+                ResultCode::AuthMethodNotSupported,
+                "unrecognized authentication choice".to_string(),
+            ),
         }
     };
     BindResponse::new(code, String::new().into(), diagnostic.into(), None, None)
+}
+
+/// Verifies a non-empty simple bind against the target entry's
+/// `userPassword` (D4: PBKDF2 via the OpenSSL FIPS provider).
+///
+/// Every failure path (bad DN, no such entry, no `userPassword` set,
+/// wrong password, FIPS unavailable) returns the same `InvalidCredentials`
+/// -- distinguishing them would let a client enumerate valid usernames.
+async fn authenticate_simple(
+    store: &mut Store,
+    fips: Option<&iron_crypto::FipsContext>,
+    name: &str,
+    password: &[u8],
+) -> ResultCode {
+    let Some(fips) = fips else {
+        return ResultCode::InvalidCredentials;
+    };
+    let Ok(dn) = Dn::parse(name) else {
+        return ResultCode::InvalidCredentials;
+    };
+    let Ok(Some(entry)) = store.get_entry(&dn).await else {
+        return ResultCode::InvalidCredentials;
+    };
+    let Some(stored) = entry.get(USER_PASSWORD_ATTR).and_then(|v| v.first()) else {
+        return ResultCode::InvalidCredentials;
+    };
+    match iron_crypto::pbkdf2::verify_password(fips, password, stored) {
+        Ok(true) => ResultCode::Success,
+        _ => ResultCode::InvalidCredentials,
+    }
 }
 
 fn done(code: ResultCode, diagnostic: &str) -> Vec<ProtocolOp> {
@@ -167,52 +213,181 @@ fn done(code: ResultCode, diagnostic: &str) -> Vec<ProtocolOp> {
     )))]
 }
 
-async fn handle_add(store: &mut Store, req: &AddRequest, spec: &IndexSpec) -> AddResponse {
+/// Builds an `Entry` from an LDAP attribute list, hashing `userPassword`
+/// values (D4) rather than storing them as the client sent them. Returns
+/// `Err` if the request tries to set a password while the FIPS provider
+/// isn't active -- fails closed rather than ever storing a plaintext
+/// password.
+/// `Attribute` (used by `AddRequest`) and `PartialAttribute` (used by
+/// `ModifyRequestChanges`/search results) have identical shapes but are
+/// distinct generated types -- this lets `entry_from_attributes` accept
+/// either.
+trait AttrLike {
+    fn type_name(&self) -> &str;
+    fn values(&self) -> Vec<&OctetString>;
+}
+impl AttrLike for &Attribute {
+    fn type_name(&self) -> &str {
+        self.r#type.as_str()
+    }
+    fn values(&self) -> Vec<&OctetString> {
+        self.vals.to_vec()
+    }
+}
+impl AttrLike for &PartialAttribute {
+    fn type_name(&self) -> &str {
+        self.r#type.as_str()
+    }
+    fn values(&self) -> Vec<&OctetString> {
+        self.vals.to_vec()
+    }
+}
+
+fn entry_from_attributes<A: AttrLike>(
+    attrs: impl IntoIterator<Item = A>,
+    fips: Option<&iron_crypto::FipsContext>,
+) -> Result<Entry, &'static str> {
+    let mut entry = Entry::new();
+    for a in attrs {
+        let values: Vec<String> = a
+            .values()
+            .into_iter()
+            .map(|v| String::from_utf8_lossy(v).into_owned())
+            .collect();
+        if a.type_name().eq_ignore_ascii_case(USER_PASSWORD_ATTR) {
+            let Some(fips) = fips else {
+                return Err("FIPS provider not active -- cannot hash userPassword");
+            };
+            let hashed: Result<Vec<String>, _> = values
+                .iter()
+                .map(|v| iron_crypto::pbkdf2::hash_password(fips, v.as_bytes()))
+                .collect();
+            match hashed {
+                Ok(h) => entry.set(a.type_name(), h),
+                Err(_) => return Err("failed to hash userPassword"),
+            }
+        } else {
+            entry.set(a.type_name(), values);
+        }
+    }
+    Ok(entry)
+}
+
+async fn handle_add(
+    store: &mut Store,
+    fips: Option<&iron_crypto::FipsContext>,
+    req: &AddRequest,
+    spec: &iron_store::index::IndexSpec,
+) -> AddResponse {
     let dn = match Dn::parse(&req.entry) {
         Ok(dn) => dn,
-        Err(_) => {
-            return AddResponse(LdapResult::new(
-                ResultCode::InvalidDnSyntax,
-                String::new().into(),
-                "invalid DN".into(),
-            ))
-        }
+        Err(_) => return AddResponse(invalid_dn()),
+    };
+    let entry = match entry_from_attributes(&req.attributes, fips) {
+        Ok(e) => e,
+        Err(msg) => return AddResponse(unwilling(msg)),
     };
 
-    let mut entry = Entry::new();
-    for a in &req.attributes {
-        let values: Vec<String> = a
+    let result = match store.put_entry(&dn, &entry, spec).await {
+        Ok(()) => success(),
+        Err(e) => operations_error(&e.to_string()),
+    };
+    AddResponse(result)
+}
+
+async fn handle_delete(store: &mut Store, req: &DelRequest, spec: &iron_store::index::IndexSpec) -> DelResponse {
+    let dn = match Dn::parse(&req.0) {
+        Ok(dn) => dn,
+        Err(_) => return DelResponse(invalid_dn()),
+    };
+    let result = match store.delete_entry(&dn, spec).await {
+        Ok(()) => success(),
+        Err(e) => operations_error(&e.to_string()),
+    };
+    DelResponse(result)
+}
+
+async fn handle_modify(
+    store: &mut Store,
+    fips: Option<&iron_crypto::FipsContext>,
+    req: &ModifyRequest,
+    spec: &iron_store::index::IndexSpec,
+) -> ModifyResponse {
+    let dn = match Dn::parse(&req.object) {
+        Ok(dn) => dn,
+        Err(_) => return ModifyResponse(invalid_dn()),
+    };
+    let mut entry = match store.get_entry(&dn).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return ModifyResponse(LdapResult::new(ResultCode::NoSuchObject, String::new().into(), "".into())),
+        Err(e) => return ModifyResponse(operations_error(&e.to_string())),
+    };
+
+    for change in &req.changes {
+        let attr = change.modification.r#type.as_str();
+        let values: Vec<String> = change
+            .modification
             .vals
             .to_vec()
             .into_iter()
             .map(|v| String::from_utf8_lossy(v).into_owned())
             .collect();
-        entry.set(a.r#type.as_str(), values);
+        match change.operation {
+            ChangeOperation::Add => {
+                if attr.eq_ignore_ascii_case(USER_PASSWORD_ATTR) {
+                    let Some(fips) = fips else {
+                        return ModifyResponse(unwilling("FIPS provider not active -- cannot hash userPassword"));
+                    };
+                    match values.iter().map(|v| iron_crypto::pbkdf2::hash_password(fips, v.as_bytes())).collect::<Result<Vec<_>, _>>() {
+                        Ok(h) => entry.add_values(attr, h),
+                        Err(_) => return ModifyResponse(unwilling("failed to hash userPassword")),
+                    }
+                } else {
+                    entry.add_values(attr, values);
+                }
+            }
+            ChangeOperation::Delete => entry.delete_values(attr, &values),
+            ChangeOperation::Replace => {
+                if values.is_empty() {
+                    entry.delete_values(attr, &[]);
+                } else if attr.eq_ignore_ascii_case(USER_PASSWORD_ATTR) {
+                    let Some(fips) = fips else {
+                        return ModifyResponse(unwilling("FIPS provider not active -- cannot hash userPassword"));
+                    };
+                    match values.iter().map(|v| iron_crypto::pbkdf2::hash_password(fips, v.as_bytes())).collect::<Result<Vec<_>, _>>() {
+                        Ok(h) => entry.set(attr, h),
+                        Err(_) => return ModifyResponse(unwilling("failed to hash userPassword")),
+                    }
+                } else {
+                    entry.set(attr, values);
+                }
+            }
+        }
     }
 
     let result = match store.put_entry(&dn, &entry, spec).await {
-        Ok(()) => LdapResult::new(ResultCode::Success, String::new().into(), String::new().into()),
-        Err(e) => LdapResult::new(ResultCode::OperationsError, String::new().into(), e.to_string().into()),
+        Ok(()) => success(),
+        Err(e) => operations_error(&e.to_string()),
     };
-    AddResponse(result)
+    ModifyResponse(result)
 }
 
-async fn handle_delete(store: &mut Store, req: &DelRequest, spec: &IndexSpec) -> DelResponse {
-    let dn = match Dn::parse(&req.0) {
+async fn handle_compare(store: &mut Store, req: &CompareRequest) -> CompareResponse {
+    let dn = match Dn::parse(&req.entry) {
         Ok(dn) => dn,
-        Err(_) => {
-            return DelResponse(LdapResult::new(
-                ResultCode::InvalidDnSyntax,
-                String::new().into(),
-                "invalid DN".into(),
-            ))
-        }
+        Err(_) => return CompareResponse(invalid_dn()),
     };
-    let result = match store.delete_entry(&dn, spec).await {
-        Ok(()) => LdapResult::new(ResultCode::Success, String::new().into(), String::new().into()),
-        Err(e) => LdapResult::new(ResultCode::OperationsError, String::new().into(), e.to_string().into()),
+    let entry = match store.get_entry(&dn).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return CompareResponse(LdapResult::new(ResultCode::NoSuchObject, String::new().into(), "".into())),
+        Err(e) => return CompareResponse(operations_error(&e.to_string())),
     };
-    DelResponse(result)
+    let want = String::from_utf8_lossy(&req.ava.assertion_value);
+    let matched = entry
+        .get(req.ava.attribute_desc.as_str())
+        .is_some_and(|vals| vals.iter().any(|v| v.eq_ignore_ascii_case(&want)));
+    let code = if matched { ResultCode::CompareTrue } else { ResultCode::CompareFalse };
+    CompareResponse(LdapResult::new(code, String::new().into(), String::new().into()))
 }
 
 async fn handle_search(store: &mut Store, req: &SearchRequest) -> Vec<ProtocolOp> {
@@ -277,9 +452,20 @@ fn project_attributes(
     types_only: bool,
 ) -> Vec<PartialAttribute> {
     let want_all = requested.is_empty() || requested.iter().any(|a| a.as_str() == "*");
+    let explicitly_requested =
+        |name: &str| requested.iter().any(|a| a.eq_ignore_ascii_case(name));
     entry
         .attr_names()
-        .filter(|name| want_all || requested.iter().any(|a| a.eq_ignore_ascii_case(name)))
+        // userPassword is write-only by convention: never returned by a
+        // wildcard/all-attributes request, only if named explicitly (and
+        // even then it's the PBKDF2 hash, never plaintext).
+        .filter(|name| {
+            if name.eq_ignore_ascii_case(USER_PASSWORD_ATTR) {
+                explicitly_requested(name)
+            } else {
+                want_all || explicitly_requested(name)
+            }
+        })
         .map(|name| {
             let values: Vec<Vec<u8>> = if types_only {
                 Vec::new()

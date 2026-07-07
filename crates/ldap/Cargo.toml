@@ -12,6 +12,7 @@ authors.workspace = true
 [dependencies]
 iron-partition = { path = "../partition" }
 iron-store = { path = "../store" }
+iron-crypto = { path = "../crypto" }
 rasn = { workspace = true }
 rasn-ldap = { workspace = true }
 tokio = { workspace = true }

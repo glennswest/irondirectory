@@ -11,20 +11,20 @@
 
 use std::sync::Arc;
 
-use iron_store::store::Store;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
 
-pub async fn serve(listener: TcpListener, store: Arc<Mutex<Store>>) -> std::io::Result<()> {
+use crate::AppState;
+
+pub async fn serve(listener: TcpListener, app: Arc<AppState>) -> std::io::Result<()> {
     loop {
         let (mut stream, _peer) = listener.accept().await?;
-        let store = store.clone();
+        let app = app.clone();
         tokio::spawn(async move {
             // Drain and ignore the request; this is a liveness/readiness
             // probe, not a real HTTP server -- any request gets the same
             // answer based on backend connectivity.
-            let ok = store.lock().await.ping().await.is_ok();
+            let ok = app.store.lock().await.ping().await.is_ok();
             let body = if ok { "{\"health\":\"true\"}" } else { "{\"health\":\"false\"}" };
             let status = if ok { "200 OK" } else { "503 Service Unavailable" };
             let resp = format!(

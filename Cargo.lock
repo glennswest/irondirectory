@@ -566,6 +566,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "futures",
+ "iron-crypto",
  "iron-partition",
  "iron-store",
  "openssl",

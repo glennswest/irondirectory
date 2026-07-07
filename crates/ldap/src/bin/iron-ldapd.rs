@@ -18,14 +18,20 @@
 //!   IRON_LDAP_LDAPS_LISTEN=       (unset = LDAPS disabled)
 //!   IRON_LDAP_TLS_CERT=           (required if IRON_LDAP_LDAPS_LISTEN set)
 //!   IRON_LDAP_TLS_KEY=            (required if IRON_LDAP_LDAPS_LISTEN set)
+//!
+//! Authenticated simple bind (D4: PBKDF2 via the OpenSSL FIPS provider)
+//! needs OPENSSL_CONF pointing at a config that activates fips.so (see
+//! docs/FIPS.md) -- without it, iron-ldapd still starts and serves
+//! anonymous bind/search/add/delete/modify/compare, just logs a warning
+//! and fails authenticated bind/password-setting closed.
 
 use std::sync::Arc;
 
+use iron_ldap::AppState;
 use iron_partition::{ClusterRef, ForestId, Partition, PartitionRegistry};
 use iron_store::index::IndexSpec;
 use iron_store::store::Store;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -54,18 +60,19 @@ async fn main() -> anyhow::Result<()> {
     let mut registry = PartitionRegistry::new();
     registry.insert(partition)?;
 
-    let store = Arc::new(Mutex::new(Store::connect(registry).await?));
+    let store = Store::connect(registry).await?;
     let index_spec = IndexSpec::new(["cn", "mail", "uid"]);
+    let app = AppState::new(store, index_spec);
 
     let mut tasks = Vec::new();
 
     let health_listener = TcpListener::bind(&health_addr).await?;
     tracing::info!(%health_addr, "iron-ldapd listening (health)");
-    tasks.push(tokio::spawn(iron_ldap::health::serve(health_listener, store.clone())));
+    tasks.push(tokio::spawn(iron_ldap::health::serve(health_listener, app.clone())));
 
     let listener = TcpListener::bind(&listen_addr).await?;
     tracing::info!(%listen_addr, "iron-ldapd listening (plaintext)");
-    tasks.push(tokio::spawn(iron_ldap::serve(listener, store.clone(), index_spec.clone())));
+    tasks.push(tokio::spawn(iron_ldap::serve(listener, app.clone())));
 
     if let Some(ldaps_addr) = ldaps_addr {
         let cert = tls_cert.ok_or_else(|| anyhow::anyhow!("IRON_LDAP_TLS_CERT is required when IRON_LDAP_LDAPS_LISTEN is set"))?;
@@ -79,8 +86,7 @@ async fn main() -> anyhow::Result<()> {
         tasks.push(tokio::spawn(iron_ldap::serve_ldaps(
             ldaps_listener,
             acceptor,
-            store.clone(),
-            index_spec.clone(),
+            app.clone(),
         )));
     }
 
