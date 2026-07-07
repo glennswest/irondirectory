@@ -31,6 +31,15 @@ impl Store {
         &self.registry
     }
 
+    /// Verifies connectivity to every partition's cluster (one `Status`
+    /// RPC each) -- for health checks, not the request path.
+    pub async fn ping(&mut self) -> Result<(), StoreError> {
+        for client in self.clients.values_mut() {
+            client.status().await?;
+        }
+        Ok(())
+    }
+
     fn resolve(&self, dn: &Dn) -> Result<&Partition, StoreError> {
         self.registry
             .resolve(dn)

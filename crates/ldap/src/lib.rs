@@ -8,6 +8,7 @@
 
 pub mod filter;
 pub mod framing;
+pub mod health;
 pub mod rootdse;
 pub mod session;
 pub mod tls;

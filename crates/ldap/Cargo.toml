@@ -1,6 +1,6 @@
 [package]
 name = "iron-ldap"
-description = "LDAP v3 server: rootDSE, bind, search, over the iron-store DIT (#4)."
+description = "LDAP v3 server + iron-ldapd daemon: rootDSE, bind, search, LDAPS, over the iron-store DIT (#4)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -21,5 +21,50 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 openssl = { workspace = true }
 tokio-openssl = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
+
+# ---------------------------------------------------------------
+# Packaging (cargo-generate-rpm). Built with:
+#   cargo build --release -p iron-ldap --bin iron-ldapd
+#   cargo generate-rpm -p crates/ldap
+#
+# Unlike fastetcd's musl-static packaging, iron-ldapd is a REGULAR
+# glibc-linked, dynamically-linked-against-system-libssl build --
+# deliberately. D4's FIPS posture depends on resolving the OS's
+# validated fips.so provider at runtime (see docs/FIPS.md); a
+# statically-linked/vendored OpenSSL would defeat that entirely.
+# `auto-req` therefore stays at its default (auto-detect via ldd),
+# unlike fastetcd's `disabled` -- this package genuinely needs
+# openssl-libs/glibc as runtime dependencies and should declare them.
+# ---------------------------------------------------------------
+
+[package.metadata.generate-rpm]
+name = "iron-ldapd"
+license = "Apache-2.0"
+summary = "irondirectory LDAP v3 server"
+assets = [
+    { source = "target/release/iron-ldapd", dest = "/usr/bin/iron-ldapd", mode = "755" },
+    { source = "deploy/systemd/iron-ldapd.service", dest = "/usr/lib/systemd/system/iron-ldapd.service", mode = "644" },
+    { source = "deploy/systemd/iron-ldapd.conf.example", dest = "/usr/share/doc/iron-ldapd/iron-ldapd.conf.example", mode = "644" },
+]
+post_install_script = """
+getent group iron-ldapd >/dev/null || groupadd --system iron-ldapd
+getent passwd iron-ldapd >/dev/null || useradd --system --gid iron-ldapd \\
+  --no-create-home --shell /sbin/nologin iron-ldapd
+mkdir -p /etc/iron-ldapd
+systemctl daemon-reload >/dev/null 2>&1 || :
+systemctl enable --now iron-ldapd.service >/dev/null 2>&1 || :
+"""
+pre_uninstall_script = """
+if [ $1 -eq 0 ]; then
+  systemctl --no-reload disable --now iron-ldapd.service >/dev/null 2>&1 || :
+fi
+"""
+post_uninstall_script = """
+systemctl daemon-reload >/dev/null 2>&1 || :
+if [ $1 -ge 1 ]; then
+  systemctl try-restart iron-ldapd.service >/dev/null 2>&1 || :
+fi
+"""

@@ -1,0 +1,24 @@
+# Example /etc/iron-ldapd/iron-ldapd.conf for the iron-ldapd.service unit.
+# Loaded via systemd's EnvironmentFile=-, so a missing file is fine (the
+# leading '-' makes it optional), but iron-ldapd will refuse to start
+# without at least FASTETCD_ENDPOINT/PARTITION_ID/BASE_DN set somewhere.
+
+IRON_LDAP_FASTETCD_ENDPOINT=http://etcd.g8.lo:2379
+IRON_LDAP_PARTITION_ID=g10
+IRON_LDAP_BASE_DN=dc=g10,dc=lo
+
+#IRON_LDAP_LISTEN=0.0.0.0:389
+#IRON_LDAP_HEALTH_LISTEN=0.0.0.0:8080
+
+# LDAPS (D4: TLS via the OpenSSL FIPS provider). Uncomment all three to
+# enable; leave unset to run plaintext-only.
+#IRON_LDAP_LDAPS_LISTEN=0.0.0.0:636
+#IRON_LDAP_TLS_CERT=/etc/iron-ldapd/tls/server.pem
+#IRON_LDAP_TLS_KEY=/etc/iron-ldapd/tls/server-key.pem
+
+# Required for LDAPS/general FIPS compliance: point OPENSSL_CONF at a
+# config that activates the OS-shipped fips.so provider (see docs/FIPS.md
+# and crates/crypto/testdata/fips-dev.cnf for an example). Without this,
+# TLS still works but runs against whatever provider the host's default
+# openssl.cnf activates.
+#OPENSSL_CONF=/etc/iron-ldapd/fips.cnf

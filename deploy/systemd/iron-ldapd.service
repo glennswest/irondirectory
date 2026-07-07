@@ -1,0 +1,30 @@
+[Unit]
+Description=iron-ldapd - irondirectory LDAP v3 server
+Documentation=https://github.com/glennswest/irondirectory
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=iron-ldapd
+Group=iron-ldapd
+EnvironmentFile=-/etc/iron-ldapd/iron-ldapd.conf
+ExecStart=/usr/bin/iron-ldapd
+Restart=always
+RestartSec=1s
+LimitNOFILE=65536
+
+# Binds :389 (and :636 for LDAPS) as a non-root user.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening. No local state -- all data lives in fastetcd -- so no
+# ReadWritePaths beyond what NoNewPrivileges/ProtectSystem already allow.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
