@@ -133,6 +133,21 @@ impl PartitionRegistry {
         self.partition_of_kind(forest, PartitionKind::Schema)
     }
 
+    /// The forest's root domain -- the `Domain`-kind partition with no
+    /// superior (a forest has exactly one; child domains always have a
+    /// superior). rootDSE's `rootDomainNamingContext`.
+    pub fn root_domain_partition(&self, forest: &ForestId) -> Option<&Partition> {
+        let mut found = self
+            .partitions
+            .values()
+            .filter(|p| &p.forest == forest && p.kind == PartitionKind::Domain && p.superior.is_none());
+        let first = found.next()?;
+        match found.next() {
+            None => Some(first),
+            Some(_) => None, // ambiguous
+        }
+    }
+
     /// Base DNs of all naming contexts — used to populate the rootDSE
     /// `namingContexts` attribute.
     pub fn naming_contexts(&self) -> Vec<&Dn> {
@@ -209,6 +224,13 @@ mod tests {
         let subs = reg.subordinates_of(&parent);
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].id, child);
+    }
+
+    #[test]
+    fn root_domain_partition_is_the_one_with_no_superior() {
+        let reg = sample_registry();
+        let root = reg.root_domain_partition(&forest()).unwrap();
+        assert_eq!(root.id.as_str(), "g10");
     }
 
     #[test]
