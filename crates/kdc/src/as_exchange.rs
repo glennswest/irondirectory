@@ -3,7 +3,7 @@
 //! client proves knowledge of its long-term key.
 
 use iron_crypto::kerberos::{self, Enctype};
-use rasn::types::{GeneralString, OctetString, SequenceOf};
+use rasn::types::{GeneralString, OctetString};
 use rasn_kerberos::{
     AsRep, EncAsRepPart, EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2Entry, KdcReq, KdcRep,
     PaData, PaEncTsEnc, Ticket, TicketFlags, TransitedEncoding,
@@ -53,17 +53,21 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         .and_then(|padata| padata.iter().find(|p| p.r#type == PA_ENC_TIMESTAMP));
 
     let Some(pa) = pa_enc_ts else {
-        let method_data: SequenceOf<PaData> = client_keys
+        // PA-ETYPE-INFO2 is ONE PaData entry whose value is a single
+        // DER-encoded SEQUENCE OF ETYPE-INFO2-ENTRY covering every
+        // enctype we offer -- not one PaData per enctype (that was a
+        // real bug here: MIT krb5 silently treats a request built that
+        // way as having no usable preauth method and fails client-side
+        // with "Generic preauthentication failure" before ever sending
+        // a second request, which is exactly what was observed live).
+        let etype_info2: Vec<EtypeInfo2Entry> = client_keys
             .iter()
-            .filter(|k| req.req_body.etype.contains(&k.enctype.etype_number()))
-            .filter_map(|k| {
-                let salt = GeneralString::from_bytes(&client_salt).ok()?;
-                let entry = EtypeInfo2Entry { etype: k.enctype.etype_number(), salt: Some(salt), s2kparams: None };
-                let encoded = rasn::der::encode(&vec![entry]).ok()?;
-                Some(PaData { r#type: PA_ETYPE_INFO2, value: encoded.into() })
-            })
+            .filter_map(|k| GeneralString::from_bytes(&client_salt).ok().map(|salt| EtypeInfo2Entry { etype: k.enctype.etype_number(), salt: Some(salt), s2kparams: None }))
             .collect();
-        let e_data = krberror::encode_method_data(&method_data).ok();
+        let e_data = rasn::der::encode(&etype_info2)
+            .ok()
+            .map(|encoded| vec![PaData { r#type: PA_ETYPE_INFO2, value: encoded.into() }])
+            .and_then(|method_data| krberror::encode_method_data(&method_data).ok());
         return krberror::build(KDC_ERR_PREAUTH_REQUIRED, &realm_str, kdc_sname, Some("additional pre-authentication required".into()), e_data).into();
     };
 
