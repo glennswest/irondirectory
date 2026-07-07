@@ -1,0 +1,48 @@
+#cloud-config
+hostname: ${hostname}
+fqdn: ${fqdn}
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: true
+
+users:
+  - name: ${ci_user}
+    groups: [wheel, adm, systemd-journal]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+%{ for key in ssh_keys ~}
+      - ${key}
+%{ endfor ~}
+
+ssh_pwauth: false
+disable_root: false
+
+package_update: true
+package_upgrade: false
+packages:
+  - qemu-guest-agent
+
+write_files:
+  # iron-ldapd config, read by the RPM's iron-ldapd.service via
+  # EnvironmentFile=-/etc/iron-ldapd/iron-ldapd.conf. Written BEFORE the
+  # package installs, so the RPM postinstall's `enable --now` starts
+  # iron-ldapd already pointed at the shared fastetcd cluster (D1) --
+  # iron-ldap itself is stateless, every replica connects independently
+  # to the same backend, no cluster bootstrap between replicas needed.
+  - path: /etc/iron-ldapd/iron-ldapd.conf
+    permissions: "0644"
+    content: |
+      IRON_LDAP_FASTETCD_ENDPOINT=${fastetcd_endpoint}
+      IRON_LDAP_PARTITION_ID=${partition_id}
+      IRON_LDAP_BASE_DN=${base_dn}
+
+runcmd:
+  - [ systemctl, enable, --now, qemu-guest-agent ]
+  # Install the released iron-ldapd RPM straight from the GitHub release
+  # (pinned). Its postinstall creates the iron-ldapd user and does
+  # `enable --now iron-ldapd.service`. Each node is independent -- no
+  # peer coordination between replicas, unlike the fastetcd cluster.
+  - [ dnf, install, -y, "${iron_ldapd_rpm_url}" ]
+
+final_message: "${fqdn} iron-ldapd ${iron_ldapd_version} cloud-init complete in $UPTIME seconds"
