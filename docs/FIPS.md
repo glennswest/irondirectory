@@ -127,6 +127,31 @@ this to LDAP's `ConstraintViolation` result code (a real, client-fixable
 problem — pick a longer password), distinct from `UnwillingToPerform`
 (the FIPS provider isn't active at all, a server-side precondition).
 
+## PBKDF2 also has an undocumented minimum iteration count and salt length
+
+Found while building `iron_crypto::kerberos` (#5): the same FIPS
+provider rejects PBKDF2 calls with **iteration count under 1000**
+(`"invalid iteration count"`) and **salt under 16 bytes**
+(`"invalid salt length"`/`"invalid key length"` depending on which check
+trips first) — both confirmed by brute force against the live provider,
+same method as the minimum-password-length finding above.
+
+The iteration floor rarely bites in practice — RFC 3962's own default
+(4096) and RFC 8009's (32768) are both safely above it — but it does
+mean RFC 3962 Appendix B's own iter=1/2/5 test vectors (included
+specifically to make hand-verification easy) cannot be run through this
+provider at all; `iron_crypto::kerberos`'s tests rely on the RFC's
+iter=1200 vector instead.
+
+The salt floor is the more operationally real one: Kerberos's default
+salt for a principal is `REALM + principal-name`, which is routinely
+under 16 bytes for a short realm (e.g. `IRON.LOalice` is 12 bytes).
+`iron-kdc` sidesteps this by design, not by weakening anything: real
+KDCs already support sending an **explicit salt** via `PA-ETYPE-INFO2`
+instead of relying on the client computing the same default salt
+independently, so `iron-kdc` always does this with a stored,
+guaranteed-≥16-byte salt.
+
 ## Running the test suite
 
 Needs `openssl-devel` (Fedora/RHEL) or `libssl-dev` (Debian), plus `clang`
