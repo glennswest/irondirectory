@@ -133,18 +133,22 @@ where
     // assert a subkey, the base key is the session key in the service
     // ticket." (We never assert our own acceptor subkey, so the other
     // branch -- "if the acceptor asserts a subkey" -- never applies
-    // here.) This base key is what the AP-REP and every subsequent
-    // Wrap/Unwrap use, not the raw ticket session key.
-    let session_key = authenticator.subkey.as_ref().map(|k| k.value.to_vec()).unwrap_or(ticket_session_key);
+    // here.) This base key is what every *subsequent* Wrap/Unwrap uses
+    // (RFC 4121's own per-message-token key derivation) -- but NOT the
+    // AP-REP itself: RFC 4120 §3.2.5 is explicit that "for encrypting
+    // the KRB_AP_REP message, the sub-session key is not used, even if
+    // it is present in the Authenticat[or]" -- easy to conflate the two
+    // since they're adjacent steps in the same exchange, but they use
+    // different keys.
+    let session_key = authenticator.subkey.as_ref().map(|k| k.value.to_vec()).unwrap_or_else(|| ticket_session_key.clone());
 
     let output_token = if gss_flags & GSS_C_MUTUAL_FLAG != 0 {
         let (ap_rep_now, _) = iron_kdc::time::now();
         let enc_ap_rep_part = EncApRepPart { ctime: ap_rep_now, cusec: 0.into(), subkey: None, seq_number: None };
         let enc_bytes = rasn::der::encode(&enc_ap_rep_part)?;
-        // Key usage 12: "AP-REP encrypted part (includes application
-        // session subkey), encrypted with the application session key"
-        // -- "session key" here means the base key per the rule above.
-        let cipher = kerberos::encrypt(ctx, tkt_enctype, &session_key, 12, &enc_bytes)?;
+        // Key usage 12, encrypted under the *ticket* session key (RFC
+        // 4120 §3.2.5), not the subkey-derived base key.
+        let cipher = kerberos::encrypt(ctx, tkt_enctype, &ticket_session_key, 12, &enc_bytes)?;
         let ap_rep = ApRep {
             pvno: 5.into(),
             msg_type: 15.into(),
