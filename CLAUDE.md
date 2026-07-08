@@ -10,14 +10,15 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.6.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.7.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
-deployment live on il1/il2/il3.g8.lo; #5 iron-kdc: AS-REQ/AS-REP +
-TGS-REQ/TGS-REP + keytab, verified against real kinit/kvno/klist).
-See CHANGELOG.md for the running list; Live infrastructure below has
-the verification details.
+deployment live on il1/il2/il3.g8.lo; #5 iron-kdc CLOSED: AS-REQ/AS-REP
++ TGS-REQ/TGS-REP + keytab, verified against real kinit/kvno/klist;
+#6 iron-dns CLOSED: LDAP/Kerberos SRV publishing via MicroDNS, verified
+with real dig + kinit DNS autodiscovery). See CHANGELOG.md for the
+running list; Live infrastructure below has the verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -275,6 +276,24 @@ Packaged (`iron-kdcd` + `iron-kdc-ctl` binaries, systemd unit) mirroring
 infrastructure (only verified via throwaway instances on dev.g8.lo so
 far) — see work plan for whether/when that happens.
 
+**iron-dns (#6)** — `crates/dns`: not a DNS server of our own — MicroDNS
+already serves every network this deploys to. `iron-dns`/`iron-dns-ctl`
+is a thin publisher: given a domain/realm and target hosts, computes the
+right `_ldap._tcp`/`_kerberos._udp`/`_kerberos._tcp` SRV records (RFC
+2782, RFC 4120 §7.2.3.2) and pushes them via MicroDNS's REST API,
+replacing the one-off shell-script pattern
+(`deploy/dns/etcd-lb.sh`/`ldap-lb.sh`) with a real, reusable binary.
+Record names are relative to the zone (confirmed against the live g8.lo
+zone's existing `_etcd-server-ssl._tcp` records before assuming the wire
+shape — MicroDNS supplies the zone's domain suffix itself). Published
+real `_ldap._tcp.g8.lo` SRV records for the live il1/il2/il3 deployment
+(verified via `dig`) and, for a throwaway KDC instance, real
+`_kerberos._udp`/`_tcp.g8.lo` records — then ran real `kinit` with
+`dns_lookup_kdc=true` and no explicit `kdc=` line and confirmed it
+discovered the KDC purely via DNS and obtained a genuine TGT. The
+Kerberos test records were removed afterward (pointed at a throwaway
+instance); the LDAP records were kept (real, current infrastructure).
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
@@ -360,8 +379,13 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       out of scope for this pass):** subtree/replay-cache hardening,
       renewal/forwarding/user-to-user, dedicated redundant deployment
       (only verified via throwaway dev.g8.lo instances so far)
-- [ ] `iron-dns`: SRV autodiscovery records (integrate with microdns where it
-      makes sense)
+- [x] `iron-dns` (#6, CLOSED): `_ldap._tcp`/`_kerberos._udp`/
+      `_kerberos._tcp` SRV record publishing via MicroDNS's REST API
+      (not a DNS server of our own). Verified with real tools: `dig`
+      against the live `_ldap._tcp.g8.lo` records resolves il1/il2/il3;
+      a real `kinit` with `dns_lookup_kdc=true` and no explicit `kdc=`
+      discovered a throwaway KDC purely via published SRV records and
+      got a genuine TGT.
 - [ ] SASL/GSSAPI bind path; end-to-end SSSD + krb5 client validation
 - [ ] RHEL enrollment (realmd/adcli or sssd krb5+ldap) + host keytab; verify
       GSSAPI SSO to SSH and rocketsmbd `sec=krb5`. macOS LDAP/krb5 bind.

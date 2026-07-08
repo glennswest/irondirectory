@@ -5,6 +5,18 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.7.0] — 2026-07-08
+
+### 2026-07-08 (post-v0.6.0)
+- **feat(dns):** New `iron-dns` crate + `iron-dns-ctl` CLI (#6) --
+  publishes `_ldap._tcp`/`_kerberos._udp`/`_kerberos._tcp` SRV
+  autodiscovery records into MicroDNS's REST API (not a DNS server or
+  protocol implementation of our own). Verified with real tools:
+  `dig` against `_ldap._tcp.g8.lo` resolves the live il1/il2/il3
+  deployment; a real `kinit` with `dns_lookup_kdc=true` and no explicit
+  `kdc=` line discovered a throwaway KDC purely via the published
+  `_kerberos._udp`/`_tcp.g8.lo` SRV records and obtained a genuine TGT.
+
 ## [v0.6.0] — 2026-07-08
 
 ### 2026-07-08
