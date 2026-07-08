@@ -1,0 +1,37 @@
+[package]
+name = "iron-dns"
+description = "LDAP/Kerberos SRV autodiscovery record publishing via MicroDNS (#6)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+
+# ---------------------------------------------------------------
+# Packaging (cargo-generate-rpm). iron-dns-ctl is an operator tool run
+# during provisioning, not a long-running daemon -- no systemd unit.
+#   cargo build --release -p iron-dns --bin iron-dns-ctl
+#   cargo generate-rpm -p crates/dns
+# ---------------------------------------------------------------
+
+[package.metadata.generate-rpm]
+name = "iron-dns-ctl"
+license = "Apache-2.0"
+summary = "irondirectory LDAP/Kerberos SRV record publisher"
+assets = [
+    { source = "target/release/iron-dns-ctl", dest = "/usr/bin/iron-dns-ctl", mode = "755" },
+]
