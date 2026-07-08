@@ -64,8 +64,10 @@ impl Enctype {
         }
     }
 
-    /// Truncated HMAC length in bytes (`h` in both RFCs).
-    fn hmac_len(self) -> usize {
+    /// Truncated HMAC length in bytes (`h` in both RFCs) -- also the
+    /// checksum trailer length in an RFC 4121 Wrap-without-confidentiality
+    /// token (its EC field).
+    pub fn hmac_len(self) -> usize {
         match self {
             Enctype::Aes128CtsHmacSha1_96 | Enctype::Aes256CtsHmacSha1_96 => 12,
             Enctype::Aes128CtsHmacSha256_128 => 16,

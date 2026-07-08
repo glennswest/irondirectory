@@ -11,6 +11,7 @@
 pub mod conn;
 pub mod filter;
 pub mod framing;
+pub mod gssapi;
 pub mod health;
 pub mod rootdse;
 pub mod schema;
