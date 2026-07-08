@@ -10,12 +10,14 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.5.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
-underway (#3 DIT layer, #4 iron-ldap: rootDSE/bind/search/add/delete/
-modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via PBKDF2 +
-cross-NC referrals + AD/RFC2307 schema validation, redundant deployment
-live on il1/il2/il3.g8.lo). See CHANGELOG.md for the running
-list; Live infrastructure below has the verification details.
+`0.6.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
+delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
+PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
+deployment live on il1/il2/il3.g8.lo; #5 iron-kdc: AS-REQ/AS-REP +
+TGS-REQ/TGS-REP + keytab, verified against real kinit/kvno/klist).
+See CHANGELOG.md for the running list; Live infrastructure below has
+the verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -219,6 +221,60 @@ anonymously fetchable (`curl` 200). `deploy/terragrunt/ldap/`'s cloud-init
 template's `dnf install <url>` now works as originally intended on a
 fresh VM recreate — no more scp workaround needed.
 
+**iron-kdc (D4/D8, #5)** — `crates/kdc`: Kerberos 5 KDC over the same DIT
+`iron-ldap` serves (Kerberos material is extra attributes —
+`krbprincipalname`/`krbsalt`/`krbkey` — on the same entries, not a
+separate database; not yet wired to LDAP's own `userPassword` flow,
+provisioned instead via the new `iron-kdc-ctl` admin CLI). Built on
+`rasn-kerberos` (same `librasn/rasn` org/license as `rasn-ldap`) for
+message types; crypto (`iron_crypto::kerberos`) and protocol logic are
+hand-rolled — every existing Rust Kerberos crypto/keytab crate traces
+back to a single AGPL-3.0 codebase and doesn't reach RFC 8009 anyway, so
+there was nothing usable to build on for either piece. AES-only (D4) —
+RFC 3962 (aes128/256-cts-hmac-sha1-96) and RFC 8009
+(aes128/256-cts-hmac-sha{256,384}), verified byte-exact against both
+RFCs' published test vectors before ever touching a live client.
+AS-REQ/AS-REP with PA-ENC-TIMESTAMP pre-auth, TGS-REQ/TGS-REP for
+service tickets, hand-rolled MIT keytab I/O (verified bidirectionally
+against real `klist -k`/`ktutil`). Cross-realm ticket decryption looks
+up the presented ticket's own issuer rather than assuming it's always
+this realm's plain krbtgt — the structural piece referral chaining
+needs (D8) — but is model-correct only, not live-tested beyond one
+realm (D10: no second realm/partition is deployed yet to chain against).
+
+**Verified against real MIT krb5 client tools** (`kinit`/`kvno`/`klist`,
+`krb5-workstation` on dev.g8.lo): obtained a genuine TGT and a genuine
+service ticket end-to-end. Found and fixed two real interop bugs this
+way (impossible to catch with unit tests alone, since they're about
+what a real client actually expects on the wire):
+1. `PA-ETYPE-INFO2` must be **one** `PaData` whose value is a `SEQUENCE
+   OF` every enctype offered — not one `PaData` per enctype. Diagnosed
+   by hand-decoding the DER bytes from an `strace` capture of the live
+   UDP response.
+2. `KDC_ERR_PREAUTH_REQUIRED`'s `e-data` needs a **bare
+   `PA-ENC-TIMESTAMP` marker entry** (type 2, empty value) alongside
+   `PA-ETYPE-INFO2`, or the client silently never attempts the
+   mechanism at all (`krb5_get_as_key_password`/
+   `krb5_c_string_to_key_with_params` confirmed via `gdb` breakpoints
+   to never even be called). Root-caused by downloading the real krb5
+   1.22.2 source and reading `kdc_preauth_encts.c`'s `enc_ts_get`
+   (always responds with `edata=NULL`) against `preauth2.c`'s
+   `process_pa_data` dispatch logic on the client side.
+
+Also found and documented two more FIPS `PBKDF2` constraints while
+building the crypto layer (same brute-force-against-the-live-provider
+method as the earlier minimum-password-length finding, see docs/FIPS.md):
+a minimum iteration count of 1000, and a minimum salt length of 16
+bytes — the latter is why `iron-kdc` always sends an explicit salt via
+`PA-ETYPE-INFO2` rather than relying on the client's guessed default
+(a Kerberos principal's default salt, realm+principal name, is
+routinely shorter than that for a short realm).
+
+Packaged (`iron-kdcd` + `iron-kdc-ctl` binaries, systemd unit) mirroring
+`iron-ldapd`'s pattern; not yet deployed to dedicated redundant
+infrastructure (only verified via throwaway instances on dev.g8.lo so
+far) — see work plan for whether/when that happens.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
@@ -292,8 +348,18 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       extended ops besides StartTLS, full schema-subentry publishing
       (`cn=subschema`) — schema is enforced but not yet discoverable by
       clients that query it
-- [ ] `iron-kdc`: Kerberos KDC (AS-REQ/TGS-REQ), **realm-per-partition** with
-      cross-realm key slots, AES enctypes only, keytab
+- [x] `iron-kdc` (#5, CLOSED): Kerberos KDC. AS-REQ/AS-REP with
+      PA-ENC-TIMESTAMP pre-auth, TGS-REQ/TGS-REP, AES-only enctypes
+      (RFC 3962 + RFC 8009, verified against published test vectors),
+      keytab I/O (verified against real `klist -k`/`ktutil`), realm-per-
+      partition with cross-realm ticket-issuer lookup (model-correct,
+      D8; not live-tested beyond one realm, D10). Verified against real
+      `kinit`/`kvno` -- found and fixed two live interop bugs
+      (PA-ETYPE-INFO2 shape, missing PA-ENC-TIMESTAMP marker) that no
+      amount of unit testing would have caught. **Remaining (deliberately
+      out of scope for this pass):** subtree/replay-cache hardening,
+      renewal/forwarding/user-to-user, dedicated redundant deployment
+      (only verified via throwaway dev.g8.lo instances so far)
 - [ ] `iron-dns`: SRV autodiscovery records (integrate with microdns where it
       makes sense)
 - [ ] SASL/GSSAPI bind path; end-to-end SSSD + krb5 client validation

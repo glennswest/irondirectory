@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "iron-crypto"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "hex",
  "ossl",
@@ -609,7 +609,7 @@ dependencies = [
 
 [[package]]
 name = "iron-kdc"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "iron-ldap"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "iron-partition"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -656,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "iron-store"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "etcd-client",
  "iron-partition",

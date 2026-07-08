@@ -5,6 +5,38 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.6.0] — 2026-07-08
+
+### 2026-07-08
+- **feat(crypto):** Kerberos 5 AES key derivation + encryption
+  (`iron_crypto::kerberos`, #5) -- n-fold (RFC 3961), RFC 3962
+  (aes128/256-cts-hmac-sha1-96) and RFC 8009
+  (aes128/256-cts-hmac-sha{256,384}) enctypes, verified byte-exact
+  against both RFCs' published test vectors. Found and documented two
+  more FIPS PBKDF2 constraints along the way: minimum iteration count
+  (1000) and minimum salt length (16 bytes) -- the latter is why
+  `iron-kdc` always sends an explicit salt via PA-ETYPE-INFO2 rather
+  than relying on a client-computed default.
+- **feat(kdc):** New `iron-kdc` crate (#5) -- a from-scratch Kerberos 5
+  KDC over `rasn-kerberos` (MIT/Apache-2.0, same org as `rasn-ldap`;
+  every existing Rust Kerberos crypto/keytab crate is AGPL-3.0 and
+  doesn't reach RFC 8009 anyway). AS-REQ/AS-REP with PA-ENC-TIMESTAMP
+  pre-auth, TGS-REQ/TGS-REP for service tickets, hand-rolled MIT keytab
+  I/O (verified bidirectionally against real `klist -k`/`ktutil`),
+  `iron-kdcd` daemon + `iron-kdc-ctl` admin CLI, systemd unit.
+  Cross-realm ticket decryption uses the presented ticket's own
+  issuer (not always this realm's krbtgt), the structural piece
+  referral chaining needs -- model-correct per D8, not live-tested
+  beyond one realm (D10, no second realm/partition deployed yet).
+  **Verified against real MIT krb5 tools** (`kinit`, `kvno`, `klist`):
+  obtained a real TGT and a real service ticket end-to-end. Two real
+  interop bugs found and fixed via live `kinit` + `gdb` + reading the
+  actual krb5 1.22.2 source: PA-ETYPE-INFO2 must be one PaData
+  covering every enctype (not one per enctype), and
+  KDC_ERR_PREAUTH_REQUIRED's method-data needs a bare PA-ENC-TIMESTAMP
+  marker entry alongside PA-ETYPE-INFO2 or the client never attempts
+  the mechanism at all.
+
 ## [v0.5.0] — 2026-07-07
 
 ### 2026-07-07 (post-v0.4.0)
