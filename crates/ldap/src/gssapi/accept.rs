@@ -107,9 +107,13 @@ where
     // authenticator subkey), encrypted with the application session
     // key" (RFC 4120 §7.5.1) -- distinct from TGS-REQ's usage 7, which
     // is for the Authenticator carried in a *TGS* request specifically.
-    let session_key = tgt.key.value.to_vec();
-    let auth_bytes =
-        kerberos::decrypt(ctx, tkt_enctype, &session_key, 11, &ap_req.authenticator.cipher).map_err(|_| Error::AuthenticatorDecryptFailed)?;
+    let ticket_session_key = tgt.key.value.to_vec();
+    // The Authenticator itself is always encrypted with the *ticket's*
+    // session key regardless of any subkey it goes on to assert (RFC
+    // 4120 5.5.1) -- the subkey only takes over as the base key for
+    // everything *after* this point.
+    let auth_bytes = kerberos::decrypt(ctx, tkt_enctype, &ticket_session_key, 11, &ap_req.authenticator.cipher)
+        .map_err(|_| Error::AuthenticatorDecryptFailed)?;
     let authenticator: Authenticator = rasn::der::decode(&auth_bytes)?;
 
     if authenticator.crealm != tgt.crealm || authenticator.cname != tgt.cname {
@@ -124,12 +128,22 @@ where
     }
     let gss_flags = gss_checksum_flags(&cksum.checksum)?;
 
+    // RFC 4121 §2: "if the initiator asserts a subkey in the AP-REQ
+    // message, the base key is this subkey; if the initiator does not
+    // assert a subkey, the base key is the session key in the service
+    // ticket." (We never assert our own acceptor subkey, so the other
+    // branch -- "if the acceptor asserts a subkey" -- never applies
+    // here.) This base key is what the AP-REP and every subsequent
+    // Wrap/Unwrap use, not the raw ticket session key.
+    let session_key = authenticator.subkey.as_ref().map(|k| k.value.to_vec()).unwrap_or(ticket_session_key);
+
     let output_token = if gss_flags & GSS_C_MUTUAL_FLAG != 0 {
         let (ap_rep_now, _) = iron_kdc::time::now();
         let enc_ap_rep_part = EncApRepPart { ctime: ap_rep_now, cusec: 0.into(), subkey: None, seq_number: None };
         let enc_bytes = rasn::der::encode(&enc_ap_rep_part)?;
         // Key usage 12: "AP-REP encrypted part (includes application
-        // session subkey), encrypted with the application session key".
+        // session subkey), encrypted with the application session key"
+        // -- "session key" here means the base key per the rule above.
         let cipher = kerberos::encrypt(ctx, tkt_enctype, &session_key, 12, &enc_bytes)?;
         let ap_rep = ApRep {
             pvno: 5.into(),
