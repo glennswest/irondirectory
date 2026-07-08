@@ -10,19 +10,20 @@ provides the **SMB file-server** half (SYSVOL/NETLOGON shares, Kerberos service
 acceptor). Together they form a clean-room, FIPS-clean alternative to a Windows
 or Samba domain controller.
 
-> **Status:** `v0.7.0` — Phase 0 done, Phase 1 underway. `iron-partition`
+> **Status:** `v0.8.0` — Phase 0 done, Phase 1 underway. `iron-partition`
 > (naming-context model), `iron-store` (partition-scoped DIT over fastetcd,
 > mTLS connection harness), `iron-crypto` (FIPS crypto facade over `ossl`,
 > incl. PBKDF2 password hashing and Kerberos AES key derivation/encryption),
-> `iron-ldap` (rootDSE, anonymous + authenticated bind, search,
-> add/delete/modify/compare/modify-DN, StartTLS/LDAPS, cross-NC referrals,
-> AD/RFC 2307 schema validation), `iron-kdc` (Kerberos 5 KDC: AS-REQ/
-> AS-REP with pre-auth, TGS-REQ/TGS-REP, keytab I/O), and `iron-dns`
+> `iron-ldap` (rootDSE, anonymous + authenticated bind, **SASL/GSSAPI bind**,
+> search, add/delete/modify/compare/modify-DN, StartTLS/LDAPS, cross-NC
+> referrals, AD/RFC 2307 schema validation), `iron-kdc` (Kerberos 5 KDC:
+> AS-REQ/AS-REP with pre-auth, TGS-REQ/TGS-REP, keytab I/O), and `iron-dns`
 > (LDAP/Kerberos SRV record publishing via MicroDNS) are real and verified
 > against a live fastetcd cluster with real `openldap-clients`,
-> `krb5-workstation`, and `dig` — `iron-ldap` deployed redundantly (3
-> replicas + health-checked LB) at `ldap.g8.lo`. Architecture and
-> decisions are recorded in
+> `krb5-workstation`, `dig`, and a full **SSSD** stack (`id_provider=ldap`
+> + `auth_provider=krb5`, real `getent`/`id`/`su` end to end) — `iron-ldap`
+> deployed redundantly (3 replicas + health-checked LB) at `ldap.g8.lo`.
+> Architecture and decisions are recorded in
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## What it is (and isn't)

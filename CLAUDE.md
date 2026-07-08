@@ -10,15 +10,19 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.7.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.8.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
 deployment live on il1/il2/il3.g8.lo; #5 iron-kdc CLOSED: AS-REQ/AS-REP
 + TGS-REQ/TGS-REP + keytab, verified against real kinit/kvno/klist;
 #6 iron-dns CLOSED: LDAP/Kerberos SRV publishing via MicroDNS, verified
-with real dig + kinit DNS autodiscovery). See CHANGELOG.md for the
-running list; Live infrastructure below has the verification details.
+with real dig + kinit DNS autodiscovery; #7 SASL/GSSAPI bind CLOSED:
+`iron-ldap` as a GSS-API acceptor over Kerberos V5, verified against
+real `ldapsearch -Y GSSAPI` and a full SSSD stack -- getent/id/su all
+working end to end against real iron-ldap + iron-kdc). See CHANGELOG.md
+for the running list; Live infrastructure below has the verification
+details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -294,6 +298,57 @@ discovered the KDC purely via DNS and obtained a genuine TGT. The
 Kerberos test records were removed afterward (pointed at a throwaway
 instance); the LDAP records were kept (real, current infrastructure).
 
+**SASL/GSSAPI bind (#7)** — `crates/ldap/src/gssapi/` (new module) +
+`session.rs`: makes `iron-ldap` a GSS-API acceptor for the Kerberos V5
+mechanism, wired into LDAP's SASL bind path (`AuthenticationChoice::Sasl`,
+previously a stub returning `AuthMethodNotSupported`). `token.rs` hand-rolls
+RFC 2743 §3.1's Initial Context Token framing (a fixed byte format, not a
+`rasn`-decodable ASN.1 structure) — RFC 4121 §4.1 requires this framing on
+*both* the AP-REQ and the acceptor's AP-REP response, overriding RFC 2743's
+more general "optional for non-initial tokens" language. `accept.rs`
+decrypts the presented AP-REQ's ticket under the target service
+principal's own key (looked up via `iron-kdc`'s principal storage, added as
+a dependency — same issuer-driven lookup pattern as cross-realm ticket
+decryption in `iron-kdc`'s own TGS-REQ handler) and validates the
+Authenticator's GSS checksum (type `0x8003`). `wrap.rs` implements RFC 4121
+§4.2.6.2 Wrap tokens (without confidentiality) for RFC 4752's
+security-layer negotiation — `iron-ldap` always advertises "no security
+layer" only (StartTLS/LDAPS covers transport security instead).
+`session.rs` tracks per-connection `SaslState` across the multi-message
+GSSAPI handshake (AP-REQ → mutual-auth AP-REP → client ack → security-layer
+negotiation → success).
+
+Verified against a real `ldapsearch -Y GSSAPI` (real SASL username, real
+search results over the negotiated "no security layer" session) — found
+and fixed three live interop bugs no amount of unit testing would have
+caught, each diagnosed via `tcpdump` + hand-decoding the actual wire bytes
+or `KRB5_TRACE`: (1) the AP-REQ's Authenticator can assert a **subkey**
+(RFC 4121 §2), which becomes the base key for all subsequent Wrap/Unwrap —
+but NOT for the AP-REP's own encryption, which RFC 4120 §3.2.5 is explicit
+must always use the raw ticket session key even when a subkey is present
+(easy to conflate, since they're adjacent steps in the same exchange); (2)
+the AP-REP must echo the client's own `ctime`/`cusec` from its Authenticator
+(RFC 4120 §3.2.4), not a freshly generated timestamp — this is literally
+the proof of mutual authentication the client checks on receipt.
+
+Then verified the full "SSSD + krb5" half on a disposable Fedora VM
+(`id_provider=ldap` + `auth_provider=krb5`, RFC 2307 posixAccount/
+posixGroup schema): `getent passwd`/`id` resolve a real POSIX identity via
+`iron-ldap`, and `su` (run as a genuinely unprivileged user, not root, to
+force a real PAM challenge) prompts for and validates a real password
+against `iron-kdc`, caching a genuine TGT (`klist` confirms it). Two SSSD-
+specific interop findings, neither an `iron-ldap`/`iron-kdc` bug: SSSD's
+own async DNS resolver failed to resolve names via `systemd-resolved`'s
+stub listener (127.0.0.53) against MicroDNS — worked around with a direct
+`/etc/resolv.conf` entry, plus `lookup_family_order = ipv4_only`; and SSSD
+defaults to requiring StartTLS for a plain `ldap://` URI unless
+`ldap_id_use_start_tls = false` is set explicitly (this test instance has
+no TLS cert configured).
+
+Deliberately scoped out (documented, not silent): channel binding
+verification, delegation (`GSS_C_DELEG_FLAG`), and integrity/
+confidentiality security layers for LDAP traffic itself.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
@@ -386,7 +441,25 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       a real `kinit` with `dns_lookup_kdc=true` and no explicit `kdc=`
       discovered a throwaway KDC purely via published SRV records and
       got a genuine TGT.
-- [ ] SASL/GSSAPI bind path; end-to-end SSSD + krb5 client validation
+- [x] SASL/GSSAPI bind path; end-to-end SSSD + krb5 client validation (#7,
+      CLOSED): `iron-ldap` acts as a GSS-API acceptor for the Kerberos V5
+      mechanism (RFC 4121) inside LDAP's SASL bind (RFC 4513 §5.2, RFC
+      4752) -- hand-rolled RFC 2743 §3.1 GSS token framing, AP-REQ/AP-REP
+      handling (reusing `iron-kdc`'s own Kerberos crypto/message types --
+      the same fundamental operation as TGS-REQ, just as an application
+      server instead of a KDC), and RFC 4121 §4.2.6.2 Wrap tokens for the
+      RFC 4752 security-layer negotiation (always "no security layer" --
+      use StartTLS/LDAPS for transport security). Verified against a real
+      `ldapsearch -Y GSSAPI` (real SASL username, real search results) and
+      a full SSSD stack (`id_provider=ldap` + `auth_provider=krb5`) on a
+      disposable Fedora VM: `getent passwd`/`id` resolve a real POSIX
+      identity via `iron-ldap`, and `su` prompts for and validates a real
+      password against `iron-kdc`, caching a genuine TGT. Found and fixed
+      three live interop bugs unit tests couldn't have caught (see
+      Live infrastructure below). **Remaining (deliberately out of
+      scope):** channel binding verification, delegation
+      (`GSS_C_DELEG_FLAG`), integrity/confidentiality security layers for
+      LDAP traffic itself (StartTLS/LDAPS covers this instead).
 - [ ] RHEL enrollment (realmd/adcli or sssd krb5+ldap) + host keytab; verify
       GSSAPI SSO to SSH and rocketsmbd `sec=krb5`. macOS LDAP/krb5 bind.
 

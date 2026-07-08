@@ -779,7 +779,7 @@ checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
 name = "iron-crypto"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "hex",
  "ossl",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "iron-dns"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "iron-kdc"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "iron-ldap"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "iron-partition"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "iron-store"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "etcd-client",
  "iron-partition",

@@ -5,6 +5,27 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.8.0] — 2026-07-08
+
+### 2026-07-08 (post-v0.7.0)
+- **feat(ldap):** SASL/GSSAPI bind (#7) -- `iron-ldap` acts as a GSS-API
+  acceptor for the Kerberos V5 mechanism (RFC 4121) inside LDAP's SASL
+  bind (RFC 4513 §5.2, RFC 4752): new `gssapi` module (RFC 2743 §3.1
+  token framing, AP-REQ/AP-REP handling reusing `iron-kdc`'s own
+  Kerberos crypto/message types, RFC 4121 §4.2.6.2 Wrap tokens for the
+  security-layer negotiation), plus per-connection `SaslState` in
+  `session.rs` tracking the multi-message handshake. Verified against a
+  real `ldapsearch -Y GSSAPI` and a full SSSD stack (`id_provider=ldap`
+  + `auth_provider=krb5`) on a disposable Fedora VM -- `getent`/`id`/`su`
+  all working end to end, `su` obtaining a genuine cached TGT. Found and
+  fixed three live interop bugs: an AP-REQ subkey wrongly substituted
+  for the AP-REP's own (always ticket-session-key) encryption key; the
+  AP-REP not echoing the client's own ctime/cusec (the actual proof of
+  mutual auth); and two SSSD-specific config gaps (DNS resolver
+  workaround, `ldap_id_use_start_tls = false`). Deliberately out of
+  scope: channel binding, delegation, integrity/confidentiality
+  security layers for LDAP traffic (StartTLS/LDAPS covers that).
+
 ## [v0.7.0] — 2026-07-08
 
 ### 2026-07-08 (post-v0.6.0)
