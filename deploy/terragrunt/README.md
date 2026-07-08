@@ -18,9 +18,21 @@ deploy/terragrunt/
 ```sh
 brew install hashicorp/tap/terraform terragrunt
 # Proxmox node must trust your ~/.ssh/id_rsa.pub (root@pve.g8.lo).
-# Mint an API token on the node, then export it (never commit it):
-ssh root@pve.g8.lo 'pveum user token add root@pam irondir --privsep 0'
-export PROXMOX_API_TOKEN='root@pam!irondir=<the-value>'
+# The token lives in .env at the repo root (gitignored, chmod 600) — source
+# it, don't mint a fresh one:
+source .env   # from the repo root; adjust the path from a unit subdir
+
+# If it's genuinely lost: Proxmox never re-displays a token secret after
+# creation, so you'll need a new one. DO NOT run
+# `pveum user token add root@pam <name>` as a shortcut — that's how we ended
+# up with five different unrestricted root tokens (terraform, irondir,
+# terraform-cli, -cli-2, -cli-3) and one of them destroyed a hand-created VM
+# with no ACL to stop it. Instead:
+#   pveum user token add terraform-svc@pve <name>
+#   pveum acl modify /pool/terraform-managed --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
+#   pveum acl modify /storage/local-lvm      --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
+#   pveum acl modify /storage/local          --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
+# Full context: terraform-modules CLAUDE.md, "Incident: 2026-07-08".
 ```
 
 ## etcd cluster

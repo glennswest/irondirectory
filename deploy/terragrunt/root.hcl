@@ -12,7 +12,7 @@ locals {
 }
 
 # Provider generated into every unit. Token comes from the environment so it
-# never lands in code or state:  export PROXMOX_API_TOKEN='root@pam!terraform=...'
+# never lands in code or state:  export PROXMOX_API_TOKEN='terraform-svc@pve!irondirectory=...' (get the secret from: pveum user token list terraform-svc@pve --output-format json  -- root@pam tokens are BANNED for this project, see terraform-modules CLAUDE.md incident writeup)
 generate "provider" {
   path      = "provider.tf"
   if_exists = "overwrite_terragrunt"

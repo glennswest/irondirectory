@@ -19,7 +19,7 @@ include "root" {
 }
 
 terraform {
-  source = "git::https://github.com/glennswest/terraform-modules.git//modules/proxmox-fedora-vm?ref=v0.1.0"
+  source = "git::https://github.com/glennswest/terraform-modules.git//modules/proxmox-fedora-vm?ref=v0.2.0"
 }
 
 locals {
