@@ -4,17 +4,19 @@
 
 use std::sync::Arc;
 
+use iron_crypto::kerberos::Enctype;
 use iron_partition::Dn;
 use iron_store::model::Entry;
 use iron_store::store::Store;
 use openssl::ssl::SslAcceptor;
 use rasn::types::{OctetString, SetOf};
+use rasn_kerberos::PrincipalName;
 use rasn_ldap::{
     AddRequest, AddResponse, Attribute, AuthenticationChoice, BindRequest, BindResponse,
     ChangeOperation, CompareRequest, CompareResponse, DelRequest, DelResponse, ExtendedResponse,
     LdapMessage, LdapResult, ModifyDnRequest, ModifyDnResponse, ModifyRequest, ModifyResponse,
-    PartialAttribute, ProtocolOp, ResultCode, SearchRequest, SearchRequestScope, SearchResultDone,
-    SearchResultEntry,
+    PartialAttribute, ProtocolOp, ResultCode, SaslCredentials, SearchRequest, SearchRequestScope,
+    SearchResultDone, SearchResultEntry,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -30,6 +32,23 @@ const USER_PASSWORD_ATTR: &str = "userpassword";
 /// operation.
 const STARTTLS_OID: &[u8] = b"1.3.6.1.4.1.1466.20037";
 
+/// Per-connection SASL/GSSAPI negotiation state (RFC 4752), threaded
+/// through successive `BindRequest`s on the *same* connection -- unlike
+/// simple bind, a GSSAPI bind is a multi-message exchange (AP-REQ ->
+/// mutual-auth AP-REP -> ack -> security-layer negotiation -> success).
+#[derive(Default)]
+enum SaslState {
+    #[default]
+    None,
+    /// Sent a mutual-auth AP-REP; waiting for the client's
+    /// empty-credentials acknowledgment before starting the security-layer
+    /// negotiation.
+    AwaitingApRepAck { session_key: Vec<u8>, enctype: Enctype, client_principal: String },
+    /// Sent the security-layer negotiation challenge; waiting for the
+    /// client's chosen layer.
+    AwaitingSecurityLayerAck { session_key: Vec<u8>, enctype: Enctype, client_principal: String },
+}
+
 /// Handles one LDAP client connection until it unbinds, disconnects, or a
 /// framing error occurs. `tls_acceptor` enables StartTLS on this
 /// connection when `Some` -- pass `None` from `serve_ldaps` (StartTLS
@@ -42,6 +61,7 @@ where
 {
     let mut conn = Conn::Plain(stream);
     let mut buf = Vec::new();
+    let mut sasl_state = SaslState::None;
     loop {
         let msg = match read_message(&mut conn, &mut buf).await {
             Ok(Some(m)) => m,
@@ -56,7 +76,7 @@ where
         match msg.protocol_op {
             ProtocolOp::UnbindRequest(_) => return,
             ProtocolOp::BindRequest(req) => {
-                let resp = handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req).await;
+                let resp = handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req, &mut sasl_state).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::BindResponse(resp));
                 if write_message(&mut conn, &resp).await.is_err() {
                     return;
@@ -217,28 +237,128 @@ async fn handle_bind(
     store: &mut Store,
     fips: Option<&iron_crypto::FipsContext>,
     req: &BindRequest,
+    sasl_state: &mut SaslState,
 ) -> BindResponse {
-    let (code, diagnostic) = if req.version != 3 {
-        (ResultCode::ProtocolError, "only LDAPv3 is supported".to_string())
-    } else {
-        match &req.authentication {
-            AuthenticationChoice::Simple(password) if req.name.is_empty() && password.is_empty() => {
-                (ResultCode::Success, String::new())
-            }
-            AuthenticationChoice::Simple(password) => {
-                (authenticate_simple(store, fips, &req.name, password).await, String::new())
-            }
-            AuthenticationChoice::Sasl(_) => (
-                ResultCode::AuthMethodNotSupported,
-                "SASL bind is not implemented yet".to_string(),
-            ),
-            _ => (
-                ResultCode::AuthMethodNotSupported,
-                "unrecognized authentication choice".to_string(),
-            ),
+    if req.version != 3 {
+        *sasl_state = SaslState::None;
+        return BindResponse::new(ResultCode::ProtocolError, String::new().into(), "only LDAPv3 is supported".into(), None, None);
+    }
+    match &req.authentication {
+        AuthenticationChoice::Simple(password) if req.name.is_empty() && password.is_empty() => {
+            *sasl_state = SaslState::None;
+            BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None)
         }
+        AuthenticationChoice::Simple(password) => {
+            *sasl_state = SaslState::None;
+            let code = authenticate_simple(store, fips, &req.name, password).await;
+            BindResponse::new(code, String::new().into(), String::new().into(), None, None)
+        }
+        AuthenticationChoice::Sasl(creds) => handle_sasl_bind(store, fips, creds, sasl_state).await,
+        _ => {
+            *sasl_state = SaslState::None;
+            BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "unrecognized authentication choice".into(), None, None)
+        }
+    }
+}
+
+/// RFC 4752 SASL/GSSAPI bind, over the Kerberos V5 GSS mechanism (RFC
+/// 4121). Only the "GSSAPI" mechanism is supported, and only the "no
+/// security layer" option (clients requesting integrity/confidentiality
+/// get told only "no protection" is on offer -- use StartTLS/LDAPS for
+/// transport security, which iron-ldap already supports).
+async fn handle_sasl_bind(
+    store: &mut Store,
+    fips: Option<&iron_crypto::FipsContext>,
+    creds: &SaslCredentials,
+    sasl_state: &mut SaslState,
+) -> BindResponse {
+    if creds.mechanism.as_str() != "GSSAPI" {
+        *sasl_state = SaslState::None;
+        return BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "only the GSSAPI SASL mechanism is supported".into(), None, None);
+    }
+    let Some(fips) = fips else {
+        *sasl_state = SaslState::None;
+        return BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "FIPS provider not active -- SASL/GSSAPI unavailable".into(), None, None);
     };
-    BindResponse::new(code, String::new().into(), diagnostic.into(), None, None)
+
+    match std::mem::take(sasl_state) {
+        SaslState::None => {
+            let Some(input_token) = &creds.credentials else {
+                return BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "GSSAPI bind requires an initial token".into(), None, None);
+            };
+            // Any DN within the (single) served partition works here --
+            // lookup_by_index only uses it to resolve which cluster to
+            // query, not as a search filter.
+            let Some(any_dn) = store.registry().iter().next().map(|p| p.base_dn.clone()) else {
+                return BindResponse::new(ResultCode::Other, String::new().into(), "no partition configured".into(), None, None);
+            };
+            let lookup = move |sname: PrincipalName, realm: String| async move {
+                let principal_fqn = format!("{}@{realm}", iron_kdc::principal_name_to_string(&sname));
+                let dns = store.lookup_by_index(&any_dn, iron_kdc::principal::ATTR_PRINCIPAL_NAME, &principal_fqn).await.ok()?;
+                let dn = dns.into_iter().next()?;
+                let entry = store.get_entry(&dn).await.ok()??;
+                iron_kdc::principal::keys(&entry).ok()
+            };
+            match crate::gssapi::accept::accept(fips, input_token, lookup).await {
+                Ok(accepted) => match accepted.output_token {
+                    Some(tok) => {
+                        *sasl_state = SaslState::AwaitingApRepAck {
+                            session_key: accepted.session_key,
+                            enctype: accepted.enctype,
+                            client_principal: accepted.client_principal,
+                        };
+                        BindResponse::new(ResultCode::SaslBindInProgress, String::new().into(), String::new().into(), None, Some(tok.into()))
+                    }
+                    None => match security_layer_challenge(fips, accepted.enctype, &accepted.session_key) {
+                        Ok(challenge) => {
+                            *sasl_state = SaslState::AwaitingSecurityLayerAck {
+                                session_key: accepted.session_key,
+                                enctype: accepted.enctype,
+                                client_principal: accepted.client_principal,
+                            };
+                            BindResponse::new(ResultCode::SaslBindInProgress, String::new().into(), String::new().into(), None, Some(challenge.into()))
+                        }
+                        Err(e) => BindResponse::new(ResultCode::OperationsError, String::new().into(), e.to_string().into(), None, None),
+                    },
+                },
+                Err(e) => BindResponse::new(ResultCode::InvalidCredentials, String::new().into(), e.to_string().into(), None, None),
+            }
+        }
+        SaslState::AwaitingApRepAck { session_key, enctype, client_principal } => match security_layer_challenge(fips, enctype, &session_key) {
+            Ok(challenge) => {
+                *sasl_state = SaslState::AwaitingSecurityLayerAck { session_key, enctype, client_principal };
+                BindResponse::new(ResultCode::SaslBindInProgress, String::new().into(), String::new().into(), None, Some(challenge.into()))
+            }
+            Err(e) => BindResponse::new(ResultCode::OperationsError, String::new().into(), e.to_string().into(), None, None),
+        },
+        SaslState::AwaitingSecurityLayerAck { session_key, enctype, client_principal } => {
+            let Some(response) = &creds.credentials else {
+                return BindResponse::new(ResultCode::ProtocolError, String::new().into(), "missing security-layer response".into(), None, None);
+            };
+            // Key usage 24: KG-USAGE-INITIATOR-SEAL (RFC 4121 §2) -- the
+            // client is the GSS initiator, so its Wrap tokens use the
+            // initiator-seal usage, not our own acceptor-seal (22).
+            match crate::gssapi::wrap::unwrap(fips, enctype, &session_key, 24, response) {
+                Ok(plain) if plain.first() == Some(&0x01) => {
+                    tracing::info!(%client_principal, "GSSAPI bind succeeded");
+                    BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None)
+                }
+                Ok(_) => BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "client selected an unsupported security layer".into(), None, None),
+                Err(e) => BindResponse::new(ResultCode::InvalidCredentials, String::new().into(), e.to_string().into(), None, None),
+            }
+        }
+    }
+}
+
+/// Builds the RFC 4752 §3.2 security-layer negotiation challenge: 4
+/// octets (bitmask of offered layers + max buffer size), Wrapped without
+/// confidentiality using KG-USAGE-ACCEPTOR-SEAL (22) -- we're the GSS
+/// acceptor. Only bit 0 ("no security layer") is ever offered; the
+/// 3-octet buffer size is zero accordingly (RFC 4752: "which MUST be 0
+/// if the server does not support any security layer").
+fn security_layer_challenge(fips: &iron_crypto::FipsContext, enctype: Enctype, session_key: &[u8]) -> Result<Vec<u8>, crate::gssapi::wrap::Error> {
+    const NO_SECURITY_LAYER: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
+    crate::gssapi::wrap::wrap(fips, enctype, session_key, 22, &NO_SECURITY_LAYER)
 }
 
 /// Verifies a non-empty simple bind against the target entry's
