@@ -1,13 +1,18 @@
-# Unit: throwaway SSSD end-to-end validation host (#7)
+# Unit: throwaway SSSD end-to-end validation environment (#7)
 #
-# NOT a redundancy/production unit like ../ldap or ../etcd -- a single,
-# disposable Fedora VM used to validate that a real Linux client
+# NOT a redundancy/production unit like ../ldap or ../etcd -- two
+# disposable Fedora VMs used to validate that a real Linux client
 # resolves users/groups via id_provider=ldap against iron-ldap and
-# authenticates logins via auth_provider=krb5 against iron-kdc. Intended
-# to be `terragrunt destroy`ed once #7's SSSD e2e validation is done;
-# iron-ldapd/iron-kdcd themselves keep running on dev.g8.lo (a throwaway
-# g8gssapi1 partition/realm, not the redundant il1/il2/il3 deployment),
-# not on this VM.
+# authenticates logins via auth_provider=krb5 against iron-kdc, without
+# touching dev.g8.lo at all (that box stays a pure git-clone/build
+# host, nothing from this test runs or lives there):
+#
+#   - ironrealm: builds iron-kdcd/iron-ldapd FROM SOURCE (no released
+#     RPM covers the SASL/GSSAPI work yet, #7) and runs both directly.
+#   - sssdtest: SSSD client (id_provider=ldap, auth_provider=krb5)
+#     pointed at ironrealm.
+#
+# `terragrunt destroy` tears down both once the validation is done.
 
 include "root" {
   path = find_in_parent_folders("root.hcl")
@@ -20,19 +25,18 @@ terraform {
 locals {
   ssh_key = trimspace(file(pathexpand("~/.ssh/id_rsa.pub")))
 
-  # Throwaway g8gssapi1 partition/realm already provisioned by hand on
-  # dev.g8.lo for #7's GSSAPI bind live-testing (iron-kdcd :8891,
-  # iron-ldapd :3895) -- this VM is only the SSSD client pointed at it.
-  kdc_host_port = "dev.g8.lo:8891"
-  ldap_uri      = "ldap://dev.g8.lo:3895"
-  base_dn       = "dc=g8gssapi1,dc=lo"
-  krb5_realm    = "G8GSSAPI.LO"
-  domain        = "g8gssapi1.lo"
+  fastetcd_endpoint = "http://etcd.g8.lo:2379"
+  partition_id      = "g8gssapi1"
+  base_dn           = "dc=g8gssapi1,dc=lo"
+  krb5_realm        = "G8GSSAPI.LO"
+  domain            = "g8gssapi1.lo"
+  test_user          = "dave"
+  test_user_password = "gssapitestpassword"
+  git_ref            = "main"
 
   # Next free vm_id/MAC/IP after il1/il2/il3 (134-136, .44-.46).
-  vm_id = 137
-  mac   = "BC:24:11:08:00:17"
-  ip    = "192.168.8.47"
+  ironrealm = { vm_id = 138, mac = "BC:24:11:08:00:18", ip = "192.168.8.48" }
+  sssdtest  = { vm_id = 137, mac = "BC:24:11:08:00:17", ip = "192.168.8.47" }
 }
 
 inputs = {
@@ -41,10 +45,31 @@ inputs = {
   tags               = ["terraform", "fedora", "irondirectory", "sssd-test", "throwaway"]
 
   vms = {
+    ironrealm = {
+      vm_id     = local.ironrealm.vm_id
+      mac       = local.ironrealm.mac
+      ip        = local.ironrealm.ip
+      cores     = 2
+      memory    = 2048
+      disk_size = 20
+      user_data = templatefile("${get_terragrunt_dir()}/templates/ironrealm-user-data.yaml.tftpl", {
+        hostname            = "ironrealm"
+        fqdn                = "ironrealm.g8.lo"
+        ci_user             = "fedora"
+        ssh_keys            = [local.ssh_key]
+        fastetcd_endpoint   = local.fastetcd_endpoint
+        partition_id        = local.partition_id
+        base_dn             = local.base_dn
+        krb5_realm          = local.krb5_realm
+        test_user           = local.test_user
+        test_user_password  = local.test_user_password
+        git_ref             = local.git_ref
+      })
+    }
     sssdtest = {
-      vm_id     = local.vm_id
-      mac       = local.mac
-      ip        = local.ip
+      vm_id     = local.sssdtest.vm_id
+      mac       = local.sssdtest.mac
+      ip        = local.sssdtest.ip
       cores     = 1
       memory    = 1024
       disk_size = 15
@@ -53,8 +78,8 @@ inputs = {
         fqdn          = "sssdtest.g8.lo"
         ci_user       = "fedora"
         ssh_keys      = [local.ssh_key]
-        kdc_host_port = local.kdc_host_port
-        ldap_uri      = local.ldap_uri
+        kdc_host_port = "ironrealm.g8.lo:88"
+        ldap_uri      = "ldap://ironrealm.g8.lo:389"
         base_dn       = local.base_dn
         krb5_realm    = local.krb5_realm
         domain        = local.domain
