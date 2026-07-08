@@ -1,0 +1,19 @@
+[package]
+name = "iron-config"
+description = "Persists the PartitionRegistry in the forest configuration partition; iron-config-ctl provisions child domains (#9)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+iron-partition = { path = "../partition" }
+iron-store = { path = "../store" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }

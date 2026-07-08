@@ -11,6 +11,7 @@ members = [
                         # AD-shaped schema + LDAPS come later in the same issue
     "crates/kdc",       # Kerberos KDC (AS/TGS), AES enctypes only, keytab (#5)
     "crates/dns",       # LDAP/Kerberos SRV autodiscovery via MicroDNS (#6)
+    "crates/config",    # PartitionRegistry persistence + child-domain provisioning (#9)
     # "crates/oidc",    # OAuth2/OpenID Connect authorization server (OpenShift SSO + D9 brokering)
     # "crates/gc",      # watch-fed Global Catalog / federated GAL aggregator (D8/D9)
     "crates/crypto",   # FIPS crypto facade over the `ossl` crate — validated (#1)
@@ -54,6 +55,9 @@ tracing-subscriber = "0.3"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
+# iron-config (#9): persisting Partition records (already Serialize/
+# Deserialize) as a single JSON attribute value on a DIT entry.
+serde_json = "1"
 
 # LDAP v3 wire protocol (RFC 4511) -- ASN.1/BER types + codec generated via
 # the `rasn` framework, rather than hand-rolling BER (#4).

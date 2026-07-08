@@ -201,6 +201,25 @@ impl Partition {
         })
     }
 
+    /// Start building a configuration partition (#9) -- the forest-wide NC
+    /// that holds the [`crate::registry::PartitionRegistry`]'s persisted
+    /// form (crossRef-equivalent records, one per partition, including a
+    /// self-describing record for the configuration partition itself). No
+    /// realm (only `Domain` partitions have one) and never has a superior.
+    pub fn configuration(id: impl Into<String>, forest: ForestId, base_dn: Dn, cluster: ClusterRef) -> Result<Self, PartitionError> {
+        Ok(Partition {
+            id: PartitionId::new(id)?,
+            forest,
+            base_dn,
+            kind: PartitionKind::Configuration,
+            realm: None,
+            cluster,
+            superior: None,
+            subordinates: Vec::new(),
+            ldap_url: None,
+        })
+    }
+
     /// Builder: set the superior (parent) partition.
     pub fn with_superior(mut self, superior: PartitionId) -> Self {
         self.superior = Some(superior);
@@ -279,6 +298,20 @@ mod tests {
         .unwrap();
         assert_eq!(p.realm.as_deref(), Some("G10.LO"));
         assert_eq!(p.kind, PartitionKind::Domain);
+    }
+
+    #[test]
+    fn configuration_builder_has_no_realm_or_superior() {
+        let p = Partition::configuration(
+            "config",
+            ForestId::new("acme").unwrap(),
+            Dn::parse("cn=configuration,dc=lo").unwrap(),
+            ClusterRef::plaintext(["http://127.0.0.1:2379"]),
+        )
+        .unwrap();
+        assert_eq!(p.kind, PartitionKind::Configuration);
+        assert_eq!(p.realm, None);
+        assert_eq!(p.superior, None);
     }
 
     #[test]
