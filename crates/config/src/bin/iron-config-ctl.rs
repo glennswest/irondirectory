@@ -41,14 +41,47 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     let Some(cmd) = args.get(1) else {
-        anyhow::bail!("usage: iron-config-ctl <init-forest|create-child> ...");
+        anyhow::bail!("usage: iron-config-ctl <init-forest|create-child|show> ...");
     };
 
     match cmd.as_str() {
         "init-forest" => init_forest(&args[2..]).await,
         "create-child" => create_child(&args[2..]).await,
-        other => anyhow::bail!("unknown command {other:?}; expected init-forest or create-child"),
+        "show" => show().await,
+        other => anyhow::bail!("unknown command {other:?}; expected init-forest, create-child, or show"),
     }
+}
+
+/// Loads and prints the full registry from an already-bootstrapped
+/// configuration partition -- an operational inspection command, and
+/// what #9's live verification uses to confirm superior/subordinate
+/// links round-trip through real storage.
+async fn show() -> anyhow::Result<()> {
+    let config_endpoint = require_env("IRON_CONFIG_FASTETCD_ENDPOINT")?;
+    let config_pid = require_env("IRON_CONFIG_PARTITION_ID")?;
+    let config_base_dn_str = require_env("IRON_CONFIG_BASE_DN")?;
+    let config_dn = Dn::parse(&config_base_dn_str)?;
+
+    let bootstrap_cluster = ClusterRef::plaintext([config_endpoint]);
+    let bootstrap_forest = ForestId::new(config_pid.clone())?;
+    let bootstrap_config_partition = Partition::configuration(config_pid, bootstrap_forest, config_dn.clone(), bootstrap_cluster)?;
+    let mut bootstrap_registry = PartitionRegistry::new();
+    bootstrap_registry.insert(bootstrap_config_partition)?;
+    let mut store = Store::connect(bootstrap_registry).await?;
+
+    let registry = iron_config::load_registry(&mut store, &config_dn).await?;
+    for p in registry.iter() {
+        println!(
+            "{:<20} kind={:<13} base_dn={:<40} realm={:<20} superior={:<20} subordinates={:?}",
+            p.id.as_str(),
+            format!("{:?}", p.kind),
+            p.base_dn.to_string(),
+            p.realm.as_deref().unwrap_or("-"),
+            p.superior.as_ref().map(|s| s.as_str()).unwrap_or("-"),
+            p.subordinates.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+        );
+    }
+    Ok(())
 }
 
 async fn init_forest(args: &[String]) -> anyhow::Result<()> {
