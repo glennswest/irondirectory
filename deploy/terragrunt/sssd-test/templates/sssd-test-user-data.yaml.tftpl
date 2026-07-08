@@ -1,0 +1,94 @@
+#cloud-config
+hostname: ${hostname}
+fqdn: ${fqdn}
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: true
+
+users:
+  - name: ${ci_user}
+    groups: [wheel, adm, systemd-journal]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+%{ for key in ssh_keys ~}
+      - ${key}
+%{ endfor ~}
+
+ssh_pwauth: false
+disable_root: false
+
+package_update: true
+package_upgrade: false
+packages:
+  - qemu-guest-agent
+  - krb5-workstation
+  - sssd
+  - sssd-krb5
+  - sssd-ldap
+  - openldap-clients
+  - oddjob-mkhomedir
+  - authselect
+
+write_files:
+  # Points krb5-workstation's own tools (kinit/kvno/klist) at the
+  # throwaway iron-kdcd instance on dev.g8.lo, non-standard port (8891,
+  # not 88) since that instance shares dev.g8.lo with other services.
+  - path: /etc/krb5.conf
+    permissions: "0644"
+    content: |
+      [libdefaults]
+          default_realm = ${krb5_realm}
+          dns_lookup_kdc = false
+          rdns = false
+
+      [realms]
+          ${krb5_realm} = {
+              kdc = ${kdc_host_port}
+          }
+
+      [domain_realm]
+          ${domain} = ${krb5_realm}
+          .${domain} = ${krb5_realm}
+
+  # SSSD: id_provider=ldap resolves users/groups from iron-ldap's DIT
+  # (RFC 2307 posixAccount/posixGroup schema, already validated by
+  # iron-ldap's own schema module -- see crates/ldap/src/schema.rs);
+  # auth_provider=krb5 authenticates logins against iron-kdc, the same
+  # KDC the SASL/GSSAPI bind path (this issue, #7) was just verified
+  # against with a real ldapsearch -Y GSSAPI. sssd requires this file at
+  # exactly 0600 or it refuses to start ("Insecure permissions").
+  - path: /etc/sssd/sssd.conf
+    permissions: "0600"
+    content: |
+      [sssd]
+      services = nss, pam
+      domains = ${domain}
+
+      [domain/${domain}]
+      id_provider = ldap
+      ldap_uri = ${ldap_uri}
+      ldap_search_base = ${base_dn}
+      ldap_schema = rfc2307
+      auth_provider = krb5
+      krb5_server = ${kdc_host_port}
+      krb5_realm = ${krb5_realm}
+      # iron-kdc doesn't implement kpasswd (password-change protocol) yet
+      # -- not in scope for #7, documented as a separate future gap.
+      krb5_validate = false
+      cache_credentials = true
+      enumerate = false
+
+runcmd:
+  - [ systemctl, enable, --now, qemu-guest-agent ]
+  # Wires SSSD into nsswitch.conf + the PAM stack (this is what
+  # authselect exists for -- avoids hand-editing either file directly,
+  # and is trivially reversible with `authselect select sssd` ->
+  # `authselect select minimal`). with-mkhomedir auto-creates
+  # /home/<user> on first login via pam_oddjob_mkhomedir, since iron-ldap
+  # entries carry homeDirectory but nothing actually creates it.
+  - [ authselect, select, "sssd", "with-mkhomedir", "--force" ]
+  - [ systemctl, enable, --now, oddjobd ]
+  - [ systemctl, restart, sssd ]
+
+final_message: "${fqdn} sssd e2e test host cloud-init complete in $UPTIME seconds"
