@@ -143,8 +143,12 @@ where
     let session_key = authenticator.subkey.as_ref().map(|k| k.value.to_vec()).unwrap_or_else(|| ticket_session_key.clone());
 
     let output_token = if gss_flags & GSS_C_MUTUAL_FLAG != 0 {
-        let (ap_rep_now, _) = iron_kdc::time::now();
-        let enc_ap_rep_part = EncApRepPart { ctime: ap_rep_now, cusec: 0.into(), subkey: None, seq_number: None };
+        // RFC 4120 §3.2.4: "The timestamp and microsecond field used in
+        // the reply MUST be the client's timestamp and microsecond field
+        // (as provided in the authenticator)" -- not a freshly-generated
+        // one; the client checks these back against what it sent.
+        let enc_ap_rep_part =
+            EncApRepPart { ctime: authenticator.ctime.clone(), cusec: authenticator.cusec.clone(), subkey: None, seq_number: None };
         let enc_bytes = rasn::der::encode(&enc_ap_rep_part)?;
         // Key usage 12, encrypted under the *ticket* session key (RFC
         // 4120 §3.2.5), not the subkey-derived base key.
