@@ -37,30 +37,42 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(format!("malformed AP-REQ: {e}")), None).into(),
     };
 
-    // Decrypt the TGT under krbtgt's key for the etype/kvno it claims.
+    // Decrypt the presented ticket under ITS OWN issuer's key -- looked
+    // up from the ticket's own sname/realm, not assumed to always be our
+    // own realm's plain krbtgt. This is what makes cross-realm referral
+    // chaining (#6, D8) structurally correct: a same-realm TGT's issuer
+    // is "krbtgt/OURS@OURS" either way, but a cross-realm referral
+    // ticket's issuer is "krbtgt/THEIRS@OURS" -- the inter-realm key we
+    // share with the other realm, stored as an ordinary principal here
+    // under that name (via iron-kdc-ctl, same mechanism as any other
+    // principal). Model-correct but not live-tested beyond one realm
+    // (D10): there's no second realm/partition deployed yet to chain
+    // against.
+    let issuer_principal = format!(
+        "{}@{}",
+        principal_name_to_string(&ap_req.ticket.sname),
+        crate::realm_to_string(&ap_req.ticket.realm)
+    );
     let mut store = app.store.lock().await;
-    let krbtgt_dn = match store
-        .lookup_by_index(&app.base_dn, crate::principal::ATTR_PRINCIPAL_NAME, &format!("{}@{}", principal_name_to_string(&kdc_sname), crate::realm_to_string(realm)))
-        .await
-    {
+    let issuer_dn = match store.lookup_by_index(&app.base_dn, crate::principal::ATTR_PRINCIPAL_NAME, &issuer_principal).await {
         Ok(dns) if dns.len() == 1 => dns.into_iter().next().unwrap(),
-        _ => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some("krbtgt principal not provisioned for this realm".into()), None).into(),
+        _ => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(format!("no key for ticket issuer {issuer_principal}")), None).into(),
     };
-    let krbtgt_entry = match store.get_entry(&krbtgt_dn).await {
+    let issuer_entry = match store.get_entry(&issuer_dn).await {
         Ok(Some(e)) => e,
-        _ => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some("krbtgt principal entry missing".into()), None).into(),
+        _ => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some("ticket issuer principal entry missing".into()), None).into(),
     };
-    let krbtgt_keys = match crate::principal::keys(&krbtgt_entry) {
+    let issuer_keys = match crate::principal::keys(&issuer_entry) {
         Ok(k) => k,
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(e.to_string()), None).into(),
     };
     let Ok(tkt_enctype) = Enctype::try_from(ap_req.ticket.enc_part.etype) else {
         return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some("unsupported ticket etype".into()), None).into();
     };
-    let Some(krbtgt_key) = krbtgt_keys.iter().find(|k| k.enctype == tkt_enctype) else {
-        return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some("krbtgt has no matching key for this ticket".into()), None).into();
+    let Some(issuer_key) = issuer_keys.iter().find(|k| k.enctype == tkt_enctype) else {
+        return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some("ticket issuer has no matching key for this ticket's etype".into()), None).into();
     };
-    let enc_ticket_bytes = match kerberos::decrypt(&app.fips, tkt_enctype, &krbtgt_key.key, 2, &ap_req.ticket.enc_part.cipher) {
+    let enc_ticket_bytes = match kerberos::decrypt(&app.fips, tkt_enctype, &issuer_key.key, 2, &ap_req.ticket.enc_part.cipher) {
         Ok(b) => b,
         Err(_) => return krberror::build(KRB_AP_ERR_BAD_INTEGRITY, &realm_str, kdc_sname, Some("failed to decrypt ticket".into()), None).into(),
     };
