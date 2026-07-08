@@ -60,14 +60,26 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         // way as having no usable preauth method and fails client-side
         // with "Generic preauthentication failure" before ever sending
         // a second request, which is exactly what was observed live).
+        //
+        // Also required (found via the same live debugging, by reading
+        // the real kdc_preauth_encts.c's enc_ts_get -- confirmed with
+        // gdb that MIT krb5's client never even calls its key-derivation
+        // function without this): a bare PA-ENC-TIMESTAMP (type 2, empty
+        // value) marker entry alongside PA-ETYPE-INFO2. Without it, the
+        // client has salt/etype info but no signal that the mechanism
+        // itself is actually offered, so it silently produces no retry
+        // padata at all and reports the same generic failure.
         let etype_info2: Vec<EtypeInfo2Entry> = client_keys
             .iter()
             .filter_map(|k| GeneralString::from_bytes(&client_salt).ok().map(|salt| EtypeInfo2Entry { etype: k.enctype.etype_number(), salt: Some(salt), s2kparams: None }))
             .collect();
-        let e_data = rasn::der::encode(&etype_info2)
-            .ok()
-            .map(|encoded| vec![PaData { r#type: PA_ETYPE_INFO2, value: encoded.into() }])
-            .and_then(|method_data| krberror::encode_method_data(&method_data).ok());
+        let e_data = rasn::der::encode(&etype_info2).ok().and_then(|encoded| {
+            let method_data = vec![
+                PaData { r#type: PA_ENC_TIMESTAMP, value: Vec::new().into() },
+                PaData { r#type: PA_ETYPE_INFO2, value: encoded.into() },
+            ];
+            krberror::encode_method_data(&method_data).ok()
+        });
         return krberror::build(KDC_ERR_PREAUTH_REQUIRED, &realm_str, kdc_sname, Some("additional pre-authentication required".into()), e_data).into();
     };
 
