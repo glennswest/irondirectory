@@ -1,0 +1,18 @@
+# Example /etc/iron-kdcd/iron-kdcd.conf for the iron-kdcd.service unit.
+# Loaded via systemd's EnvironmentFile=-, so a missing file is fine (the
+# leading '-' makes it optional), but iron-kdcd will refuse to start
+# without these set somewhere, and refuses outright if the FIPS provider
+# isn't active (a KDC that can't do Kerberos crypto can't do anything).
+
+IRON_KDC_FASTETCD_ENDPOINT=http://etcd.g8.lo:2379
+IRON_KDC_PARTITION_ID=g10
+IRON_KDC_BASE_DN=dc=g10,dc=lo
+IRON_KDC_REALM=G10.LO
+
+#IRON_KDC_LISTEN=0.0.0.0:88
+
+# Required: point OPENSSL_CONF at a config that activates the OS-shipped
+# fips.so provider (see docs/FIPS.md and crates/crypto/testdata/fips-dev.cnf
+# for an example). Unlike iron-ldapd, iron-kdcd will not start at all
+# without this.
+OPENSSL_CONF=/etc/iron-kdcd/fips.cnf
