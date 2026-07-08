@@ -5,6 +5,24 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.9.0] — 2026-07-08
+
+### 2026-07-08 (post-v0.8.0)
+- **feat(kdc):** `iron-kdc-ctl export-keytab <principal> <output-file>`
+  (#8) -- exposes the existing keytab-write code (built for #5, never
+  had a CLI command in front of it) so a service principal's key can be
+  handed to another daemon without ever transmitting the plaintext
+  password. Verified real cross-project interop on two disposable VMs:
+  a `host/<fqdn>@REALM` keytab let a real `sshd` authenticate a login
+  via GSSAPI SSO (confirmed `Accepted gssapi-with-mic` in sshd's log,
+  not a silent publickey fallback); a `cifs/<fqdn>@REALM` keytab let a
+  real `rocketsmbd` (sister project) accept a `mount -t cifs -o
+  sec=krb5` session with md5-verified 64 MiB read/write -- the first
+  verification of `iron-kdc`'s Kerberos implementation against a GSS
+  acceptor that isn't `iron-ldap` itself or MIT krb5's client tools.
+  macOS LDAP/krb5 bind carved out to a separate issue (#22), deferred
+  rather than tested on a daily-driver Mac.
+
 ## [v0.8.0] — 2026-07-08
 
 ### 2026-07-08 (post-v0.7.0)

@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.8.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.9.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -20,9 +20,11 @@ deployment live on il1/il2/il3.g8.lo; #5 iron-kdc CLOSED: AS-REQ/AS-REP
 with real dig + kinit DNS autodiscovery; #7 SASL/GSSAPI bind CLOSED:
 `iron-ldap` as a GSS-API acceptor over Kerberos V5, verified against
 real `ldapsearch -Y GSSAPI` and a full SSSD stack -- getent/id/su all
-working end to end against real iron-ldap + iron-kdc). See CHANGELOG.md
-for the running list; Live infrastructure below has the verification
-details.
+working end to end against real iron-ldap + iron-kdc; #8 RHEL enrollment
++ host keytab CLOSED: new `iron-kdc-ctl export-keytab`, verified real
+GSSAPI SSH SSO and real rocketsmbd `sec=krb5` interop against iron-kdc,
+macOS bind carved out to #22). See CHANGELOG.md for the running list;
+Live infrastructure below has the verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -349,6 +351,36 @@ Deliberately scoped out (documented, not silent): channel binding
 verification, delegation (`GSS_C_DELEG_FLAG`), and integrity/
 confidentiality security layers for LDAP traffic itself.
 
+**RHEL enrollment + host keytab; GSSAPI SSH SSO + rocketsmbd `sec=krb5`
+(#8)** — new `iron-kdc-ctl export-keytab <principal> <output-file>`
+subcommand: the MIT keytab writer has existed since #5 but never had a
+CLI in front of it. Writes every enctype currently stored for the
+principal (mirroring a real KDC's `ktadd`), so a service principal's key
+can be handed to another daemon without ever transmitting the plaintext
+password.
+
+Verified on two disposable Fedora VMs (`deploy/terragrunt/phase1-verify/`,
+destroyed afterward): a `host/<fqdn>@REALM` keytab installed at
+`/etc/krb5.keytab` let a real `sshd` (`GSSAPIAuthentication yes`)
+authenticate a login via Kerberos — confirmed in `sshd`'s own log
+(`Accepted gssapi-with-mic for fedora ... fedora@REALM`, not a silent
+publickey fallback, since the client's `fedora` account also has an
+authorized SSH key). Separately, a `cifs/<fqdn>@REALM` keytab let a real
+**rocketsmbd** (the SMB sister project, its own #31-#37 Kerberos work,
+built with `--features kerberos`) accept a `mount -t cifs -o sec=krb5`
+session — confirmed in rocketsmbd's own log (`kerberos principal
+"fedora@REALM" authenticated`), with 64 MiB of md5-verified read/write
+over the mount. This is the first real cross-project interop check of
+`iron-kdc`'s Kerberos implementation against a GSS acceptor that isn't
+`iron-ldap` itself or MIT krb5's client tools — rocketsmbd had already
+verified its own Kerberos support against MIT krb5/Samba (its #37); this
+proves `iron-kdc`'s tickets are standards-compliant enough for a third,
+independently-implemented GSS acceptor to accept them.
+
+macOS LDAP/krb5 bind carved out to #22 — would mean configuring real
+directory-services/Kerberos settings on an actual working Mac rather
+than a disposable VM, deferred rather than done inline.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
@@ -460,8 +492,26 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       scope):** channel binding verification, delegation
       (`GSS_C_DELEG_FLAG`), integrity/confidentiality security layers for
       LDAP traffic itself (StartTLS/LDAPS covers this instead).
-- [ ] RHEL enrollment (realmd/adcli or sssd krb5+ldap) + host keytab; verify
-      GSSAPI SSO to SSH and rocketsmbd `sec=krb5`. macOS LDAP/krb5 bind.
+- [x] RHEL enrollment + host keytab; GSSAPI SSO to SSH and rocketsmbd
+      `sec=krb5` (#8, CLOSED): new `iron-kdc-ctl export-keytab`
+      subcommand (the keytab I/O code has existed since #5 but never
+      had a CLI in front of it) hands a service principal's key to
+      another daemon as a keytab file without ever transmitting the
+      plaintext password. Verified on disposable Fedora VMs: a real
+      `sshd` with `GSSAPIAuthentication yes` + a `host/<fqdn>@REALM`
+      keytab authenticated a login via `Accepted gssapi-with-mic`
+      (confirmed in sshd's own log, ruling out a silent publickey
+      fallback); a real `rocketsmbd` (sister project, its own #31-#37)
+      built with `--features kerberos` and a `cifs/<fqdn>@REALM` keytab
+      accepted a `mount -t cifs -o sec=krb5` session (`kerberos
+      principal "fedora@REALM" authenticated`, confirmed in
+      rocketsmbd's own log) with md5-verified 64 MiB read/write --
+      the first real cross-project interop check of `iron-kdc`'s
+      Kerberos implementation against a GSS acceptor that isn't
+      `iron-ldap` itself or MIT krb5 client tools. macOS LDAP/krb5 bind
+      carved out to #22 (deferred -- would mean configuring real
+      directory-services/Kerberos settings on an actual working Mac,
+      not a disposable VM).
 
 #### Phase 1 — federation machinery (IN THE BASE, D8/D9/D10)
 Built as first-class in the base with **happy-path coverage** so the code paths
