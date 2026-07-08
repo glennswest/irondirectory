@@ -51,7 +51,13 @@ pub fn wrap(ctx: &FipsContext, enctype: Enctype, session_key: &[u8], key_usage: 
     // header[6..8] RRC = 0 (no rotation needed for a freshly-built token)
     // header[8..16] SND_SEQ = 0 (see module docs)
 
-    let mic = kerberos::checksum(ctx, enctype, session_key, key_usage, &sign_input(plaintext, &header))?;
+    // RFC 4121 4.2.4: "Both the EC field and the RRC field in the token
+    // header SHALL be filled with zeroes for the purpose of calculating
+    // the checksum" -- the OUTPUT header keeps the real EC value (set
+    // above); only the checksum INPUT uses a zeroed copy.
+    let mut header_for_checksum = header;
+    header_for_checksum[4..6].copy_from_slice(&[0, 0]);
+    let mic = kerberos::checksum(ctx, enctype, session_key, key_usage, &sign_input(plaintext, &header_for_checksum))?;
 
     let mut out = Vec::with_capacity(16 + plaintext.len() + mic.len());
     out.extend_from_slice(&header);
