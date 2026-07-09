@@ -26,29 +26,40 @@ with stale `vm_id`s from a since-changed allowed range.
 ```sh
 brew install hashicorp/tap/terraform terragrunt
 # Proxmox node must trust your ~/.ssh/id_rsa.pub (root@pve.g8.lo).
+
+# Day to day: the token lives in .env at the repo root (gitignored,
+# chmod 600) — source it, don't mint a fresh one:
+source .env   # from the repo root; adjust the path from a unit subdir
 ```
 
-**Never use a `root@pam` token with `--privsep 0`.** That grants the
-token full root privileges over every VM on the node, with nothing
-stopping a misconfigured `vm_id` from touching infrastructure this repo
-doesn't own -- this is exactly how a real incident happened (a picked
-`vm_id` collided with an unrelated, important VM, and `terraform
-destroy` deleted it). Use the dedicated, pool-scoped service account
-instead:
+**Never use a `root@pam` token, with or without `--privsep 0`.** A
+`root@pam` token has no ACL boundary at all -- nothing stops a
+misconfigured `vm_id` from touching infrastructure this repo doesn't
+own. This is exactly how a real incident happened: a picked `vm_id`
+collided with an unrelated, important VM, and `terraform destroy`
+deleted it -- made worse because the token secret was never persisted
+anywhere retrievable, so every operator minted a *fresh* unrestricted
+root token rather than reusing one (five of them, over time: terraform,
+irondir, terraform-cli, -cli-2, -cli-3). Full writeup: terraform-modules
+CLAUDE.md, "Incident: 2026-07-08".
+
+If `.env`'s token is genuinely lost, Proxmox never re-displays a token
+secret after creation, so you'll need a new one -- always the
+dedicated, pool-scoped service account, never `root@pam`:
 
 ```sh
 # One-time, as root on pve.g8.lo: a service user + token scoped to
-# EXACTLY the terraform-managed pool and the storages this repo uses --
-# never root@pam, never unscoped.
+# EXACTLY the terraform-managed pool and the storages this repo uses.
 pveum user add terraform-svc@pve
 pveum role add TerraformOperator -privs "VM.Allocate,VM.Config.Disk,VM.Config.CPU,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.Config.Cloudinit,VM.Monitor,VM.PowerMgmt,VM.Console,Datastore.AllocateSpace,Datastore.Audit,Pool.Audit,Sys.Audit"
 pveum acl modify /pool/terraform-managed --users terraform-svc@pve --roles TerraformOperator
-pveum user token add terraform-svc@pve irondirectory --privsep 1
-pveum acl modify /pool/terraform-managed --tokens 'terraform-svc@pve!irondirectory' --roles TerraformOperator
-pveum acl modify /storage/<vm_datastore> --tokens 'terraform-svc@pve!irondirectory' --roles TerraformOperator
-pveum acl modify /storage/<snippet_datastore> --tokens 'terraform-svc@pve!irondirectory' --roles TerraformOperator
+pveum user token add terraform-svc@pve <name> --privsep 1
+pveum acl modify /pool/terraform-managed --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
+pveum acl modify /storage/<vm_datastore>      --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
+pveum acl modify /storage/<snippet_datastore> --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
 
-export PROXMOX_API_TOKEN='terraform-svc@pve!irondirectory=<the-value>'
+export PROXMOX_API_TOKEN='terraform-svc@pve!<name>=<the-value>'
+# ...then save it into .env (chmod 600, gitignored) so it isn't lost again.
 ```
 
 **Always check for VMID conflicts against live state before writing a

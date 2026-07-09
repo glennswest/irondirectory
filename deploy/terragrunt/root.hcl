@@ -13,9 +13,11 @@ locals {
 
 # Provider generated into every unit. Token comes from the environment so it
 # never lands in code or state:  export PROXMOX_API_TOKEN='terraform-svc@pve!irondirectory=...'
-# Must be a token for the dedicated, pool-scoped terraform-svc@pve service
-# account (see README.md) -- never a root@pam token, which has no ACL
-# boundary and can touch VMs this repo doesn't own.
+# -- source it from .env at the repo root (gitignored, chmod 600), don't
+# mint a fresh one; Proxmox never re-displays a token secret after
+# creation. Must be the dedicated, pool-scoped terraform-svc@pve service
+# token -- root@pam tokens are BANNED for this project (see README.md
+# and terraform-modules CLAUDE.md, "Incident: 2026-07-08").
 generate "provider" {
   path      = "provider.tf"
   if_exists = "overwrite_terragrunt"

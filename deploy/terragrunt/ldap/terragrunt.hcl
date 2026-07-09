@@ -21,7 +21,7 @@ terraform {
   # rather than needing a dedicated deploy key -- this unit is run from
   # dev.g8.lo (on the g8 LAN, stable path to the Proxmox API) rather than
   # a workstation with its own GitHub SSH key.
-  source = "git::https://github.com/glennswest/terraform-modules.git//modules/proxmox-fedora-vm?ref=v0.1.0"
+  source = "git::https://github.com/glennswest/terraform-modules.git//modules/proxmox-fedora-vm?ref=v0.2.0"
 }
 
 locals {
