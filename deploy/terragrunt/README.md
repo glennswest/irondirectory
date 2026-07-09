@@ -8,13 +8,20 @@ module by a pinned `?ref=` tag.
 ```
 deploy/terragrunt/
   root.hcl            # provider + token wiring (PROXMOX_API_TOKEN from env), once
-  get-free-vmid.sh    # queries live state for a genuinely-unused vm_id -- run before every new unit
   etcd/               # unit: dm1/dm2/dm3.g8.lo — the dedicated etcd backend (D1), pinned to an older
                        # module version (vm_id 131-133, outside the current 2000-2100 range)
   ldap/               # unit: il1/il2/il3.g8.lo — redundant iron-ldap (vm_id 134-136, same as above)
     terragrunt.hcl
     templates/etcd-user-data.yaml.tftpl
 ```
+
+No local copy of `get-free-vmid.sh` lives in this repo -- the canonical
+copy is `terraform-modules`' own, at
+`examples/terragrunt/get-free-vmid.sh` (sibling checkout: `../../../terraform-modules/examples/terragrunt/get-free-vmid.sh`
+from this directory, or `git clone` it if missing). One copy, not two
+drifting in parallel -- its lock/reservation files are keyed by the
+target Proxmox host, so this repo and any other project pointed at the
+same node share the same protection automatically.
 
 Throwaway validation units (e.g. for a specific GitHub issue) come and
 go -- built with `terragrunt apply`, `destroy`ed once done, and their
@@ -64,13 +71,14 @@ export PROXMOX_API_TOKEN='terraform-svc@pve!<name>=<the-value>'
 
 **Always check for VMID conflicts against live state before writing a
 `vm_id` into any `terragrunt.hcl`** -- never pattern-guess "next free
-after the ones I know about". Use `./get-free-vmid.sh [min] [max]`
-(defaults to the module's current allowed range, 2000-2100): it queries
-`qm list` on the real node and prints the lowest genuinely unused ID.
-The module (`proxmox-fedora-vm` v0.3.0+) also validates every `vm_id`
-falls within `vm_id_min`/`vm_id_max` and places every VM in the
-`terraform-managed` pool the token is ACL-scoped to -- two independent
-layers, but neither substitutes for actually checking.
+after the ones I know about". Use terraform-modules'
+`examples/terragrunt/get-free-vmid.sh [min] [max]` (defaults to the
+module's current allowed range, 2000-2100): it queries `qm list` on the
+real node and prints the lowest genuinely unused ID. The module
+(`proxmox-fedora-vm` v0.3.0+) also validates every `vm_id` falls within
+`vm_id_min`/`vm_id_max` and places every VM in the `terraform-managed`
+pool the token is ACL-scoped to -- two independent layers, but neither
+substitutes for actually checking.
 
 ## etcd cluster
 
