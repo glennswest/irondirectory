@@ -11,7 +11,12 @@
 # written here -- never pattern-guessed. Uses test-lvm-thin (not
 # local-lvm) per the post-incident storage-isolation practice: test VM
 # disks stay off any storage that also hosts hand-created/production
-# VMs.
+# VMs. snippet_datastore is its own dedicated, snippets-only storage
+# (terraform-snippets) for the same reason: Proxmox's Datastore.AllocateSpace
+# permission isn't scoped by content type, so a token granted access to
+# "local" for snippets could also touch its ISOs/vztmpl/import content --
+# an isolated storage with nothing else on it closes that gap entirely
+# rather than accepting it as residual risk.
 
 include "root" {
   path = find_in_parent_folders("root.hcl")
@@ -35,6 +40,7 @@ inputs = {
   ci_ssh_public_keys = [local.ssh_key]
   tags               = ["terraform", "fedora", "irondirectory", "config-verify", "throwaway"]
   vm_datastore       = "test-lvm-thin"
+  snippet_datastore  = "terraform-snippets"
 
   vms = {
     configverify = {

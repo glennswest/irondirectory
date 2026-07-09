@@ -62,12 +62,26 @@ pveum role add TerraformOperator -privs "VM.Allocate,VM.Config.Disk,VM.Config.CP
 pveum acl modify /pool/terraform-managed --users terraform-svc@pve --roles TerraformOperator
 pveum user token add terraform-svc@pve <name> --privsep 1
 pveum acl modify /pool/terraform-managed --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
-pveum acl modify /storage/<vm_datastore>      --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
-pveum acl modify /storage/<snippet_datastore> --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
+pveum acl modify /storage/<vm_datastore> --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
+
+# Snippets get their OWN dedicated storage, not "local" -- Proxmox's
+# Datastore.AllocateSpace permission isn't scoped by content type, so a
+# token granted "local" for snippets could also touch its ISOs/vztmpl/
+# import content (there is no such thing as "snippets-only" access to a
+# storage that also hosts other content). An isolated storage with
+# nothing else on it closes that gap instead of accepting it as residual
+# risk -- one-time setup:
+pvesm add dir terraform-snippets --path /var/lib/terraform-snippets --content snippets
+pveum acl modify /storage/terraform-snippets --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
 
 export PROXMOX_API_TOKEN='terraform-svc@pve!<name>=<the-value>'
 # ...then save it into .env (chmod 600, gitignored) so it isn't lost again.
 ```
+
+`vm_datastore` and `snippet_datastore` in every unit's `inputs` should be
+`test-lvm-thin` and `terraform-snippets` respectively -- never
+`local-lvm`/`local`, which also host hand-created/production VMs and
+other content this token has no reason to touch.
 
 **Always check for VMID conflicts against live state before writing a
 `vm_id` into any `terragrunt.hcl`** -- never pattern-guess "next free
