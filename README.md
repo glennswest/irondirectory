@@ -10,7 +10,7 @@ provides the **SMB file-server** half (SYSVOL/NETLOGON shares, Kerberos service
 acceptor). Together they form a clean-room, FIPS-clean alternative to a Windows
 or Samba domain controller.
 
-> **Status:** `v0.12.0` — Phase 0 done, Phase 1 underway. `iron-partition`
+> **Status:** `v0.13.0` — Phase 0 done, Phase 1 underway. `iron-partition`
 > (naming-context model), `iron-store` (partition-scoped DIT over fastetcd,
 > mTLS connection harness), `iron-crypto` (FIPS crypto facade over `ossl`,
 > incl. PBKDF2 password hashing and Kerberos AES key derivation/encryption),
@@ -20,9 +20,12 @@ or Samba domain controller.
 > validation), `iron-kdc` (Kerberos 5 KDC: AS-REQ/AS-REP with pre-auth,
 > TGS-REQ/TGS-REP, keytab I/O + export, **cross-realm `krbtgt` keys +
 > one-hop referral tickets chased end-to-end**), `iron-dns` (LDAP/Kerberos
-> SRV record publishing via MicroDNS), and `iron-config` (**child-domain
+> SRV record publishing via MicroDNS), `iron-config` (**child-domain
 > provisioning**: persists the PartitionRegistry in the forest configuration
-> partition, real LDAP + Kerberos referrals wired to it) are real and
+> partition, real LDAP + Kerberos referrals wired to it), and `iron-gc`
+> (**watch-fed Global Catalog aggregator**, ports 3268/3269: a live,
+> continuously-updated partial replica across every domain partition in a
+> forest) are real and
 > verified against a live fastetcd cluster with real `openldap-clients`,
 > `krb5-workstation`, `dig`, a full **SSSD** stack (`id_provider=ldap` +
 > `auth_provider=krb5`, real `getent`/`id`/`su` end to end), a real `sshd`

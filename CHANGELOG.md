@@ -5,6 +5,40 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.13.0] — 2026-07-10
+
+### 2026-07-10 (post-v0.12.0)
+- **feat(gc):** New `iron-gc` crate: watch-fed Global Catalog aggregator
+  (#12), ports 3268/3269. Subscribes to every `Domain`-kind partition
+  in a forest's persisted `PartitionRegistry` (#9, `IRON_GC_CONFIG_*`
+  env vars) and, for each, spawns a task that connects directly to
+  that partition's cluster and maintains a live in-memory partial
+  replica (`aggregate::Aggregate`) fed by a real etcd watch stream --
+  not a one-time snapshot. Watching starts before the initial
+  bootstrap scan so a write racing the bootstrap is re-applied
+  (idempotent) rather than permanently missed. Attribute projection
+  (the "partial" in partial replica) happens at ingest time, per D9's
+  "no directory-content leakage" language -- a conservative default
+  whitelist (`objectclass, cn, uid, mail, displayname, sn, givenname,
+  uidnumber, gidnumber`), tunable via `IRON_GC_ATTRIBUTES`. Serves
+  anonymous bind + read-only search reusing `iron-ldap`'s wire framing,
+  filter matching, TLS acceptor, and rootDSE builder rather than
+  reimplementing them; no write surface (add/delete/modify/compare/
+  modify-DN) at all. Same engine intended to power #13's cross-forest
+  federated GAL.
+
+Verified live against a fresh two-partition forest (`g12gc` parent +
+`g12gc-emea` child): a real `ldapsearch` subtree search from the root
+sees entries from both partitions in one response; scoping the search
+to the child partition alone returns only its entry; rootDSE's
+`namingContexts` lists all three partitions. With `iron-gcd` left
+running throughout, a new entry added via `iron-kdc-ctl set-password`
+appeared in a later search with no daemon restart, and deleting an
+entry directly (`fastetcd-ctl del`) was reflected just as live --
+proving the aggregator is genuinely watch-fed, not a snapshot. One
+forest, one process (D10) -- multi-forest aggregation and
+staleness-bound/scale proving are out of scope for this issue.
+
 ## [v0.12.0] — 2026-07-10
 
 ### 2026-07-10 (post-v0.11.0)

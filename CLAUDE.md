@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.12.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.13.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -34,9 +34,14 @@ real `ldapsearch -C` chasing a referral one hop to real data; #11
 cross-realm `krbtgt` keys + one-hop referral tickets CLOSED: `iron-kdc`
 reads the #9 registry the same way for TGS-REQ referrals, verified
 with two real `iron-kdcd` realms and real `kinit`/`kvno` chasing a
-referral ticket one hop to a real service ticket). See CHANGELOG.md
-for the running list; Live infrastructure below has the verification
-details.
+referral ticket one hop to a real service ticket; #12 iron-gc CLOSED:
+new `iron-gc` crate, a watch-fed Global Catalog aggregator maintaining
+a live in-memory partial replica across every domain partition in a
+forest (ports 3268/3269), verified with a real two-partition forest and
+a real `ldapsearch` seeing entries from both partitions in one search,
+plus a live-added and a live-deleted entry both reflected without
+restarting the daemon). See CHANGELOG.md for the running list; Live
+infrastructure below has the verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -574,6 +579,61 @@ shortcut trusts are out of scope — one hop only, matching #10's LDAP
 referral scope exactly. The topology is a startup snapshot, not
 watched, same limitation as `iron-ldapd`'s referral wiring.
 
+**iron-gc: watch-fed Global Catalog aggregator (#12)** — new crate.
+Subscribes to every `Domain`-kind partition in a forest's persisted
+`PartitionRegistry` (#9, loaded via new `IRON_GC_CONFIG_*` env vars,
+same startup-snapshot bootstrap as #10/#11) and, for each, spawns a
+task (`watch::run`) that connects directly to that partition's own
+cluster and maintains a live in-memory partial replica
+(`aggregate::Aggregate`) — fed by an actual etcd watch stream on that
+partition's subtree, not a one-time scan. Watching starts *before* the
+initial bootstrap scan so a write racing the bootstrap gets re-applied
+(idempotent) rather than permanently missed. Attribute projection (the
+"partial" in partial replica) happens at ingest, before an attribute
+ever enters the replica — the stricter reading of D9's "no
+directory-content leakage" language, and the reason the read path
+needs no `userPassword`-style carve-out the way `iron-ldap`'s does: it
+was never admitted into the aggregate to begin with. A conservative
+default whitelist (`objectclass, cn, uid, mail, displayname, sn,
+givenname, uidnumber, gidnumber`), tunable via `IRON_GC_ATTRIBUTES` —
+#13's cross-forest GAL will need its own, likely stricter, list.
+
+Serves anonymous bind + read-only search on ports 3268 (plaintext) and
+3269 (implicit TLS), matching AD's real GC port convention, over a
+small purpose-built connection handler reusing `iron_ldap`'s wire
+framing (`conn::Conn`, `framing`), filter matching (`filter::matches`),
+TLS acceptor (`tls::build_acceptor`), and rootDSE builder
+(`rootdse::build`, unmodified — it already handles a multi-domain
+registry correctly by simply omitting `defaultNamingContext` when more
+than one `Domain` partition exists, exactly the GC's situation) rather
+than reimplementing any of them. No StartTLS on the plaintext port and
+no add/delete/modify/compare/modify-DN surface at all — the GC is
+read-only and fed exclusively by watch streams, documented
+simplifications rather than silently absent.
+
+Verified live against a fresh two-partition forest (`g12gc` parent +
+`g12gc-emea` child, bootstrapped the same way as #9's tests) with real
+entries seeded via `iron-kdc-ctl set-password` (a convenient way to
+write ordinary `Entry` records without needing a running `iron-ldapd`)
+and a real `ldapsearch` against `iron-gcd`: a subtree search from the
+root sees entries from *both* partitions in one search response;
+scoping the search base to the child partition alone returns only that
+partition's entry; rootDSE's `namingContexts` lists all three
+partitions (both domains + the configuration partition). Critically,
+also verified the aggregator is genuinely watch-fed, not a snapshot:
+with `iron-gcd` left running throughout, a *new* entry added via
+`iron-kdc-ctl set-password` appeared in a subsequent search with no
+daemon restart, and deleting an entry directly (`fastetcd-ctl del`)
+removed it from a subsequent search just as live — both proven via the
+`/health` endpoint's `ready_partitions`/`entries` counters as well as
+`ldapsearch` output.
+
+Happy-path only (D10): one process, one forest; the topology (which
+partitions exist) is a startup snapshot, same limitation as #10/#11's
+`AppState::topology`. Multi-forest aggregation (the cross-forest
+federated GAL, #13) and staleness-bound/scale proving are explicitly
+out of scope for this issue.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.2.0`
@@ -791,8 +851,25 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       uses it against the child KDC (via `[capaths]`) to get the real
       service ticket. One hop only (D10), same scope as #10's LDAP
       referrals.
-- [ ] `iron-gc`: watch-fed Global Catalog aggregator (read-only partial replica,
-      port 3268/3269); same engine powers the D9 federated GAL
+- [x] `iron-gc`: watch-fed Global Catalog aggregator (#12, CLOSED): new
+      crate, port 3268/3269, subscribes to every domain partition in a
+      forest's persisted `PartitionRegistry` (#9) and maintains a live
+      in-memory partial replica via real per-partition etcd watch
+      streams (watching starts *before* the initial bootstrap scan, so
+      a racing write is re-applied rather than permanently missed), not
+      a snapshot. Attribute projection (the whitelist) happens at
+      ingest, not read time -- the stricter reading of D9's
+      no-leakage requirement this same engine will need once #13
+      configures it for the cross-forest GAL. Serves anonymous bind +
+      read-only search reusing `iron-ldap`'s wire framing/filter/
+      rootDSE code, no write surface at all. Verified live against a
+      fresh two-partition forest: one `ldapsearch` sees entries from
+      both partitions; a partition-scoped search returns only that
+      partition's entry; a *new* entry added while the daemon kept
+      running (no restart) appeared in a later search, and a direct
+      delete was reflected just as live -- proving it's genuinely
+      watch-fed, not a one-time snapshot. One forest, one process
+      (D10) -- multi-forest aggregation is #13's job.
 - [ ] Federated GAL: whitelisted-attribute publish per forest → top-level
       read-only address book (no cross-boundary directory-content leakage)
 
