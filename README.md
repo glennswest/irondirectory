@@ -10,16 +10,16 @@ provides the **SMB file-server** half (SYSVOL/NETLOGON shares, Kerberos service
 acceptor). Together they form a clean-room, FIPS-clean alternative to a Windows
 or Samba domain controller.
 
-> **Status:** `v0.15.0` — Phase 0 done, Phase 1 underway (Phase 1.5's
+> **Status:** `v0.16.0` — Phase 0 done, Phase 1 underway (Phase 1.5's
 > OpenShift LDAP identity provider also ships, docs-only — see
 > `docs/OPENSHIFT-LDAP-IDP.md`). `iron-partition`
 > (naming-context model), `iron-store` (partition-scoped DIT over fastetcd,
 > mTLS connection harness), `iron-crypto` (FIPS crypto facade over `ossl`,
 > incl. PBKDF2 password hashing and Kerberos AES key derivation/encryption),
 > `iron-ldap` (rootDSE, anonymous + authenticated bind, **SASL/GSSAPI bind**,
-> search, add/delete/modify/compare/modify-DN, StartTLS/LDAPS, **registry-driven
-> cross-NC referrals chased one hop end-to-end**, AD/RFC 2307 schema
-> validation), `iron-kdc` (Kerberos 5 KDC: AS-REQ/AS-REP with pre-auth,
+> search, add/delete/modify/compare/modify-DN, StartTLS/LDAPS, **RFC 4532
+> WhoAmI**, **registry-driven cross-NC referrals chased one hop end-to-end**,
+> AD/RFC 2307 schema validation), `iron-kdc` (Kerberos 5 KDC: AS-REQ/AS-REP with pre-auth,
 > TGS-REQ/TGS-REP, keytab I/O + export, **cross-realm `krbtgt` keys +
 > one-hop referral tickets chased end-to-end**), `iron-dns` (LDAP/Kerberos
 > SRV record publishing via MicroDNS), `iron-config` (**child-domain

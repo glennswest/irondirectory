@@ -5,6 +5,26 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.16.0] — 2026-07-10
+
+### 2026-07-10 (post-v0.15.0)
+- **feat(ldap):** Implement RFC 4532's WhoAmI extended operation --
+  found live during #14's verification (`ldapwhoami` failed against
+  `il1.g8.lo` with "extended operations are not implemented yet").
+  Each connection now tracks its current RFC 4513 §3 authzId
+  (`bound_identity`), updated on every terminal bind outcome (left
+  untouched mid-SASL-negotiation): `"dn:<dn>"` for simple bind,
+  `"u:<principal>"` for GSSAPI, empty for anonymous.
+  `handle_bind`/`handle_sasl_bind` now return this alongside the
+  `BindResponse`.
+
+Verified live against a disposable local `iron-ldapd` (anonymous,
+correct-password, and wrong-password cases all behave correctly), then
+deployed via a rolling rpm upgrade to the real `il1`/`il2`/`il3.g8.lo`
+fleet (previously stuck on a stale `0.5.0` package), each host
+confirmed `active` and re-verified with `ldapwhoami` + a plain rootDSE
+search before moving to the next.
+
 ## [v0.15.0] — 2026-07-10
 
 ### 2026-07-10 (post-v0.14.0)

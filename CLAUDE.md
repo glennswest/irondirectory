@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.15.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.16.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -51,7 +51,10 @@ restart; #14 OpenShift LDAP identity provider CLOSED: no new code
 (Phase 1.5's "ship first" surface) -- `docs/OPENSHIFT-LDAP-IDP.md`
 documents the config and reproduces OpenShift's exact search-then-bind
 flow against real `il1.g8.lo`, correct password succeeding and a wrong
-one failing closed). See CHANGELOG.md for the running list; Live
+one failing closed; ad hoc fix found during that pass: `iron-ldap` now
+implements RFC 4532's WhoAmI extended operation, deployed to the real
+`il1`/`il2`/`il3.g8.lo` fleet via a rolling rpm upgrade and verified
+live with `ldapwhoami`). See CHANGELOG.md for the running list; Live
 infrastructure below has the verification details.
 
 Version locations (keep in sync on every bump):
@@ -728,6 +731,30 @@ fails against `iron-ldap` with "extended operations are not implemented
 yet" -- that's RFC 4532's WhoAmI *extended operation*, unrelated to a
 plain bind and never used by OpenShift's LDAP IdP, so not a blocker for
 this issue; tracked separately.
+
+**RFC 4532 WhoAmI extended operation** — found during #14's
+verification: `ldapwhoami` against real `il1.g8.lo` failed with
+"extended operations are not implemented yet." Not related to
+OpenShift's LDAP IdP (which never issues WhoAmI, only plain binds), but
+a real, fixable gap. Each connection now tracks its current RFC 4513
+§3 authzId (`session::handle_connection`'s new `bound_identity`
+variable), updated on every *terminal* bind outcome (success or
+failure, but left untouched mid-SASL-negotiation, checked via
+`ResultCode::SaslBindInProgress`) -- `"dn:<dn>"` for a successful
+simple bind, `"u:<principal>"` for a successful GSSAPI bind, empty for
+anonymous. `handle_bind`/`handle_sasl_bind` now return this alongside
+the existing `BindResponse`.
+
+Verified live twice: first against a disposable local `iron-ldapd`
+instance (anonymous → `ldapwhoami` prints `anonymous`; correct password
+→ `dn:cn=whoamitest,dc=g14ext,dc=lo`; wrong password → the bind itself
+still fails, `Invalid credentials`, as before), then deployed for real
+via a rolling rpm upgrade (`cargo generate-rpm -p crates/ldap`, `dnf
+install` one host at a time) across the actual `il1`/`il2`/`il3.g8.lo`
+fleet -- each confirmed `active` and re-verified with both
+`ldapwhoami` and a plain rootDSE search immediately after its upgrade,
+before moving to the next host. All three were still running a stale
+`0.5.0` package from an earlier session; this pass brings them current.
 
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
