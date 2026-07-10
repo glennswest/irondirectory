@@ -32,7 +32,25 @@
 //! `dc=g11,dc=lo|ldap://ldap.g11.lo;dc=other,dc=lo|ldap://other.example.com`.
 //! An operation whose target DN falls at or below one of these base DNs
 //! gets a `Referral` result pointing at the paired URL instead of
-//! `NoSuchObject`/`OperationsError`.
+//! `NoSuchObject`/`OperationsError`. This is a fallback used when the
+//! registry-driven path below doesn't have a match (or isn't
+//! configured) -- for a deployment with no configuration partition set
+//! up (#9), e.g. the standalone il1/il2/il3 replicas.
+//!
+//!   IRON_LDAP_CONFIG_FASTETCD_ENDPOINT=  (unset = registry-driven referrals off)
+//!   IRON_LDAP_CONFIG_PARTITION_ID=
+//!   IRON_LDAP_CONFIG_BASE_DN=
+//!
+//! If all three are set, the forest's persisted `PartitionRegistry`
+//! (#9/#10, maintained by `iron-config-ctl`) is loaded once at startup
+//! and consulted *before* `IRON_LDAP_REFERRALS` when generating a
+//! referral -- an operation whose target DN resolves to another
+//! partition in the registry gets a `Referral` to that partition's
+//! `ldap_url` (set via `iron-config-ctl create-child`/`set-ldap-url`)
+//! automatically, no hand-maintained list to keep in sync as the
+//! topology changes. A snapshot, not watched -- picking up a topology
+//! change requires restarting this process (a later issue, not #10's
+//! happy-path scope).
 //!
 //! Authenticated simple bind (D4: PBKDF2 via the OpenSSL FIPS provider)
 //! needs OPENSSL_CONF pointing at a config that activates fips.so (see
@@ -68,6 +86,32 @@ fn parse_referrals(raw: &str) -> anyhow::Result<Vec<(iron_partition::Dn, String)
         .collect()
 }
 
+/// Loads the forest's persisted `PartitionRegistry` (#9/#10) if
+/// `IRON_LDAP_CONFIG_*` are all set, for registry-driven referrals.
+/// `None` if they're unset -- an intentional, silent no-op, not an
+/// error, since most deployments (e.g. il1/il2/il3) don't have a
+/// configuration partition set up and rely solely on
+/// `IRON_LDAP_REFERRALS`.
+async fn load_topology() -> anyhow::Result<Option<PartitionRegistry>> {
+    let (Some(endpoint), Some(pid), Some(base_dn)) =
+        (env("IRON_LDAP_CONFIG_FASTETCD_ENDPOINT"), env("IRON_LDAP_CONFIG_PARTITION_ID"), env("IRON_LDAP_CONFIG_BASE_DN"))
+    else {
+        return Ok(None);
+    };
+
+    let cluster = ClusterRef::plaintext([endpoint]);
+    let forest = ForestId::new(pid.clone())?; // placeholder, overwritten by the loaded record
+    let config_dn = iron_partition::Dn::parse(&base_dn)?;
+    let config_partition = Partition::configuration(pid, forest, config_dn.clone(), cluster)?;
+    let mut bootstrap_registry = PartitionRegistry::new();
+    bootstrap_registry.insert(config_partition)?;
+    let mut store = Store::connect(bootstrap_registry).await?;
+
+    let registry = iron_config::load_registry(&mut store, &config_dn).await?;
+    tracing::info!(partitions = registry.len(), "loaded forest topology for registry-driven referrals");
+    Ok(Some(registry))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -94,6 +138,8 @@ async fn main() -> anyhow::Result<()> {
     let store = Store::connect(registry).await?;
     let index_spec = IndexSpec::new(["cn", "mail", "uid"]);
 
+    let topology = load_topology().await?;
+
     // Built whenever cert/key are configured, independent of whether a
     // dedicated LDAPS port is also enabled -- this is what makes StartTLS
     // available on the plaintext listener even without IRON_LDAP_LDAPS_LISTEN.
@@ -105,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
         (None, None) => None,
         _ => anyhow::bail!("IRON_LDAP_TLS_CERT and IRON_LDAP_TLS_KEY must be set together"),
     };
-    let app = AppState::new(store, index_spec, tls_acceptor.clone(), referrals);
+    let app = AppState::new(store, index_spec, tls_acceptor.clone(), referrals, topology);
 
     let mut tasks = Vec::new();
 

@@ -84,7 +84,7 @@ where
             }
             ProtocolOp::SearchRequest(req) => {
                 let mut store = app.store.lock().await;
-                let ops = handle_search(&mut store, &req, &app.referrals).await;
+                let ops = handle_search(&mut store, &req, &app.referral_config()).await;
                 drop(store);
                 for op in ops {
                     let resp = LdapMessage::new(message_id, op);
@@ -94,35 +94,35 @@ where
                 }
             }
             ProtocolOp::AddRequest(req) => {
-                let resp = handle_add(&mut *app.store.lock().await, app.fips.as_ref(), &req, &app.index_spec, &app.referrals).await;
+                let resp = handle_add(&mut *app.store.lock().await, app.fips.as_ref(), &req, &app.index_spec, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::AddResponse(resp));
                 if write_message(&mut conn, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::DelRequest(req) => {
-                let resp = handle_delete(&mut *app.store.lock().await, &req, &app.index_spec, &app.referrals).await;
+                let resp = handle_delete(&mut *app.store.lock().await, &req, &app.index_spec, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::DelResponse(resp));
                 if write_message(&mut conn, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::ModifyRequest(req) => {
-                let resp = handle_modify(&mut *app.store.lock().await, app.fips.as_ref(), &req, &app.index_spec, &app.referrals).await;
+                let resp = handle_modify(&mut *app.store.lock().await, app.fips.as_ref(), &req, &app.index_spec, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::ModifyResponse(resp));
                 if write_message(&mut conn, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::CompareRequest(req) => {
-                let resp = handle_compare(&mut *app.store.lock().await, &req, &app.referrals).await;
+                let resp = handle_compare(&mut *app.store.lock().await, &req, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::CompareResponse(resp));
                 if write_message(&mut conn, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::ModDnRequest(req) => {
-                let resp = handle_moddn(&mut *app.store.lock().await, &req, &app.index_spec, &app.referrals).await;
+                let resp = handle_moddn(&mut *app.store.lock().await, &req, &app.index_spec, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::ModDnResponse(resp));
                 if write_message(&mut conn, &resp).await.is_err() {
                     return;
@@ -207,23 +207,38 @@ fn invalid_dn() -> LdapResult {
     LdapResult::new(ResultCode::InvalidDnSyntax, String::new().into(), "invalid DN".into())
 }
 
-/// A naming context this server doesn't host, if `dn` falls at or below
-/// one of `referrals`' configured base DNs.
-fn referral_for<'a>(referrals: &'a [(Dn, String)], dn: &Dn) -> Option<&'a str> {
-    referrals
-        .iter()
-        .find(|(base, _)| dn.is_within(base))
-        .map(|(_, url)| url.as_str())
+/// Bundles the two referral sources consulted on an out-of-scope DN
+/// (#9/#10): the persisted, authoritative forest topology (checked
+/// first) and the static `IRON_LDAP_REFERRALS` fallback list (for
+/// deployments with no configuration partition set up, e.g. the
+/// standalone il1/il2/il3 replicas). A cheap, per-request bundle of
+/// borrows -- see `AppState::referral_config`.
+pub struct Referrals<'a> {
+    pub topology: Option<&'a iron_partition::PartitionRegistry>,
+    pub static_list: &'a [(Dn, String)],
+}
+
+/// A naming context this server doesn't host, if `dn` falls under a
+/// partition known to `refs.topology` with an `ldap_url` set, or
+/// (falling back) at or below one of `refs.static_list`'s configured
+/// base DNs.
+fn referral_for<'a>(refs: &Referrals<'a>, dn: &Dn) -> Option<&'a str> {
+    if let Some(topology) = refs.topology {
+        if let Some(url) = topology.resolve(dn).and_then(|p| p.ldap_url.as_deref()) {
+            return Some(url);
+        }
+    }
+    refs.static_list.iter().find(|(base, _)| dn.is_within(base)).map(|(_, url)| url.as_str())
 }
 
 /// Maps a `StoreError` to the LDAP result it should produce.
 /// `NoPartitionFor` becomes a `Referral` (RFC 4511 §4.1.10) if `dn` falls
-/// under a configured referral naming context, since that's a real,
-/// client-actionable answer ("ask over there instead") rather than a
-/// generic server error.
-fn store_error_result(e: &iron_store::StoreError, referrals: &[(Dn, String)], dn: &Dn) -> LdapResult {
+/// under a naming context `refs` knows how to reach, since that's a
+/// real, client-actionable answer ("ask over there instead") rather than
+/// a generic server error.
+fn store_error_result(e: &iron_store::StoreError, refs: &Referrals<'_>, dn: &Dn) -> LdapResult {
     if matches!(e, iron_store::StoreError::NoPartitionFor(_)) {
-        if let Some(url) = referral_for(referrals, dn) {
+        if let Some(url) = referral_for(refs, dn) {
             let uri = format!("{}/{}", url.trim_end_matches('/'), dn);
             let mut result = LdapResult::new(ResultCode::Referral, String::new().into(), String::new().into());
             result.referral = Some(vec![uri.into()]);
@@ -399,7 +414,7 @@ fn done(code: ResultCode, diagnostic: &str) -> Vec<ProtocolOp> {
     )))]
 }
 
-fn done_store_error(e: &iron_store::StoreError, referrals: &[(Dn, String)], dn: &Dn) -> Vec<ProtocolOp> {
+fn done_store_error(e: &iron_store::StoreError, referrals: &Referrals<'_>, dn: &Dn) -> Vec<ProtocolOp> {
     vec![ProtocolOp::SearchResDone(SearchResultDone(store_error_result(e, referrals, dn)))]
 }
 
@@ -490,7 +505,7 @@ async fn handle_add(
     fips: Option<&iron_crypto::FipsContext>,
     req: &AddRequest,
     spec: &iron_store::index::IndexSpec,
-    referrals: &[(Dn, String)],
+    referrals: &Referrals<'_>,
 ) -> AddResponse {
     let dn = match Dn::parse(&req.entry) {
         Ok(dn) => dn,
@@ -515,7 +530,7 @@ async fn handle_delete(
     store: &mut Store,
     req: &DelRequest,
     spec: &iron_store::index::IndexSpec,
-    referrals: &[(Dn, String)],
+    referrals: &Referrals<'_>,
 ) -> DelResponse {
     let dn = match Dn::parse(&req.0) {
         Ok(dn) => dn,
@@ -533,7 +548,7 @@ async fn handle_modify(
     fips: Option<&iron_crypto::FipsContext>,
     req: &ModifyRequest,
     spec: &iron_store::index::IndexSpec,
-    referrals: &[(Dn, String)],
+    referrals: &Referrals<'_>,
 ) -> ModifyResponse {
     let dn = match Dn::parse(&req.object) {
         Ok(dn) => dn,
@@ -592,7 +607,7 @@ async fn handle_modify(
     ModifyResponse(result)
 }
 
-async fn handle_compare(store: &mut Store, req: &CompareRequest, referrals: &[(Dn, String)]) -> CompareResponse {
+async fn handle_compare(store: &mut Store, req: &CompareRequest, referrals: &Referrals<'_>) -> CompareResponse {
     let dn = match Dn::parse(&req.entry) {
         Ok(dn) => dn,
         Err(_) => return CompareResponse(invalid_dn()),
@@ -626,7 +641,7 @@ async fn handle_moddn(
     store: &mut Store,
     req: &ModifyDnRequest,
     spec: &iron_store::index::IndexSpec,
-    referrals: &[(Dn, String)],
+    referrals: &Referrals<'_>,
 ) -> ModifyDnResponse {
     let old_dn = match Dn::parse(&req.entry) {
         Ok(dn) if !dn.is_empty() => dn,
@@ -713,7 +728,7 @@ async fn handle_moddn(
     ModifyDnResponse(success())
 }
 
-async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &[(Dn, String)]) -> Vec<ProtocolOp> {
+async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Referrals<'_>) -> Vec<ProtocolOp> {
     let base_dn = match Dn::parse(&req.base_object) {
         Ok(dn) => dn,
         Err(_) => return done(ResultCode::InvalidDnSyntax, "invalid base DN"),
@@ -804,4 +819,80 @@ fn project_attributes(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod referral_tests {
+    use iron_partition::{ClusterRef, ForestId, Partition, PartitionRegistry};
+
+    use super::*;
+
+    fn dn(s: &str) -> Dn {
+        Dn::parse(s).unwrap()
+    }
+
+    fn registry_with_child(child_ldap_url: Option<&str>) -> PartitionRegistry {
+        let forest = ForestId::new("acme").unwrap();
+        let cluster = ClusterRef::plaintext(["http://127.0.0.1:2379"]);
+        let parent = Partition::domain("g10", forest.clone(), dn("dc=g10,dc=lo"), cluster.clone()).unwrap();
+        let mut child = Partition::domain("g10-emea", forest, dn("dc=emea,dc=g10,dc=lo"), cluster).unwrap();
+        if let Some(url) = child_ldap_url {
+            child = child.with_ldap_url(url);
+        }
+        PartitionRegistry::from_partitions([parent, child]).unwrap()
+    }
+
+    #[test]
+    fn topology_referral_takes_priority_over_static_list() {
+        let registry = registry_with_child(Some("ldap://child.example.com"));
+        let static_list = [(dn("dc=emea,dc=g10,dc=lo"), "ldap://stale-static.example.com".to_string())];
+        let refs = Referrals { topology: Some(&registry), static_list: &static_list };
+        let url = referral_for(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).unwrap();
+        assert_eq!(url, "ldap://child.example.com");
+    }
+
+    #[test]
+    fn falls_back_to_static_list_when_topology_partition_has_no_ldap_url() {
+        let registry = registry_with_child(None); // registered, but no ldap_url set yet
+        let static_list = [(dn("dc=emea,dc=g10,dc=lo"), "ldap://static-fallback.example.com".to_string())];
+        let refs = Referrals { topology: Some(&registry), static_list: &static_list };
+        let url = referral_for(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).unwrap();
+        assert_eq!(url, "ldap://static-fallback.example.com");
+    }
+
+    #[test]
+    fn falls_back_to_static_list_when_no_topology_configured() {
+        let static_list = [(dn("dc=emea,dc=g10,dc=lo"), "ldap://static-only.example.com".to_string())];
+        let refs = Referrals { topology: None, static_list: &static_list };
+        let url = referral_for(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).unwrap();
+        assert_eq!(url, "ldap://static-only.example.com");
+    }
+
+    #[test]
+    fn no_match_in_either_source_is_none() {
+        let registry = registry_with_child(Some("ldap://child.example.com"));
+        let refs = Referrals { topology: Some(&registry), static_list: &[] };
+        assert!(referral_for(&refs, &dn("dc=totally,dc=unrelated")).is_none());
+    }
+
+    #[test]
+    fn store_error_result_builds_a_real_referral_uri() {
+        let registry = registry_with_child(Some("ldap://child.example.com"));
+        let refs = Referrals { topology: Some(&registry), static_list: &[] };
+        let target = dn("cn=alice,dc=emea,dc=g10,dc=lo");
+        let err = iron_store::StoreError::NoPartitionFor(target.to_string());
+        let result = store_error_result(&err, &refs, &target);
+        assert_eq!(result.result_code, ResultCode::Referral);
+        let referral = result.referral.unwrap();
+        assert_eq!(referral[0].as_str(), "ldap://child.example.com/cn=alice,dc=emea,dc=g10,dc=lo");
+    }
+
+    #[test]
+    fn store_error_result_falls_back_to_operations_error_with_no_match() {
+        let refs = Referrals { topology: None, static_list: &[] };
+        let target = dn("dc=totally,dc=unrelated");
+        let err = iron_store::StoreError::NoPartitionFor(target.to_string());
+        let result = store_error_result(&err, &refs, &target);
+        assert_eq!(result.result_code, ResultCode::OperationsError);
+    }
 }

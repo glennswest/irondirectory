@@ -3,7 +3,9 @@
 //! Implemented: rootDSE, anonymous + authenticated simple bind (PBKDF2
 //! via `iron-crypto`, D4), search (base/one/subtree scope, core filter
 //! kinds), add, delete, modify, compare, modify-DN (leaf entries only),
-//! StartTLS, LDAPS, cross-NC referrals (`AppState::referrals`), and
+//! StartTLS, LDAPS, cross-NC referrals (`AppState::topology`, the
+//! persisted forest registry from #9, falling back to the static
+//! `AppState::referrals` list; chased one hop end-to-end, #10), and
 //! built-in AD-shaped + RFC 2307 posix schema validation (`schema`
 //! module) on add/modify. Not yet: subtree rename, extended ops besides
 //! StartTLS, full schema-subentry publishing (`cn=subschema`).
@@ -22,7 +24,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use iron_crypto::FipsContext;
-use iron_partition::Dn;
+use iron_partition::{Dn, PartitionRegistry};
 use iron_store::index::IndexSpec;
 use iron_store::store::Store;
 use openssl::ssl::{Ssl, SslAcceptor};
@@ -47,8 +49,22 @@ pub struct AppState {
     /// only knows about locally-connected partitions today -- there's no
     /// "referral-only, no cluster" partition kind yet), paired with the
     /// LDAP URL to send clients to instead. Checked whenever an operation
-    /// resolves to `StoreError::NoPartitionFor` (see `session::referral_for`).
+    /// resolves to `StoreError::NoPartitionFor` (see `session::referral_for`),
+    /// as a fallback when `topology` is unset or doesn't have a match --
+    /// kept for deployments with no configuration partition set up (#9)
+    /// yet, e.g. the standalone il1/il2/il3 replicas.
     pub referrals: Vec<(Dn, String)>,
+    /// The forest-wide partition topology (#9/#10), loaded once at
+    /// startup from the persisted configuration partition if
+    /// `IRON_LDAP_CONFIG_*` env vars are set -- a real, authoritative
+    /// view of every partition and its `ldap_url`, not a hand-maintained
+    /// list. Consulted before `referrals` when generating a referral, so
+    /// sibling/child/parent partitions created via `iron-config-ctl` are
+    /// referred to automatically. `None` if no configuration partition
+    /// is configured (falls back to `referrals` alone). A snapshot, not
+    /// watched -- refreshing it if the topology changes while this
+    /// process is running is a later issue, not #10's happy-path scope.
+    pub topology: Option<PartitionRegistry>,
 }
 
 impl AppState {
@@ -57,6 +73,7 @@ impl AppState {
         index_spec: IndexSpec,
         tls_acceptor: Option<Arc<SslAcceptor>>,
         referrals: Vec<(Dn, String)>,
+        topology: Option<PartitionRegistry>,
     ) -> Arc<Self> {
         let fips = match FipsContext::new() {
             Ok(f) => Some(f),
@@ -75,7 +92,14 @@ impl AppState {
             fips,
             tls_acceptor,
             referrals,
+            topology,
         })
+    }
+
+    /// Bundles this instance's two referral sources for a single
+    /// request (see `session::Referrals`) -- cheap, just borrows.
+    pub fn referral_config(&self) -> session::Referrals<'_> {
+        session::Referrals { topology: self.topology.as_ref(), static_list: &self.referrals }
     }
 }
 

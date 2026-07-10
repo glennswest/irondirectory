@@ -838,6 +838,7 @@ version = "0.10.0"
 dependencies = [
  "anyhow",
  "futures",
+ "iron-config",
  "iron-crypto",
  "iron-kdc",
  "iron-partition",
