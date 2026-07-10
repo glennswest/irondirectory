@@ -5,6 +5,52 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.12.0] — 2026-07-10
+
+### 2026-07-10 (post-v0.11.0)
+- **feat(kdc):** Cross-realm `krbtgt` keys + one-hop referral tickets
+  (#11). `iron-kdc`'s TGS-REQ handler (`tgs_exchange::referral_tgs_rep`)
+  checks a new `AppState::topology: Option<PartitionRegistry>` (the
+  #9/#10 persisted registry, loaded via new `IRON_KDC_CONFIG_*` env
+  vars) when the client's requested realm doesn't match this KDC's
+  own, and returns a referral TGT for a directly-trusted (one-hop)
+  realm instead of failing closed with `KDC_ERR_S_PRINCIPAL_UNKNOWN`
+  (RFC 4120 §3.3.3). New `iron-kdc-ctl set-cross-realm-key <to-realm>
+  <from-realm> <secret>` provisions the shared inter-realm key using a
+  new `principal::set_shared_key` (deterministic salt, unlike
+  `set_password`'s random one) so two independent per-realm
+  invocations derive byte-identical keys. `Partition.kdc_url` +
+  `iron-config-ctl set-kdc-url` mirror the existing `ldap_url` pattern.
+- **fix(kdc):** `set-cross-realm-key`'s principal name can't be derived
+  from `IRON_KDC_REALM` -- the "to" realm's own configured realm *is*
+  the peer name from the other side, so the "identical command on both
+  KDCs" the tool promises was structurally impossible with that
+  design. Both realms are now explicit command-line arguments.
+- **fix(kdc):** The fixed command's DN construction still collided
+  with the "to" realm's own ordinary `krbtgt/<realm>@<realm>` entry
+  (same primary/instance components, no realm suffix in the `cn`),
+  found live while provisioning the two-realm test forest -- whichever
+  principal was written second silently clobbered the other's key.
+  Fixed by folding `from_realm` into the `cn`.
+- **fix(kdc):** verified live: a plain `set_password`'s random salt
+  cannot be used for a *shared* secret between two independent KDCs
+  (two calls with the same password would derive two different keys)
+  -- `set_shared_key`'s deterministic salt (the principal name itself)
+  fixes this by construction, not discovered as a live bug but
+  documented here since it's the reason `set_shared_key` exists at all
+  rather than reusing `set_password`.
+
+Verified live with two real, independent `iron-kdcd` instances (realms
+`G11REF.LO` + `EMEA.G11REF.LO`, wired into one forest via
+`iron-config-ctl create-child`) and real `krb5-workstation`
+`kinit`/`kvno`: `KRB5_TRACE` confirms a genuine two-hop chase -- TGS-REQ
+to the parent KDC returns a referral ticket
+`krbtgt/EMEA.G11REF.LO@G11REF.LO` (visible in `klist`), then a second
+TGS-REQ using that ticket against the child KDC (found via the test
+client's `[capaths]`) returns the real service ticket. Multi-hop
+transitive trust-path walking and shortcut trusts are out of scope
+(D10) -- one hop only.
+
 ## [v0.11.0] — 2026-07-10
 
 ### 2026-07-10 (post-v0.10.0)

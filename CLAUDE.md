@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.11.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.12.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -30,9 +30,13 @@ configuration partition, `iron-config-ctl init-forest`/`create-child`/
 superior/subordinate links and realm derivation persist and re-load
 correctly; #10 referral generation + chasing CLOSED: `iron-ldapd` reads
 the #9 registry for referrals, verified with two real servers and a
-real `ldapsearch -C` chasing a referral one hop to real data). See
-CHANGELOG.md for the running list; Live infrastructure below has the
-verification details.
+real `ldapsearch -C` chasing a referral one hop to real data; #11
+cross-realm `krbtgt` keys + one-hop referral tickets CLOSED: `iron-kdc`
+reads the #9 registry the same way for TGS-REQ referrals, verified
+with two real `iron-kdcd` realms and real `kinit`/`kvno` chasing a
+referral ticket one hop to a real service ticket). See CHANGELOG.md
+for the running list; Live infrastructure below has the verification
+details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -502,6 +506,74 @@ implemented — only a referral for the *entire* operation, sufficient
 for the one-hop base-object/subtree-rooted-at-the-child cases verified
 above.
 
+**Kerberos cross-realm `krbtgt` keys + one-hop referral tickets (#11)**
+— `iron-kdc`'s TGS-REQ handler (`tgs_exchange::referral_tgs_rep`) now
+checks a new `AppState::topology: Option<PartitionRegistry>` (the same
+#9/#10 persisted registry, loaded via new `IRON_KDC_CONFIG_*` env vars
+in `iron-kdcd`) whenever the client's requested realm doesn't match
+this KDC's own: if the topology shows a direct (one-hop) trust — a
+superior or subordinate partition whose realm matches — and the shared
+inter-realm key has been provisioned locally, it returns a referral TGT
+for that realm's `krbtgt` (RFC 4120 §3.3.3) instead of failing closed
+with `KDC_ERR_S_PRINCIPAL_UNKNOWN`. New `iron-kdc-ctl
+set-cross-realm-key <to-realm> <from-realm> <secret>` provisions the
+shared key; `Partition.kdc_url` + `iron-config-ctl set-kdc-url` mirror
+the existing `ldap_url` pattern for ops/testing visibility (not
+consulted for routing — real clients find the next hop via
+krb5.conf/DNS SRV records, same as real Kerberos).
+
+The shared inter-realm key needed a real fix, not just a feature: a
+plain `set_password` uses a fresh random salt every call, which is
+correct for an ordinary principal's own key but wrong for a *shared*
+secret — two independent invocations (one per realm's KDC) with a
+random salt derive two different keys from the same password, and
+referral tickets would never decrypt on the receiving end. New
+`principal::set_shared_key` uses a deterministic salt (the principal
+name itself, hex-encoded) instead, so both ends derive byte-identical
+keys from the same secret.
+
+Found and fixed two more real bugs live, both before any VM existed to
+test against (caught by re-reading the code the live test would
+exercise, not by the live test itself): first, the original
+`set-cross-realm-key <peer-realm> <secret>` design built the principal
+name as `krbtgt/<peer-realm>@<IRON_KDC_REALM>`, which cannot name the
+same string on both ends of a trust (the "to" realm's own
+`IRON_KDC_REALM` *is* the peer name from the other side, not the
+issuing realm) — both realms are now explicit command-line arguments,
+independent of `IRON_KDC_REALM`, so the identical invocation against
+either KDC's store derives the matching key.
+
+Second, found live while provisioning the two-realm test forest: the
+fixed command's DN construction (`cn=krbtgt.<to-realm>,<base-dn>`) still
+collided with the "to" realm's own ordinary `krbtgt/<realm>@<realm>`
+entry on the same store, since the cn was built from the primary/
+instance components alone (identical for both) with no realm suffix —
+whichever principal was written second silently clobbered the other's
+stored key at that DN, breaking the very lookup the referral ticket
+depends on. Fixed by including `from_realm` in the cn so a cross-realm
+key's DN can never collide with a same-realm principal's.
+
+Verified live with two real, independent `iron-kdcd` instances (a
+disposable parent realm `G11REF.LO` + child realm `EMEA.G11REF.LO`,
+`iron-config-ctl create-child` wiring them into one forest, real
+`krb5-workstation` `kinit`/`kvno` against both) and `KRB5_TRACE`
+confirming the full wire exchange: `kinit alice@G11REF.LO` succeeds
+against the parent; `kvno testsvc/kdcchild.g8.lo@EMEA.G11REF.LO`
+transparently completes a **real two-hop chase** — first TGS-REQ to
+the parent KDC returns a referral ticket `krbtgt/EMEA.G11REF.LO@G11REF.LO`
+(visible in `klist`), then a second TGS-REQ using that ticket against
+the child KDC (found via the test client's `[capaths]`, same mechanism
+real MIT krb5 deployments use) returns the real service ticket —
+`kvno` reports success end to end. iron-kdc's TGS handler only logs on
+error paths today (no success log line), so `KRB5_TRACE`, not the
+daemon's own journal, is what actually proves both round trips
+happened — worth fixing at some point, not blocking for this pass.
+
+Happy-path only (D10): transitive multi-realm trust-path walking and
+shortcut trusts are out of scope — one hop only, matching #10's LDAP
+referral scope exactly. The topology is a startup snapshot, not
+watched, same limitation as `iron-ldapd`'s referral wiring.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.2.0`
@@ -696,7 +768,29 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       already-bootstrapped forest, used to silently wipe the root
       domain's `subordinates` list (new `add-subordinate` repair
       command for anything a pre-fix run already damaged).
-- [ ] Kerberos cross-realm `krbtgt` keys + one-hop referral-ticket routing
+- [x] Kerberos cross-realm `krbtgt` keys + one-hop referral-ticket
+      routing (#11, CLOSED): `iron-kdc`'s TGS-REQ handler now checks
+      the same #9/#10 persisted `PartitionRegistry` (new
+      `IRON_KDC_CONFIG_*` env vars) for a direct one-hop trust when the
+      client's requested realm differs from this KDC's own, returning
+      a referral TGT for that realm's `krbtgt` instead of failing
+      closed. New `iron-kdc-ctl set-cross-realm-key` provisions the
+      shared inter-realm key with a deterministic salt (`principal::
+      set_shared_key`) so two independent per-realm invocations derive
+      byte-identical keys -- a plain `set_password`'s random salt would
+      have made that impossible. Found and fixed two more real bugs
+      before any VM existed to test against: the shared key's principal
+      name needed both realms as explicit arguments (not derived from
+      `IRON_KDC_REALM`, which can't name both sides of a trust from a
+      single environment), and its DN construction collided with the
+      "to" realm's own ordinary `krbtgt` entry until `from_realm` was
+      folded into the `cn`. Verified live with two real, independent
+      `iron-kdcd` realms and real `kinit`/`kvno`: `KRB5_TRACE` confirms
+      a genuine two-hop chase -- the parent KDC returns a referral
+      ticket `krbtgt/<child>@<parent>`, then the client automatically
+      uses it against the child KDC (via `[capaths]`) to get the real
+      service ticket. One hop only (D10), same scope as #10's LDAP
+      referrals.
 - [ ] `iron-gc`: watch-fed Global Catalog aggregator (read-only partial replica,
       port 3268/3269); same engine powers the D9 federated GAL
 - [ ] Federated GAL: whitelisted-attribute publish per forest → top-level
