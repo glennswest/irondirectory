@@ -169,7 +169,16 @@ async fn main() -> anyhow::Result<()> {
             let existing = store.lookup_by_index(&base_dn, iron_kdc::principal::ATTR_PRINCIPAL_NAME, &principal_fqn).await?;
             let (dn, mut entry) = match existing.as_slice() {
                 [] => {
-                    let cn_value = name.replace('/', ".");
+                    // NOT `name.replace('/', ".")` -- on the realm whose
+                    // own IRON_KDC_REALM equals `to_realm` (the "to" side
+                    // of the trust), that would collide with this store's
+                    // own `krbtgt/<to_realm>@<to_realm>` entry (identical
+                    // name/instance, only the realm suffix differs, which
+                    // this cn wouldn't reflect), silently clobbering
+                    // whichever one is written second. Including
+                    // from_realm in the cn keeps every cross-realm key's
+                    // DN distinct from any same-name same-realm principal.
+                    let cn_value = format!("{}.{from_realm}", name.replace('/', "."));
                     let dn = Dn::parse(&format!("cn={cn_value},{base_dn_str}"))?;
                     let mut entry = Entry::new();
                     entry.set("objectclass", ["top".to_string()]);
