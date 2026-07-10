@@ -5,10 +5,13 @@
 //! kinds), add, delete, modify, compare, modify-DN (leaf entries only),
 //! StartTLS, LDAPS, cross-NC referrals (`AppState::topology`, the
 //! persisted forest registry from #9, falling back to the static
-//! `AppState::referrals` list; chased one hop end-to-end, #10), and
-//! built-in AD-shaped + RFC 2307 posix schema validation (`schema`
-//! module) on add/modify. Not yet: subtree rename, extended ops besides
-//! StartTLS, full schema-subentry publishing (`cn=subschema`).
+//! `AppState::referrals` list; chased one hop end-to-end, #10), built-in
+//! AD-shaped + RFC 2307 posix schema validation (`schema` module) on
+//! add/modify, and the RFC 4532 WhoAmI extended operation (reports the
+//! connection's current bind identity -- `dn:...` for simple bind,
+//! `u:<principal>` for GSSAPI, empty for anonymous). Not yet: subtree
+//! rename, other extended ops, full schema-subentry publishing
+//! (`cn=subschema`).
 
 pub mod conn;
 pub mod filter;

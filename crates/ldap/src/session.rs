@@ -32,6 +32,10 @@ const USER_PASSWORD_ATTR: &str = "userpassword";
 /// operation.
 const STARTTLS_OID: &[u8] = b"1.3.6.1.4.1.1466.20037";
 
+/// RFC 4532 §1.1 -- the well-known OID for the "Who am I?" extended
+/// operation.
+const WHOAMI_OID: &[u8] = b"1.3.6.1.4.1.4203.1.11.3";
+
 /// Per-connection SASL/GSSAPI negotiation state (RFC 4752), threaded
 /// through successive `BindRequest`s on the *same* connection -- unlike
 /// simple bind, a GSSAPI bind is a multi-message exchange (AP-REQ ->
@@ -62,6 +66,14 @@ where
     let mut conn = Conn::Plain(stream);
     let mut buf = Vec::new();
     let mut sasl_state = SaslState::None;
+    // RFC 4513 §3 authzId this connection is currently bound as -- `None`
+    // for anonymous, `Some("dn:...")`/`Some("u:...")` otherwise. Updated
+    // on every *terminal* bind outcome (success or failure, but not a
+    // still-in-progress SASL step) so a later WhoAmI extended operation
+    // (RFC 4532) can answer correctly; RFC 4513 also permits re-binding
+    // on the same connection, so this can change (including back to
+    // `None`) more than once per connection.
+    let mut bound_identity: Option<String> = None;
     loop {
         let msg = match read_message(&mut conn, &mut buf).await {
             Ok(Some(m)) => m,
@@ -76,7 +88,10 @@ where
         match msg.protocol_op {
             ProtocolOp::UnbindRequest(_) => return,
             ProtocolOp::BindRequest(req) => {
-                let resp = handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req, &mut sasl_state).await;
+                let (resp, identity) = handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req, &mut sasl_state).await;
+                if resp.result_code != ResultCode::SaslBindInProgress {
+                    bound_identity = identity;
+                }
                 let resp = LdapMessage::new(message_id, ProtocolOp::BindResponse(resp));
                 if write_message(&mut conn, &resp).await.is_err() {
                     return;
@@ -158,6 +173,30 @@ where
                         }
                     };
                     buf.clear(); // any bytes buffered before the handshake were plaintext framing only
+                }
+            }
+            // RFC 4532 "Who am I?" -- reports this connection's current
+            // authzId (see `bound_identity`'s doc comment above), which
+            // requires no store lookup at all: the identity was already
+            // resolved and validated at bind time.
+            ProtocolOp::ExtendedReq(req) if req.request_name.as_ref() == WHOAMI_OID => {
+                let resp = LdapMessage::new(
+                    message_id,
+                    ProtocolOp::ExtendedResp(ExtendedResponse {
+                        result_code: ResultCode::Success,
+                        matched_dn: String::new().into(),
+                        diagnostic_message: String::new().into(),
+                        referral: None,
+                        // RFC 4532 §2: no responseName on a WhoAmI response.
+                        response_name: None,
+                        // Always present per RFC 4532 §2, empty for an
+                        // anonymous connection rather than the field
+                        // being absent entirely.
+                        response_value: Some(bound_identity.clone().unwrap_or_default().into_bytes().into()),
+                    }),
+                );
+                if write_message(&mut conn, &resp).await.is_err() {
+                    return;
                 }
             }
             // Not yet implemented (#4 tracks the rest of the scope), but
@@ -277,30 +316,39 @@ fn store_error_result(e: &iron_store::StoreError, refs: &Referrals<'_>, dn: &Dn)
     operations_error(&e.to_string())
 }
 
+/// Handles a `BindRequest`, returning the response alongside the RFC
+/// 4513 §3 authzId it establishes (`None` for anonymous, a failure, or
+/// an unrecognized auth choice) -- the caller threads this into
+/// `bound_identity` for a later WhoAmI (RFC 4532) to answer, but only
+/// once the bind is *terminal* (checked by the caller via
+/// `resp.result_code`), since a SASL exchange returns
+/// `SaslBindInProgress` for every non-final step and this function
+/// always returns `None` for those regardless.
 async fn handle_bind(
     store: &mut Store,
     fips: Option<&iron_crypto::FipsContext>,
     req: &BindRequest,
     sasl_state: &mut SaslState,
-) -> BindResponse {
+) -> (BindResponse, Option<String>) {
     if req.version != 3 {
         *sasl_state = SaslState::None;
-        return BindResponse::new(ResultCode::ProtocolError, String::new().into(), "only LDAPv3 is supported".into(), None, None);
+        return (BindResponse::new(ResultCode::ProtocolError, String::new().into(), "only LDAPv3 is supported".into(), None, None), None);
     }
     match &req.authentication {
         AuthenticationChoice::Simple(password) if req.name.is_empty() && password.is_empty() => {
             *sasl_state = SaslState::None;
-            BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None)
+            (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), None)
         }
         AuthenticationChoice::Simple(password) => {
             *sasl_state = SaslState::None;
             let code = authenticate_simple(store, fips, &req.name, password).await;
-            BindResponse::new(code, String::new().into(), String::new().into(), None, None)
+            let identity = (code == ResultCode::Success).then(|| format!("dn:{}", req.name.as_str()));
+            (BindResponse::new(code, String::new().into(), String::new().into(), None, None), identity)
         }
         AuthenticationChoice::Sasl(creds) => handle_sasl_bind(store, fips, creds, sasl_state).await,
         _ => {
             *sasl_state = SaslState::None;
-            BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "unrecognized authentication choice".into(), None, None)
+            (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "unrecognized authentication choice".into(), None, None), None)
         }
     }
 }
@@ -315,26 +363,26 @@ async fn handle_sasl_bind(
     fips: Option<&iron_crypto::FipsContext>,
     creds: &SaslCredentials,
     sasl_state: &mut SaslState,
-) -> BindResponse {
+) -> (BindResponse, Option<String>) {
     if creds.mechanism.as_str() != "GSSAPI" {
         *sasl_state = SaslState::None;
-        return BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "only the GSSAPI SASL mechanism is supported".into(), None, None);
+        return (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "only the GSSAPI SASL mechanism is supported".into(), None, None), None);
     }
     let Some(fips) = fips else {
         *sasl_state = SaslState::None;
-        return BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "FIPS provider not active -- SASL/GSSAPI unavailable".into(), None, None);
+        return (BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "FIPS provider not active -- SASL/GSSAPI unavailable".into(), None, None), None);
     };
 
-    match std::mem::take(sasl_state) {
+    let resp = match std::mem::take(sasl_state) {
         SaslState::None => {
             let Some(input_token) = &creds.credentials else {
-                return BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "GSSAPI bind requires an initial token".into(), None, None);
+                return (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "GSSAPI bind requires an initial token".into(), None, None), None);
             };
             // Any DN within the (single) served partition works here --
             // lookup_by_index only uses it to resolve which cluster to
             // query, not as a search filter.
             let Some(any_dn) = store.registry().iter().next().map(|p| p.base_dn.clone()) else {
-                return BindResponse::new(ResultCode::Other, String::new().into(), "no partition configured".into(), None, None);
+                return (BindResponse::new(ResultCode::Other, String::new().into(), "no partition configured".into(), None, None), None);
             };
             let lookup = move |sname: PrincipalName, realm: String| async move {
                 let principal_fqn = format!("{}@{realm}", iron_kdc::principal_name_to_string(&sname));
@@ -377,7 +425,7 @@ async fn handle_sasl_bind(
         },
         SaslState::AwaitingSecurityLayerAck { session_key, enctype, client_principal } => {
             let Some(response) = &creds.credentials else {
-                return BindResponse::new(ResultCode::ProtocolError, String::new().into(), "missing security-layer response".into(), None, None);
+                return (BindResponse::new(ResultCode::ProtocolError, String::new().into(), "missing security-layer response".into(), None, None), None);
             };
             // Key usage 24: KG-USAGE-INITIATOR-SEAL (RFC 4121 §2) -- the
             // client is the GSS initiator, so its Wrap tokens use the
@@ -385,13 +433,20 @@ async fn handle_sasl_bind(
             match crate::gssapi::wrap::unwrap(fips, enctype, &session_key, 24, response) {
                 Ok(plain) if plain.first() == Some(&0x01) => {
                     tracing::info!(%client_principal, "GSSAPI bind succeeded");
-                    BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None)
+                    // "u:<userid>" per RFC 4513 §3 -- there's no single
+                    // resolved DN available here (the earlier principal
+                    // lookup was only for the key material, and it may
+                    // have matched a non-unique or no entry at all), but
+                    // the authenticated Kerberos principal name is
+                    // exactly this identity's real-world meaning.
+                    return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")));
                 }
                 Ok(_) => BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "client selected an unsupported security layer".into(), None, None),
                 Err(e) => BindResponse::new(ResultCode::InvalidCredentials, String::new().into(), e.to_string().into(), None, None),
             }
         }
-    }
+    };
+    (resp, None)
 }
 
 /// Builds the RFC 4752 §3.2 security-layer negotiation challenge: 4
