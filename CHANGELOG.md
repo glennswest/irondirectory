@@ -5,6 +5,37 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.14.0] — 2026-07-10
+
+### 2026-07-10 (post-v0.13.0)
+- **feat(gc):** Federated GAL support -- multi-forest aggregation
+  (#13). `iron-gcd` now accepts `IRON_GC_FORESTS` (a `;`-separated list
+  of additional forests' config-partition coordinates, same `|`-delimited
+  convention as `IRON_LDAP_REFERRALS`) alongside the existing
+  single-forest trio, loading and merging every configured forest's
+  `PartitionRegistry` and spawning a watch task for every domain
+  partition found across all of them into one shared `Aggregate`. No
+  library changes were needed (`aggregate`/`watch`/`session` in
+  `iron-gc` were already forest-agnostic from #12) -- the whole feature
+  is new bootstrap logic in `iron-gcd`. Two forests colliding on the
+  same partition id fails the merge loudly at startup rather than
+  silently dropping one forest's naming contexts.
+
+Verified live with two independent forests (`g13a`/`g13b`): a
+per-forest GC configured with the default (broad) attribute whitelist
+shows an internal-only attribute (`uidnumber`); a federated GAL
+configured via `IRON_GC_FORESTS` with a deliberately stricter whitelist
+(`objectclass,cn,mail`) aggregates entries from *both* forests but
+correctly omits that same attribute from all of them -- proving no
+cross-boundary directory-content leakage, not merely that aggregation
+works. With both daemons running throughout, a new entry added
+directly to one forest's cluster appeared in the federated GAL's
+search immediately, no restart -- confirming the watch-fed liveness
+established in #12 holds across a forest boundary too. One process,
+snapshot topology (D10) -- adding a whole new forest still requires a
+restart to pick up; many-forest scale and staleness-bound proving
+remain deferred.
+
 ## [v0.13.0] — 2026-07-10
 
 ### 2026-07-10 (post-v0.12.0)

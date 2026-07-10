@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.13.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.14.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -40,8 +40,15 @@ a live in-memory partial replica across every domain partition in a
 forest (ports 3268/3269), verified with a real two-partition forest and
 a real `ldapsearch` seeing entries from both partitions in one search,
 plus a live-added and a live-deleted entry both reflected without
-restarting the daemon). See CHANGELOG.md for the running list; Live
-infrastructure below has the verification details.
+restarting the daemon; #13 federated GAL CLOSED: `iron-gcd` now accepts
+`IRON_GC_FORESTS` to aggregate several forests' registries into one
+process -- the same forest-agnostic engine from #12, no library changes
+needed -- verified live with two independent forests, a strict
+cross-forest attribute whitelist correctly hiding an internal-only
+attribute (`uidnumber`) that a per-forest GC still shows, and a
+live-added entry in one forest appearing in the federated view without
+restart). See CHANGELOG.md for the running list; Live infrastructure
+below has the verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -634,6 +641,57 @@ partitions exist) is a startup snapshot, same limitation as #10/#11's
 federated GAL, #13) and staleness-bound/scale proving are explicitly
 out of scope for this issue.
 
+**Federated GAL: multi-forest aggregation (#13)** — `iron-gcd` (#12's
+daemon) now accepts an additional `IRON_GC_FORESTS` env var (`;`-separated
+`endpoint|partition-id|base-dn` triples, same delimiter convention as
+`IRON_LDAP_REFERRALS`) alongside its existing single-forest trio: at
+startup it loads *every* configured forest's persisted
+`PartitionRegistry` (#9) and merges them (failing loudly on a
+partition-id collision between two forests, rather than silently
+dropping one's naming contexts), then spawns a watch task for every
+domain partition found across all of them into one shared `Aggregate`.
+
+No changes were needed in `iron-gc`'s library code at all --
+`aggregate`/`watch`/`session` were already forest-agnostic by
+construction (`watch::run` only ever needed a single `Partition` with
+its own `ClusterRef`, never asked which forest it belonged to), so
+"the same engine powers the GC and the GAL" from #12's own design
+comment turned out to be literally true, not just directionally true.
+The whole of #13 is new *bootstrap* logic in the binary: load N config
+partitions instead of one, merge, watch all of them. The attribute
+whitelist mechanism (`IRON_GC_ATTRIBUTES`) is unchanged and doesn't
+need a second, GAL-specific knob -- an operator just configures a
+stricter list for a cross-forest deployment than for a single forest's
+own internal GC, since crossing a forest boundary is crossing D9's
+security boundary ("no directory-content leakage").
+
+Verified live with two independent, freshly-bootstrapped forests
+(`g13a`/`g13b`, deliberately separate `iron-config-ctl init-forest`
+calls, simulating two unrelated organizations) sharing the physical
+fastetcd cluster only for this test's convenience -- nothing in the
+code cares whether a `ClusterRef` points at the same cluster or a
+genuinely different one. Two `iron-gcd` processes running
+simultaneously: one configured for `g13a` alone with the default
+(broad) attribute whitelist -- a stand-in for that forest's own
+internal GC (#12) -- and one configured via `IRON_GC_FORESTS` for
+*both* forests with a deliberately strict whitelist (`objectclass,cn,
+mail`, omitting `uidnumber`) -- the federated GAL. A real `ldapsearch`
+against the first shows `alice`'s full attribute set including
+`uidnumber`; the same search against the second shows `alice` *and*
+`bob` (proving cross-forest aggregation) but with `uidnumber` absent
+from both (proving the stricter whitelist genuinely blocks
+internal-only data from crossing the boundary, not just that
+aggregation works). With both daemons left running throughout, adding
+a brand-new entry (`carol`) directly to forest `g13b`'s cluster made
+her appear in the federated GAL's search immediately, no restart --
+confirming the watch-fed liveness #12 established holds across a
+forest boundary too, not just within one forest's own partitions.
+
+Happy-path only (D10): still one process, snapshot topology (adding a
+whole new forest requires a restart, same as adding a new domain
+partition within one forest); many-forest scale and staleness-bound
+proving remain deferred.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.2.0`
@@ -870,8 +928,24 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       delete was reflected just as live -- proving it's genuinely
       watch-fed, not a one-time snapshot. One forest, one process
       (D10) -- multi-forest aggregation is #13's job.
-- [ ] Federated GAL: whitelisted-attribute publish per forest → top-level
-      read-only address book (no cross-boundary directory-content leakage)
+- [x] Federated GAL: whitelisted-attribute publish per forest → top-level
+      read-only address book (#13, CLOSED): `iron-gcd` now accepts
+      `IRON_GC_FORESTS` to load and merge several forests' persisted
+      registries into one process, watching every domain partition
+      across all of them into the same shared `Aggregate` #12 built --
+      no library changes needed, since `watch::run` was already
+      forest-agnostic. Same `IRON_GC_ATTRIBUTES` whitelist mechanism as
+      #12, just configured stricter for a cross-forest deployment; no
+      separate GAL-specific knob. Verified live with two independent
+      forests: a per-forest GC (broad whitelist) shows an internal-only
+      attribute (`uidnumber`); the federated GAL (strict whitelist)
+      aggregates entries from *both* forests but correctly omits that
+      same attribute from all of them -- proving no cross-boundary
+      leakage, not just that aggregation works. A live-added entry in
+      one forest appeared in the federated view with no daemon
+      restart, confirming watch-fed liveness holds across a forest
+      boundary too. One process, snapshot topology (D10) -- adding a
+      whole new forest still needs a restart to pick up.
 
 ### Phase 1.5 — App SSO (OpenShift + modern apps)  [D7]
 - [ ] OpenShift **LDAP identity provider** (direct bind) — ship first, no new code
