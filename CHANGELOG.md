@@ -5,6 +5,45 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.11.0] — 2026-07-10
+
+### 2026-07-10 (post-v0.10.0)
+- **feat(ldap):** Cross-NC referral generation is now wired to the
+  persisted forest topology (#10), not just a static hand-maintained
+  list. `iron-ldapd` loads the forest's `PartitionRegistry` at startup
+  when `IRON_LDAP_CONFIG_FASTETCD_ENDPOINT`/`IRON_LDAP_CONFIG_PARTITION_ID`/
+  `IRON_LDAP_CONFIG_BASE_DN` are set (`AppState::topology`,
+  `AppState::own_partition_id`), and consults it before the existing
+  `IRON_LDAP_REFERRALS` static fallback. New `session::Referrals<'a>`
+  bundles both sources plus this instance's own partition id for a
+  single request.
+- **fix(ldap):** Registry-driven referrals never actually fired for the
+  primary use case they exist for -- a search/add/delete/modify/compare/
+  modify-DN against a child domain's own base DN. Root cause: a child's
+  base DN (e.g. `dc=emea,dc=g9demo,dc=lo`) is *structurally* nested
+  under its parent's (`dc=g9demo,dc=lo`), so the parent's own
+  single-partition `Store` always "successfully" resolves it as its own
+  (returning "no such entry", not `StoreError::NoPartitionFor`) --
+  meaning the existing *reactive* referral check
+  (`referral_for`/`store_error_result`, keyed off `NoPartitionFor`) was
+  structurally unreachable for this case. Fixed with a new *proactive*
+  check (`session::proactive_referral`) consulting the registry before
+  any local Store call, inserted into all six read/write handlers.
+  Verified live against two real fastetcd-backed `iron-ldapd`
+  instances (parent + child domain): `ldapsearch` without `-C` now
+  returns `result: 10 Referral` + `ref: ldap://<child>/...` for both an
+  exact-DN base-object search and a subtree search rooted at the
+  child's own base DN; with `-C`, the client automatically chases to
+  real data on the child server.
+- **fix(config):** `iron-config-ctl init-forest`, re-run against an
+  already-bootstrapped forest, silently reset the root partition's
+  `subordinates` to empty -- discovered live while standing up #10's
+  two-server test, wiping the link `create-child` had previously
+  established. Fixed: `init_forest` now loads the existing registry
+  first and preserves `subordinates` from the prior record. New
+  `add-subordinate` subcommand repairs already-damaged data (used live
+  to restore the affected forest).
+
 ## [v0.10.0] — 2026-07-10
 
 ### 2026-07-10 (post-v0.9.0)

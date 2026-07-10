@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.10.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.11.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -28,8 +28,11 @@ macOS bind carved out to #22; #9 child-domain provisioning CLOSED: new
 configuration partition, `iron-config-ctl init-forest`/`create-child`/
 `show` verified end to end against the live fastetcd cluster --
 superior/subordinate links and realm derivation persist and re-load
-correctly). See CHANGELOG.md for the running list; Live infrastructure
-below has the verification details.
+correctly; #10 referral generation + chasing CLOSED: `iron-ldapd` reads
+the #9 registry for referrals, verified with two real servers and a
+real `ldapsearch -C` chasing a referral one hop to real data). See
+CHANGELOG.md for the running list; Live infrastructure below has the
+verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -444,6 +447,61 @@ the vm_id incident: `Datastore.AllocateSpace` isn't scoped by content
 type, so a token granted `local` for snippets could also touch its
 ISOs/vztmpl/import content.
 
+**LDAP referral generation + chasing, one hop (#10)** — `iron-ldapd`
+(via a new `AppState::topology: Option<PartitionRegistry>`) optionally
+loads the forest's persisted registry (#9) once at startup, gated on
+three new `IRON_LDAP_CONFIG_*` env vars, and consults it *before* the
+static `IRON_LDAP_REFERRALS` list when generating a referral --
+`session.rs`'s `Referrals<'a>` bundles both sources so six handlers
+(search/add/delete/modify/compare/modify-DN) didn't each need a second
+threaded parameter.
+
+Found and fixed a real correctness bug live, not just a missing
+feature: a child domain's base DN is *structurally* a descendant of
+its parent's (`dc=emea,dc=g9demo,dc=lo` under `dc=g9demo,dc=lo`), so
+the parent's own single-partition `Store` legitimately treats any DN
+within its own base DN as "mine" — `get_entry`/`scan_subtree` just
+returned `Ok(None)`/"no such object" for an entry that genuinely
+exists on the child's cluster, never `StoreError::NoPartitionFor`. The
+original registry-driven referral check (`referral_for`, reactive —
+keyed off that error) was consequently unreachable for the exact
+scenario it was built for. Fixed with a second, *proactive* check
+(`session::proactive_referral`): before any local `Store` operation,
+if the topology resolves the target DN to a different partition than
+the one this instance itself serves, return a `Referral` immediately.
+`AppState` now also carries `own_partition_id` so this comparison is
+possible. The reactive path still handles genuinely-unrelated sibling
+domains correctly on its own — the two are complementary.
+
+Verified live with two real, independent `iron-ldapd` instances (a
+disposable parent + child domain, `iron-config-ctl create-child` +
+`set-ldap-url` wiring them together) and a real `ldapsearch`: **without**
+`-C`, a search under the child's NC returns `result: 10 Referral` +
+`ref: ldap://<child>/...`; **with** `-C` (chase referrals), the client
+automatically follows it one hop and retrieves the real entry from the
+child server — confirmed for both an exact-DN base-object search and a
+subtree search rooted at the child's own base DN.
+
+Also found and fixed during the same live pass (a general
+`iron-config-ctl` correctness bug, not #10-specific): `init-forest`
+re-run against an already-bootstrapped forest used to silently
+overwrite the root domain's `subordinates` list back to empty, since it
+always wrote a fresh `Partition::domain(...)` rather than checking what
+was already persisted — happened while setting up this very test (a
+second `init-forest` call wiped the link `create-child` had already
+established). `init-forest` now loads the existing registry first and
+preserves the root's `subordinates`; new `add-subordinate` command
+repairs any registry a pre-fix run already damaged.
+
+Happy-path only (D10): the topology is a snapshot loaded once at
+startup, not watched — picking up a topology change (e.g. a new child
+domain added after the parent is already running) requires restarting
+the parent's `iron-ldapd`. RFC 4511's continuation references (mid-search,
+for a subtree search that spans multiple naming contexts) are not
+implemented — only a referral for the *entire* operation, sufficient
+for the one-hop base-object/subtree-rooted-at-the-child cases verified
+above.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.2.0`
@@ -610,7 +668,34 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       explicit SDN zone/bridge ACL path, and the requirement that every
       grant needs both the user AND the token) that only surfaced when
       actually running `terragrunt apply` end to end.
-- [ ] LDAP referral generation + chasing (one hop) across naming contexts
+- [x] LDAP referral generation + chasing (one hop) across naming
+      contexts (#10, CLOSED): `iron-ldapd` now optionally loads the
+      forest's persisted `PartitionRegistry` (#9, `IRON_LDAP_CONFIG_*`
+      env vars, a startup-time snapshot) and consults it before the
+      static `IRON_LDAP_REFERRALS` list when generating a referral --
+      sibling/child/parent partitions provisioned via `iron-config-ctl`
+      are referred to automatically, no hand-maintained list to keep in
+      sync. Found and fixed a real correctness bug live: a child
+      domain's base DN is *structurally* a descendant of its parent's,
+      so the parent's own single-partition `Store` always
+      "successfully" resolved it locally (returning "no such object"
+      for an entry that genuinely exists on the child's cluster)
+      instead of ever raising the `StoreError::NoPartitionFor` the
+      original (reactive) referral check was keyed off -- the
+      registry-driven path was unreachable for its primary use case
+      until a new proactive check (consulting the topology before any
+      local lookup, not just after a failure) was added. Verified live
+      with two real, independent `iron-ldapd` instances (parent +
+      child domain) and a real `ldapsearch`: without `-C`, a search
+      under the child's NC returns a real `Referral` result + URL;
+      with `-C` (chase referrals), the client automatically follows it
+      one hop and retrieves the real entry from the child server --
+      both for an exact-DN search and a subtree search rooted at the
+      child's own base DN. Also fixed, found during the same live
+      pass: `iron-config-ctl init-forest`, re-run against an
+      already-bootstrapped forest, used to silently wipe the root
+      domain's `subordinates` list (new `add-subordinate` repair
+      command for anything a pre-fix run already damaged).
 - [ ] Kerberos cross-realm `krbtgt` keys + one-hop referral-ticket routing
 - [ ] `iron-gc`: watch-fed Global Catalog aggregator (read-only partial replica,
       port 3268/3269); same engine powers the D9 federated GAL
