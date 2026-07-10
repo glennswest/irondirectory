@@ -814,6 +814,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "iron-gc"
+version = "0.12.0"
+dependencies = [
+ "anyhow",
+ "etcd-client",
+ "futures",
+ "iron-config",
+ "iron-ldap",
+ "iron-partition",
+ "iron-store",
+ "openssl",
+ "rasn",
+ "rasn-ldap",
+ "thiserror",
+ "tokio",
+ "tokio-openssl",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "iron-kdc"
 version = "0.12.0"
 dependencies = [

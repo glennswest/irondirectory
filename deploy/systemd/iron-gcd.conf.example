@@ -1,0 +1,26 @@
+# Example /etc/iron-gcd/iron-gcd.conf for the iron-gcd.service unit.
+# Loaded via systemd's EnvironmentFile=-, so a missing file is fine (the
+# leading '-' makes it optional), but iron-gcd will refuse to start
+# without these set somewhere -- unlike iron-ldapd/iron-kdcd's optional
+# referral-topology config, iron-gcd's entire purpose is watching the
+# forest topology, so it cannot run without it.
+
+IRON_GC_CONFIG_FASTETCD_ENDPOINT=http://etcd.g8.lo:2379
+IRON_GC_CONFIG_PARTITION_ID=g10-config
+IRON_GC_CONFIG_BASE_DN=cn=configuration,dc=g10,dc=lo
+
+#IRON_GC_LISTEN=0.0.0.0:3268
+#IRON_GC_HEALTH_LISTEN=0.0.0.0:8080
+
+# Optional implicit-TLS port (AD's GC convention: 3268 plaintext, 3269
+# TLS). Both cert/key are required if IRON_GC_LDAPS_LISTEN is set.
+#IRON_GC_LDAPS_LISTEN=0.0.0.0:3269
+#IRON_GC_TLS_CERT=/etc/iron-gcd/tls.crt
+#IRON_GC_TLS_KEY=/etc/iron-gcd/tls.key
+
+# Optional comma-separated attribute whitelist -- the "partial" in
+# partial replica. Unset uses iron_gc::aggregate::DEFAULT_ATTRIBUTES
+# (objectclass, cn, uid, mail, displayname, sn, givenname, uidnumber,
+# gidnumber), a conservative starting default for the in-forest case;
+# #13's cross-forest GAL will need its own, stricter list.
+#IRON_GC_ATTRIBUTES=objectclass,cn,uid,mail,displayname

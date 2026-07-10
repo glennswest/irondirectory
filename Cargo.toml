@@ -13,7 +13,7 @@ members = [
     "crates/dns",       # LDAP/Kerberos SRV autodiscovery via MicroDNS (#6)
     "crates/config",    # PartitionRegistry persistence + child-domain provisioning (#9)
     # "crates/oidc",    # OAuth2/OpenID Connect authorization server (OpenShift SSO + D9 brokering)
-    # "crates/gc",      # watch-fed Global Catalog / federated GAL aggregator (D8/D9)
+    "crates/gc",        # watch-fed Global Catalog / federated GAL aggregator (D8/D9) (#12)
     "crates/crypto",   # FIPS crypto facade over the `ossl` crate — validated (#1)
     # "crates/server",  # binary: wires the services together (standalone + k8s)
 ]

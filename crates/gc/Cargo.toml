@@ -1,0 +1,62 @@
+[package]
+name = "iron-gc"
+description = "Watch-fed Global Catalog aggregator: read-only partial replica across every domain partition in a forest, ports 3268/3269 (#12)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+iron-partition = { path = "../partition" }
+iron-store = { path = "../store" }
+iron-config = { path = "../config" }
+iron-ldap = { path = "../ldap" }
+etcd-client = { workspace = true }
+rasn = { workspace = true }
+rasn-ldap = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+openssl = { workspace = true }
+tokio-openssl = { workspace = true }
+futures = { workspace = true }
+
+# ---------------------------------------------------------------
+# Packaging (cargo-generate-rpm), mirrors iron-ldapd:
+#   cargo build --release -p iron-gc --bin iron-gcd
+#   cargo generate-rpm -p crates/gc
+# ---------------------------------------------------------------
+
+[package.metadata.generate-rpm]
+name = "iron-gcd"
+license = "Apache-2.0"
+summary = "irondirectory watch-fed Global Catalog aggregator"
+assets = [
+    { source = "target/release/iron-gcd", dest = "/usr/bin/iron-gcd", mode = "755" },
+    { source = "deploy/systemd/iron-gcd.service", dest = "/usr/lib/systemd/system/iron-gcd.service", mode = "644" },
+    { source = "deploy/systemd/iron-gcd.conf.example", dest = "/usr/share/doc/iron-gcd/iron-gcd.conf.example", mode = "644" },
+]
+post_install_script = """
+getent group iron-gcd >/dev/null || groupadd --system iron-gcd
+getent passwd iron-gcd >/dev/null || useradd --system --gid iron-gcd \\
+  --no-create-home --shell /sbin/nologin iron-gcd
+mkdir -p /etc/iron-gcd
+systemctl daemon-reload >/dev/null 2>&1 || :
+systemctl enable --now iron-gcd.service >/dev/null 2>&1 || :
+"""
+pre_uninstall_script = """
+if [ $1 -eq 0 ]; then
+  systemctl --no-reload disable --now iron-gcd.service >/dev/null 2>&1 || :
+fi
+"""
+post_uninstall_script = """
+systemctl daemon-reload >/dev/null 2>&1 || :
+if [ $1 -ge 1 ]; then
+  systemctl try-restart iron-gcd.service >/dev/null 2>&1 || :
+fi
+"""
