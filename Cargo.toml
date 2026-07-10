@@ -12,7 +12,7 @@ members = [
     "crates/kdc",       # Kerberos KDC (AS/TGS), AES enctypes only, keytab (#5)
     "crates/dns",       # LDAP/Kerberos SRV autodiscovery via MicroDNS (#6)
     "crates/config",    # PartitionRegistry persistence + child-domain provisioning (#9)
-    # "crates/oidc",    # OAuth2/OpenID Connect authorization server (OpenShift SSO + D9 brokering)
+    "crates/oidc",      # OAuth2/OpenID Connect authorization server (OpenShift SSO + D9 brokering) (#15)
     "crates/gc",        # watch-fed Global Catalog / federated GAL aggregator (D8/D9) (#12)
     "crates/crypto",   # FIPS crypto facade over the `ossl` crate — validated (#1)
     # "crates/server",  # binary: wires the services together (standalone + k8s)
@@ -34,6 +34,20 @@ tokio = { version = "1.41", features = ["full"] }
 tokio-stream = "0.1"
 futures = "0.3"
 async-trait = "0.1"
+
+# HTTP routing for iron-oidc (#15): OIDC needs real routing, query/form/
+# JSON parsing, and redirects across five endpoints -- past the point
+# where hand-rolling (as iron-ldap/iron-gc's single-endpoint health
+# probes do) is proportionate. Zero net new dependency: `axum` is
+# already compiled transitively via etcd-client -> tonic -> axum, this
+# just promotes the same version (pinned to what's already resolved) to
+# a direct dependency.
+axum = "0.8"
+# base64url for JWT compact serialization (#15) -- pure encoding, not a
+# JOSE/crypto library (unlike jsonwebtoken/josekit, which bundle their
+# own signing and would bypass the FIPS provider D4 requires); already
+# resolved transitively, zero net new dependency.
+base64 = "0.22"
 
 # fastetcd / etcd v3 client (wire-compatible). `tls` feature = tonic's
 # rustls-backed transport, used for mTLS to the fastetcd cluster (D1).

@@ -13,6 +13,7 @@ pub mod digest;
 pub mod hmac;
 pub mod kerberos;
 pub mod pbkdf2;
+pub mod sign;
 
 use ossl::bindings::OSSL_PROVIDER_available;
 use ossl::OsslContext;

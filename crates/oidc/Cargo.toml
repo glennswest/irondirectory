@@ -1,0 +1,59 @@
+[package]
+name = "iron-oidc"
+description = "FIPS OAuth2/OpenID Connect authorization server: OpenShift OIDC IdP + token SSO for modern apps (#15)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+iron-partition = { path = "../partition" }
+iron-store = { path = "../store" }
+iron-crypto = { path = "../crypto" }
+axum = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+# ---------------------------------------------------------------
+# Packaging (cargo-generate-rpm), mirrors iron-ldapd/iron-gcd:
+#   cargo build --release -p iron-oidc --bin iron-oidcd
+#   cargo generate-rpm -p crates/oidc
+# ---------------------------------------------------------------
+
+[package.metadata.generate-rpm]
+name = "iron-oidcd"
+license = "Apache-2.0"
+summary = "irondirectory FIPS OAuth2/OpenID Connect authorization server"
+assets = [
+    { source = "target/release/iron-oidcd", dest = "/usr/bin/iron-oidcd", mode = "755" },
+    { source = "deploy/systemd/iron-oidcd.service", dest = "/usr/lib/systemd/system/iron-oidcd.service", mode = "644" },
+    { source = "deploy/systemd/iron-oidcd.conf.example", dest = "/usr/share/doc/iron-oidcd/iron-oidcd.conf.example", mode = "644" },
+]
+post_install_script = """
+getent group iron-oidcd >/dev/null || groupadd --system iron-oidcd
+getent passwd iron-oidcd >/dev/null || useradd --system --gid iron-oidcd \\
+  --no-create-home --shell /sbin/nologin iron-oidcd
+mkdir -p /etc/iron-oidcd
+systemctl daemon-reload >/dev/null 2>&1 || :
+systemctl enable --now iron-oidcd.service >/dev/null 2>&1 || :
+"""
+pre_uninstall_script = """
+if [ $1 -eq 0 ]; then
+  systemctl --no-reload disable --now iron-oidcd.service >/dev/null 2>&1 || :
+fi
+"""
+post_uninstall_script = """
+systemctl daemon-reload >/dev/null 2>&1 || :
+if [ $1 -ge 1 ]; then
+  systemctl try-restart iron-oidcd.service >/dev/null 2>&1 || :
+fi
+"""

@@ -1,0 +1,31 @@
+# Example /etc/iron-oidcd/iron-oidcd.conf for the iron-oidcd.service
+# unit. Loaded via systemd's EnvironmentFile=-, so a missing file is
+# fine (the leading '-' makes it optional), but iron-oidcd will refuse
+# to start without these set somewhere, and refuses outright if the
+# FIPS provider isn't active (it can't verify passwords or sign tokens
+# without it).
+
+IRON_OIDC_FASTETCD_ENDPOINT=http://etcd.g8.lo:2379
+IRON_OIDC_PARTITION_ID=g10
+IRON_OIDC_BASE_DN=dc=g10,dc=lo
+
+# This process's own external base URL -- must be exactly what clients
+# use to reach it (scheme+host+port), since OIDC discovery URLs are
+# absolute. If OpenShift fronts this with a Route, this should be that
+# Route's URL, not this process's internal listen address.
+IRON_OIDC_ISSUER=https://oidc.g10.lo
+
+# `;`-separated client_id|client_secret|redirect_uri entries. One entry
+# per relying party (e.g. one for OpenShift's oauth-server, one for
+# each other app doing OIDC token SSO against this issuer).
+IRON_OIDC_CLIENTS=openshift|CHANGE-ME-a-real-secret|https://console-openshift-console.apps.example.com/auth/callback
+
+#IRON_OIDC_LISTEN=0.0.0.0:8080
+#IRON_OIDC_LOGIN_ATTRIBUTE=uid
+#IRON_OIDC_CODE_TTL_SECS=60
+#IRON_OIDC_TOKEN_TTL_SECS=3600
+
+# Required: point OPENSSL_CONF at a config that activates the OS-shipped
+# fips.so provider (see docs/FIPS.md and crates/crypto/testdata/fips-dev.cnf
+# for an example).
+OPENSSL_CONF=/etc/iron-oidcd/fips.cnf
