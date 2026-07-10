@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.14.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.15.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -47,8 +47,12 @@ needed -- verified live with two independent forests, a strict
 cross-forest attribute whitelist correctly hiding an internal-only
 attribute (`uidnumber`) that a per-forest GC still shows, and a
 live-added entry in one forest appearing in the federated view without
-restart). See CHANGELOG.md for the running list; Live infrastructure
-below has the verification details.
+restart; #14 OpenShift LDAP identity provider CLOSED: no new code
+(Phase 1.5's "ship first" surface) -- `docs/OPENSHIFT-LDAP-IDP.md`
+documents the config and reproduces OpenShift's exact search-then-bind
+flow against real `il1.g8.lo`, correct password succeeding and a wrong
+one failing closed). See CHANGELOG.md for the running list; Live
+infrastructure below has the verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -692,6 +696,39 @@ whole new forest requires a restart, same as adding a new domain
 partition within one forest); many-forest scale and staleness-bound
 proving remain deferred.
 
+**OpenShift LDAP identity provider (#14, D7)** — no new code; this is
+Phase 1.5's "ship first" SSO surface, since `oauth-server`'s built-in
+`LDAPPasswordIdentityProvider` needs nothing beyond the plain LDAPv3
+simple bind + search `iron-ldap` already implements (#4). Full
+configuration (the `OAuth` CR's `identityProviders[].ldap` block, the
+RFC 2255 `url` syntax, TLS options) is in
+`docs/OPENSHIFT-LDAP-IDP.md`.
+
+Verification here means proving the documented configuration actually
+authenticates, since there's no new code to test -- standing up a full
+OpenShift cluster to exercise a well-established upstream feature would
+be disproportionate to a "ship first, no new code" issue. Instead,
+`oauth-server`'s exact two-step mechanism (search for the entry by a
+configured attribute, then a second simple bind as the found DN with
+the user's typed password) was reproduced directly with `ldapsearch`
+against real, already-deployed `il1.g8.lo`: an anonymous search finds a
+test `posixAccount`/`inetOrgPerson` entry by `uid`, a bind with the
+correct password succeeds, and a bind with a wrong password fails
+closed with `Invalid credentials` -- exactly the two outcomes
+`oauth-server` depends on to accept or reject a login. The test entry
+was removed afterward (`il1`/`il2`/`il3.g8.lo` are a real ongoing
+deployment, not a throwaway forest).
+
+Found, in passing, that this deployment doesn't have
+`IRON_LDAP_TLS_CERT`/`_KEY` configured (an ops/deployment gap, not a
+code gap -- StartTLS/LDAPS have been built and tested since #4), so the
+live check used `ldap://` (`insecure: true`); the doc covers the
+`ldaps://` path for a hardened deployment. Also found that `ldapwhoami`
+fails against `iron-ldap` with "extended operations are not implemented
+yet" -- that's RFC 4532's WhoAmI *extended operation*, unrelated to a
+plain bind and never used by OpenShift's LDAP IdP, so not a blocker for
+this issue; tracked separately.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.2.0`
@@ -948,7 +985,17 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       whole new forest still needs a restart to pick up.
 
 ### Phase 1.5 — App SSO (OpenShift + modern apps)  [D7]
-- [ ] OpenShift **LDAP identity provider** (direct bind) — ship first, no new code
+- [x] OpenShift **LDAP identity provider** (direct bind) (#14, CLOSED):
+      no new code -- `oauth-server`'s built-in LDAP IdP needs only the
+      plain simple bind + search `iron-ldap` already has (#4). Full
+      config in `docs/OPENSHIFT-LDAP-IDP.md`. Verified by reproducing
+      `oauth-server`'s exact search-then-bind sequence with `ldapsearch`
+      against real `il1.g8.lo`: correct password succeeds, wrong
+      password fails closed. Found this deployment lacks TLS cert/key
+      (an ops gap, not code -- LDAPS/StartTLS already work since #4)
+      and that `ldapwhoami`'s WhoAmI extended operation isn't
+      implemented (unrelated to OpenShift's plain-bind flow, tracked
+      separately).
 - [ ] `iron-oidc`: FIPS OAuth2/OpenID Connect authorization server; OpenShift
       OIDC IdP + token SSO for modern apps; cross-forest brokering hook (D9)
 - [ ] **SPNEGO** desktop→console SSO: RequestHeader IdP + mod_auth_gssapi proxy

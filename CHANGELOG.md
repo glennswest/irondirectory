@@ -5,6 +5,25 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.15.0] — 2026-07-10
+
+### 2026-07-10 (post-v0.14.0)
+- **docs:** OpenShift LDAP identity provider (#14, D7) -- no new code,
+  Phase 1.5's "ship first" SSO surface. `docs/OPENSHIFT-LDAP-IDP.md`
+  documents the `OAuth` CR `identityProviders[].ldap` configuration
+  (RFC 2255 `url` syntax, attribute mapping, TLS options) and
+  reproduces `oauth-server`'s exact search-then-bind authentication
+  sequence with `ldapsearch` against real, already-deployed
+  `il1.g8.lo`: an anonymous search finds a test `posixAccount`/
+  `inetOrgPerson` entry by `uid`, a bind with the correct password
+  succeeds, and a bind with the wrong password fails closed with
+  `Invalid credentials`. Found this deployment has no
+  `IRON_LDAP_TLS_CERT`/`_KEY` configured (an ops gap, not code --
+  documented as the `ldaps://` alternative) and that `ldapwhoami`
+  fails with "extended operations are not implemented yet" (RFC 4532's
+  WhoAmI operation, unrelated to OpenShift's plain-bind flow, tracked
+  separately, not a blocker for this issue).
+
 ## [v0.14.0] — 2026-07-10
 
 ### 2026-07-10 (post-v0.13.0)
