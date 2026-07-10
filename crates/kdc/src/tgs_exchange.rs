@@ -8,6 +8,24 @@
 //! window would be accepted twice), no renewal/forwarding/user-to-user,
 //! no `enc_authorization_data`. These match a first vertical slice's
 //! scope, not a production-hardened KDC.
+//!
+//! Cross-realm referral tickets (#11, RFC 4120 §3.3.3): when the
+//! client's requested realm doesn't match ours, [`referral_tgs_rep`]
+//! checks `AppState::topology` for a direct (one-hop) trust -- a
+//! superior or subordinate partition whose realm matches -- and, if the
+//! shared inter-realm key has been provisioned locally
+//! (`krbtgt/<their-realm>@<our-realm>`, set via `iron-kdc-ctl
+//! set-cross-realm-key`), returns a TGT for that realm's krbtgt instead
+//! of searching our own store for a principal that can't possibly live
+//! here. A capable client (one with `[capaths]` configured, e.g. MIT
+//! krb5) uses this ticket to make a second TGS-REQ against the next
+//! hop's KDC automatically -- the same "chasing" idea as `ldapsearch
+//! -C` for LDAP referrals (#10), just at the Kerberos layer. If no
+//! one-hop trust or key is configured, this falls through to the
+//! ordinary lookup below, which fails closed with
+//! `KDC_ERR_S_PRINCIPAL_UNKNOWN` exactly as before #11. Multi-hop
+//! transitive trust-path walking and shortcut trusts are out of scope
+//! (D10).
 
 use iron_crypto::kerberos::{self, Enctype};
 use rasn_kerberos::{
@@ -102,6 +120,17 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     }
     if crate::time::diff_seconds(&authenticator.ctime, &server_now).abs() > CLOCK_SKEW_SECS {
         return krberror::build(KRB_AP_ERR_SKEW, &realm_str, kdc_sname, Some("clock skew too great".into()), None).into();
+    }
+
+    // Cross-realm referral (#11, D8 -- one-hop only): the client wants a
+    // service in a realm other than ours. See referral_tgs_rep for the
+    // full RFC 4120 §3.3.3 logic; falls through to the ordinary local
+    // lookup (and its ordinary S_PRINCIPAL_UNKNOWN failure) if no
+    // one-hop trust or key is configured for that realm.
+    if realm_str.to_ascii_uppercase() != app.realm.to_ascii_uppercase() {
+        if let Some(rep) = referral_tgs_rep(app, &mut store, &realm_str, &tgt, tkt_enctype, &session_key, &req.req_body).await {
+            return rep;
+        }
     }
 
     // Look up the requested service principal.
@@ -208,5 +237,108 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         enc_part: EncryptedData { etype: tkt_enctype.etype_number(), kvno: None, cipher: enc_part_cipher.into() },
     });
     KdcResponse::TgsRep(tgs_rep)
+}
+
+/// Builds a one-hop cross-realm referral TGS-REP (#11), or `None` if no
+/// referral applies -- either because no topology/one-hop trust with
+/// `target_realm` is configured, or because the shared inter-realm key
+/// hasn't been provisioned locally yet. Any failure past that point
+/// (encoding/crypto -- practically unreachable for well-formed AES
+/// keys) also falls back to `None` rather than adding a second
+/// error-reporting path; the caller's ordinary lookup then fails closed
+/// with `KDC_ERR_S_PRINCIPAL_UNKNOWN`, matching pre-#11 behavior.
+///
+/// The returned ticket has `sname = krbtgt/<target_realm>`,
+/// `realm = <our realm>` (the issuing realm) -- so a subsequent AP-REQ
+/// built from it resolves to the exact same `krbtgt/<target_realm>@<our
+/// realm>` principal string on whichever KDC decrypts it next, which is
+/// how the shared key must be provisioned on both ends (see
+/// `iron-kdc-ctl set-cross-realm-key`).
+#[allow(clippy::too_many_arguments)]
+async fn referral_tgs_rep(
+    app: &AppState,
+    store: &mut iron_store::store::Store,
+    target_realm: &str,
+    tgt: &EncTicketPart,
+    tkt_enctype: Enctype,
+    session_key: &[u8],
+    req_body: &rasn_kerberos::KdcReqBody,
+) -> Option<KdcResponse> {
+    let topology = app.topology.as_ref()?;
+    let own_id = app.own_partition_id.as_ref()?;
+    let target_upper = target_realm.to_ascii_uppercase();
+
+    let is_one_hop_neighbor = topology.superior_of(own_id).is_some_and(|p| p.realm.as_deref() == Some(target_upper.as_str()))
+        || topology.subordinates_of(own_id).iter().any(|p| p.realm.as_deref() == Some(target_upper.as_str()));
+    if !is_one_hop_neighbor {
+        return None;
+    }
+
+    let referral_sname = krbtgt_principal_name(&target_upper);
+    let key_principal = format!("krbtgt/{target_upper}@{}", app.realm);
+    let key_dns = store.lookup_by_index(&app.base_dn, crate::principal::ATTR_PRINCIPAL_NAME, &key_principal).await.ok()?;
+    let [key_dn] = key_dns.as_slice() else { return None };
+    let key_entry = store.get_entry(key_dn).await.ok()??;
+    let keys = crate::principal::keys(&key_entry).ok()?;
+    let referral_key = keys.iter().find(|k| k.enctype == tkt_enctype).or_else(|| keys.first())?;
+
+    let new_session_key_bytes = kerberos::random_bytes(&app.fips, referral_key.enctype.key_len()).ok()?;
+    let new_session_key = EncryptionKey { r#type: referral_key.enctype.etype_number(), value: new_session_key_bytes.into() };
+
+    let (auth_time, _) = crate::time::now();
+    let end_time = crate::time::plus_seconds(TICKET_LIFETIME_SECS.min(crate::time::diff_seconds(&auth_time, &tgt.end_time)));
+    let flags = TicketFlags::reserved();
+    let own_realm = crate::string_to_gstring(&app.realm);
+
+    let enc_ticket_part = EncTicketPart {
+        flags: flags.clone(),
+        key: new_session_key.clone(),
+        crealm: tgt.crealm.clone(),
+        cname: tgt.cname.clone(),
+        transited: TransitedEncoding { r#type: 0, contents: rasn::types::OctetString::from(Vec::new()) },
+        auth_time: tgt.auth_time.clone(),
+        start_time: None,
+        end_time: end_time.clone(),
+        renew_till: None,
+        caddr: None,
+        authorization_data: None,
+    };
+    let enc_ticket_bytes = rasn::der::encode(&enc_ticket_part).ok()?;
+    let ticket_cipher = kerberos::encrypt(&app.fips, referral_key.enctype, &referral_key.key, 2, &enc_ticket_bytes).ok()?;
+    let ticket = Ticket {
+        tkt_vno: 5.into(),
+        realm: own_realm.clone(),
+        sname: referral_sname.clone(),
+        enc_part: EncryptedData { etype: referral_key.enctype.etype_number(), kvno: Some(referral_key.kvno), cipher: ticket_cipher.into() },
+    };
+
+    let enc_kdc_rep_part = EncKdcRepPart {
+        key: new_session_key,
+        last_req: Vec::new(),
+        nonce: req_body.nonce,
+        key_expiration: None,
+        flags,
+        auth_time: tgt.auth_time.clone(),
+        start_time: None,
+        end_time,
+        renew_till: None,
+        srealm: own_realm,
+        sname: referral_sname,
+        caddr: None,
+        encrypted_pa_data: None,
+    };
+    let enc_tgs_rep_bytes = rasn::der::encode(&EncTgsRepPart(enc_kdc_rep_part)).ok()?;
+    let enc_part_cipher = kerberos::encrypt(&app.fips, tkt_enctype, session_key, 8, &enc_tgs_rep_bytes).ok()?;
+
+    let tgs_rep = TgsRep(KdcRep {
+        pvno: 5.into(),
+        msg_type: 13.into(),
+        padata: None,
+        crealm: tgt.crealm.clone(),
+        cname: tgt.cname.clone(),
+        ticket,
+        enc_part: EncryptedData { etype: tkt_enctype.etype_number(), kvno: None, cipher: enc_part_cipher.into() },
+    });
+    Some(KdcResponse::TgsRep(tgs_rep))
 }
 

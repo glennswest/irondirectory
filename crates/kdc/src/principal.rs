@@ -93,6 +93,31 @@ pub fn set_password(ctx: &FipsContext, entry: &mut Entry, principal_name: &str, 
     Ok(())
 }
 
+/// Derives and stores keys for a *shared* secret that must independently
+/// derive to byte-identical keys on both ends of a relationship (#11's
+/// cross-realm `krbtgt/<peer>@<self>` inter-realm keys, provisioned once
+/// per realm via `iron-kdc-ctl set-cross-realm-key`). Unlike
+/// [`set_password`], the salt is deterministic -- `principal_name`
+/// itself, hex-encoded -- rather than random: both realms' KDCs run
+/// this independently from the same operator-supplied secret and must
+/// arrive at the same key bytes, which a random salt would break.
+/// `principal_name` is exactly the string both ends compute from a
+/// referral ticket's own `sname`/`realm` fields (see
+/// `tgs_exchange::referral_tgs_rep`), so it's naturally identical on
+/// both sides already -- safe to use as the salt's seed.
+pub fn set_shared_key(ctx: &FipsContext, entry: &mut Entry, principal_name: &str, secret: &[u8]) -> Result<(), Error> {
+    let salt = to_hex(principal_name.as_bytes());
+    let mut key_values = Vec::with_capacity(DEFAULT_ENCTYPES.len());
+    for enctype in DEFAULT_ENCTYPES {
+        let key = kerberos::string_to_key(ctx, enctype, secret, salt.as_bytes(), None)?;
+        key_values.push(format!("{}:1:{}", enctype.etype_number(), to_hex(&key)));
+    }
+    entry.set(ATTR_PRINCIPAL_NAME, [principal_name.to_string()]);
+    entry.set(ATTR_SALT, [salt]);
+    entry.set(ATTR_KEY, key_values);
+    Ok(())
+}
+
 /// The principal name stored on `entry`.
 pub fn principal_name(entry: &Entry) -> Result<&str, Error> {
     entry
@@ -158,6 +183,27 @@ mod tests {
             // Re-deriving with the stored salt must reproduce the same key.
             let rederived = kerberos::string_to_key(&ctx, enctype, b"correcthorsebatterystaple", &s, None).unwrap();
             assert_eq!(k.key, rederived);
+        }
+    }
+
+    #[test]
+    fn shared_key_is_deterministic_across_independent_calls() {
+        let ctx = FipsContext::new().unwrap();
+        let name = "krbtgt/CHILD.LO@PARENT.LO";
+        let mut here = Entry::new();
+        let mut there = Entry::new();
+        set_shared_key(&ctx, &mut here, name, b"shared-trust-secret").unwrap();
+        set_shared_key(&ctx, &mut there, name, b"shared-trust-secret").unwrap();
+
+        // Two independent calls with the same principal name + secret --
+        // exactly what happens when each realm's KDC provisions its own
+        // side of the trust -- must derive byte-identical keys, unlike
+        // set_password's random-salt behavior.
+        assert_eq!(salt(&here).unwrap(), salt(&there).unwrap());
+        for enctype in DEFAULT_ENCTYPES {
+            let a = key_for_enctype(&here, enctype).unwrap();
+            let b = key_for_enctype(&there, enctype).unwrap();
+            assert_eq!(a.key, b.key);
         }
     }
 

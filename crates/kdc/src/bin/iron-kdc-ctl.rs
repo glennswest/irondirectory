@@ -4,6 +4,7 @@
 //! Usage:
 //!   iron-kdc-ctl set-password <principal> <password>
 //!   iron-kdc-ctl export-keytab <principal> <output-file>
+//!   iron-kdc-ctl set-cross-realm-key <peer-realm> <secret>
 //!
 //! <principal> is the primary/instance part only (no `@REALM` -- the
 //! realm comes from IRON_KDC_REALM). `set-password` upserts: creates the
@@ -16,6 +17,19 @@
 //! (rocketsmbd's `cifs/<host>@REALM`, sshd's `host/<host>@REALM`, etc.)
 //! as a keytab file -- writes every enctype currently stored for the
 //! principal (#8), mirroring what a real KDC's `ktadd` does.
+//!
+//! `set-cross-realm-key` provisions the shared inter-realm key for a
+//! one-hop Kerberos trust (#11): stores it locally under the exact
+//! principal name `krbtgt/<peer-realm>@<this realm's IRON_KDC_REALM>` --
+//! the same string both this KDC and the peer realm's KDC compute from
+//! a referral ticket's own `sname`/`realm` fields, so decryption matches
+//! on both ends. Run the *identical* command (same peer-realm, same
+//! secret) against both KDCs -- once with IRON_KDC_* pointed at this
+//! realm's store, once at the peer's -- to provision both sides of the
+//! trust. Unlike `set-password`, the principal name here is built
+//! explicitly rather than assumed to be `<name>@<IRON_KDC_REALM>`,
+//! since the two realms named in a cross-realm key are never both "this
+//! realm".
 //!
 //! Required env: IRON_KDC_FASTETCD_ENDPOINT, IRON_KDC_PARTITION_ID,
 //! IRON_KDC_BASE_DN, IRON_KDC_REALM.
@@ -50,17 +64,17 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     let (Some(cmd), Some(principal), Some(third)) = (args.get(1), args.get(2), args.get(3)) else {
-        anyhow::bail!("usage: iron-kdc-ctl <set-password|export-keytab> <principal> <password|output-file>");
+        anyhow::bail!("usage: iron-kdc-ctl <set-password|export-keytab> <principal> <password|output-file>, or set-cross-realm-key <peer-realm> <secret>");
     };
 
     let endpoint = require_env("IRON_KDC_FASTETCD_ENDPOINT")?;
     let pid = require_env("IRON_KDC_PARTITION_ID")?;
     let base_dn_str = require_env("IRON_KDC_BASE_DN")?;
     let realm = require_env("IRON_KDC_REALM")?;
-    let principal_fqn = format!("{principal}@{realm}");
 
     match cmd.as_str() {
         "set-password" => {
+            let principal_fqn = format!("{principal}@{realm}");
             let password = third;
             let (mut store, base_dn) = connect(&base_dn_str, &pid, &endpoint).await?;
             let fips = iron_crypto::FipsContext::new()?;
@@ -90,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
             println!("set password for {principal_fqn} (dn: {dn})");
         }
         "export-keytab" => {
+            let principal_fqn = format!("{principal}@{realm}");
             let output_path = third;
             let (mut store, base_dn) = connect(&base_dn_str, &pid, &endpoint).await?;
 
@@ -128,7 +143,43 @@ async fn main() -> anyhow::Result<()> {
 
             println!("wrote {} key(s) for {principal_fqn} to {output_path}", entries.len());
         }
-        other => anyhow::bail!("unknown command {other:?}; expected set-password or export-keytab"),
+        "set-cross-realm-key" => {
+            let peer_realm = principal.to_ascii_uppercase();
+            let secret = third;
+            // Deliberately NOT `{principal}@{realm}` (that's `set-password`'s
+            // convention) -- a cross-realm key's principal name embeds
+            // *both* realms explicitly (see module doc), so it's built by
+            // hand here rather than reusing the generic FQN helper.
+            let name = format!("krbtgt/{peer_realm}");
+            let principal_fqn = format!("{name}@{realm}");
+            let (mut store, base_dn) = connect(&base_dn_str, &pid, &endpoint).await?;
+            let fips = iron_crypto::FipsContext::new()?;
+            let index_spec = iron_kdc::index_spec();
+
+            let existing = store.lookup_by_index(&base_dn, iron_kdc::principal::ATTR_PRINCIPAL_NAME, &principal_fqn).await?;
+            let (dn, mut entry) = match existing.as_slice() {
+                [] => {
+                    let cn_value = name.replace('/', ".");
+                    let dn = Dn::parse(&format!("cn={cn_value},{base_dn_str}"))?;
+                    let mut entry = Entry::new();
+                    entry.set("objectclass", ["top".to_string()]);
+                    entry.set("cn", [cn_value]);
+                    (dn, entry)
+                }
+                [dn] => {
+                    let entry =
+                        store.get_entry(dn).await?.ok_or_else(|| anyhow::anyhow!("index points at {dn} but the entry is missing"))?;
+                    (dn.clone(), entry)
+                }
+                multiple => anyhow::bail!("principal {principal_fqn} is not unique: {} entries found", multiple.len()),
+            };
+
+            iron_kdc::principal::set_shared_key(&fips, &mut entry, &principal_fqn, secret.as_bytes())?;
+            store.put_entry(&dn, &entry, &index_spec).await?;
+
+            println!("set cross-realm key {principal_fqn} (dn: {dn}) -- run the identical command against the peer realm's KDC too");
+        }
+        other => anyhow::bail!("unknown command {other:?}; expected set-password, export-keytab, or set-cross-realm-key"),
     }
 
     Ok(())

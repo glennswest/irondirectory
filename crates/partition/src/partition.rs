@@ -176,6 +176,15 @@ pub struct Partition {
     /// referrals), e.g. `ldaps://dc1.g10.lo:636`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ldap_url: Option<String>,
+    /// KDC host:port for this partition's realm (for cross-realm Kerberos
+    /// referral routing, #11), e.g. `kdc1.g10.lo:88`. Real clients find
+    /// this via `_kerberos._udp` SRV records (`iron-dns`); this field is
+    /// the same kind of hint `ldap_url` is -- useful for testing/ops
+    /// visibility, not itself consulted by `iron-kdc` to reach a peer
+    /// (referral tickets only need the *key*, not the address; the
+    /// client's own krb5.conf/DNS gets it to the next KDC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kdc_url: Option<String>,
 }
 
 impl Partition {
@@ -198,6 +207,7 @@ impl Partition {
             superior: None,
             subordinates: Vec::new(),
             ldap_url: None,
+            kdc_url: None,
         })
     }
 
@@ -217,6 +227,7 @@ impl Partition {
             superior: None,
             subordinates: Vec::new(),
             ldap_url: None,
+            kdc_url: None,
         })
     }
 
@@ -235,6 +246,12 @@ impl Partition {
     /// Builder: set the LDAP referral URL.
     pub fn with_ldap_url(mut self, url: impl Into<String>) -> Self {
         self.ldap_url = Some(url.into());
+        self
+    }
+
+    /// Builder: set the KDC host:port hint.
+    pub fn with_kdc_url(mut self, url: impl Into<String>) -> Self {
+        self.kdc_url = Some(url.into());
         self
     }
 }
@@ -323,9 +340,11 @@ mod tests {
             ClusterRef::plaintext(["http://127.0.0.1:2379"]),
         )
         .unwrap()
-        .with_ldap_url("ldaps://dc1.g10.lo:636");
+        .with_ldap_url("ldaps://dc1.g10.lo:636")
+        .with_kdc_url("kdc1.g10.lo:88");
         let j = serde_json::to_string(&p).unwrap();
         let back: Partition = serde_json::from_str(&j).unwrap();
         assert_eq!(p, back);
+        assert_eq!(p.kdc_url.as_deref(), Some("kdc1.g10.lo:88"));
     }
 }

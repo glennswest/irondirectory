@@ -6,10 +6,13 @@
 //! for the crypto; RC4/DES are never implemented, not just disabled).
 //! Keytab I/O for handing service principal keys to other daemons
 //! (rocketsmbd, sshd, ...). Cross-realm `krbtgt/CHILD@PARENT` key slots
-//! follow the same `Partition.superior` relationships `iron-ldap`'s
-//! rootDSE uses for `rootDomainNamingContext`, but are only
-//! model-correct, not live-tested beyond a single realm (D10 -- no
-//! second realm is deployed to test against yet).
+//! and one-hop referral-ticket routing (#11) follow the same
+//! `Partition.superior`/`.subordinates` relationships `iron-ldap`'s
+//! rootDSE uses for `rootDomainNamingContext` -- `AppState::topology`,
+//! loaded from the persisted configuration partition (#9) exactly like
+//! `iron-ldap`'s referral wiring (#10). Transitive multi-realm
+//! trust-path walking and shortcut trusts are explicitly out of scope
+//! (D10 -- one hop only).
 
 pub mod as_exchange;
 pub mod keytab;
@@ -23,7 +26,7 @@ pub mod wire;
 use std::sync::Arc;
 
 use iron_crypto::FipsContext;
-use iron_partition::Dn;
+use iron_partition::{Dn, PartitionId, PartitionRegistry};
 use iron_store::index::IndexSpec;
 use iron_store::store::Store;
 use rasn::types::GeneralString;
@@ -60,12 +63,32 @@ pub struct AppState {
     /// do anything at all -- `AppState::new` fails outright if the FIPS
     /// provider isn't active, rather than starting in a half-working mode.
     pub fips: FipsContext,
+    /// The forest-wide partition topology (#9/#10), loaded once at
+    /// startup from the persisted configuration partition if
+    /// `IRON_KDC_CONFIG_*` env vars are set. Lets TGS-REQ find a direct
+    /// (one-hop) trust with another realm and route a referral ticket
+    /// through it instead of failing closed (#11, `tgs_exchange`'s
+    /// `referral_tgs_rep`). `None` if no configuration partition is set
+    /// up -- no cross-realm referrals are possible then (matching
+    /// `iron-ldap`'s `AppState::topology` fallback behavior). A
+    /// snapshot, not watched.
+    pub topology: Option<PartitionRegistry>,
+    /// This instance's own partition id in `topology`, needed to look up
+    /// its superior/subordinate partitions via `PartitionRegistry::superior_of`/
+    /// `subordinates_of`.
+    pub own_partition_id: Option<PartitionId>,
 }
 
 impl AppState {
-    pub fn new(store: Store, base_dn: Dn, realm: String) -> Result<Arc<Self>, iron_crypto::Error> {
+    pub fn new(
+        store: Store,
+        base_dn: Dn,
+        realm: String,
+        topology: Option<PartitionRegistry>,
+        own_partition_id: Option<PartitionId>,
+    ) -> Result<Arc<Self>, iron_crypto::Error> {
         let fips = FipsContext::new()?;
-        Ok(Arc::new(AppState { store: Mutex::new(store), index_spec: index_spec(), base_dn, realm, fips }))
+        Ok(Arc::new(AppState { store: Mutex::new(store), index_spec: index_spec(), base_dn, realm, fips, topology, own_partition_id }))
     }
 }
 

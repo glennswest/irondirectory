@@ -13,6 +13,7 @@ authors.workspace = true
 iron-partition = { path = "../partition" }
 iron-store = { path = "../store" }
 iron-crypto = { path = "../crypto" }
+iron-config = { path = "../config" }
 rasn = { workspace = true }
 rasn-kerberos = { workspace = true }
 chrono = { workspace = true }

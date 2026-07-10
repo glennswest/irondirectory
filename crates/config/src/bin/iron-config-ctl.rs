@@ -4,6 +4,7 @@
 //!   iron-config-ctl init-forest <forest-id> <config-id> <config-base-dn> <root-domain-id> <root-base-dn> [realm]
 //!   iron-config-ctl create-child <parent-id> <new-id> <new-base-dn> [realm]
 //!   iron-config-ctl set-ldap-url <partition-id> <ldap-url>
+//!   iron-config-ctl set-kdc-url <partition-id> <kdc-url>
 //!   iron-config-ctl add-subordinate <parent-id> <child-id>
 //!   iron-config-ctl show
 //!
@@ -28,6 +29,11 @@
 //! `set-ldap-url` updates an existing partition's `ldap_url` after the
 //! fact -- useful since a server's real address is often only known once
 //! it's actually deployed, after the partition record already exists.
+//!
+//! `set-kdc-url` is the same, for `kdc_url` (#11) -- a hint for
+//! testing/ops visibility, not itself consulted by `iron-kdc` for
+//! routing (real clients find the next-hop KDC via krb5.conf/DNS, not
+//! this field).
 //!
 //! `add-subordinate` adds `child-id` to `parent-id`'s `subordinates` list
 //! if it isn't already there -- idempotent repair for a link that should
@@ -64,9 +70,12 @@ async fn main() -> anyhow::Result<()> {
         "init-forest" => init_forest(&args[2..]).await,
         "create-child" => create_child(&args[2..]).await,
         "set-ldap-url" => set_ldap_url(&args[2..]).await,
+        "set-kdc-url" => set_kdc_url(&args[2..]).await,
         "add-subordinate" => add_subordinate(&args[2..]).await,
         "show" => show().await,
-        other => anyhow::bail!("unknown command {other:?}; expected init-forest, create-child, set-ldap-url, add-subordinate, or show"),
+        other => anyhow::bail!(
+            "unknown command {other:?}; expected init-forest, create-child, set-ldap-url, set-kdc-url, add-subordinate, or show"
+        ),
     }
 }
 
@@ -100,13 +109,14 @@ async fn show() -> anyhow::Result<()> {
     let (_store, _config_dn, registry) = connect_and_load().await?;
     for p in registry.iter() {
         println!(
-            "{:<20} kind={:<13} base_dn={:<40} realm={:<20} superior={:<20} ldap_url={:<30} subordinates={:?}",
+            "{:<20} kind={:<13} base_dn={:<40} realm={:<20} superior={:<20} ldap_url={:<30} kdc_url={:<20} subordinates={:?}",
             p.id.as_str(),
             format!("{:?}", p.kind),
             p.base_dn.to_string(),
             p.realm.as_deref().unwrap_or("-"),
             p.superior.as_ref().map(|s| s.as_str()).unwrap_or("-"),
             p.ldap_url.as_deref().unwrap_or("-"),
+            p.kdc_url.as_deref().unwrap_or("-"),
             p.subordinates.iter().map(|s| s.as_str()).collect::<Vec<_>>()
         );
     }
@@ -127,6 +137,22 @@ async fn set_ldap_url(args: &[String]) -> anyhow::Result<()> {
     let index_spec = iron_config::index_spec();
     iron_config::put_partition(&mut store, &config_dn, &index_spec, &p).await?;
     println!("{partition_id}: ldap_url set to {url}");
+    Ok(())
+}
+
+/// Updates an existing partition's `kdc_url` (#11) -- same pattern as
+/// `set_ldap_url`, for the Kerberos-side address hint.
+async fn set_kdc_url(args: &[String]) -> anyhow::Result<()> {
+    let (Some(partition_id), Some(url)) = (args.first(), args.get(1)) else {
+        anyhow::bail!("usage: iron-config-ctl set-kdc-url <partition-id> <kdc-url>");
+    };
+    let (mut store, config_dn, registry) = connect_and_load().await?;
+    let pid = PartitionId::new(partition_id.clone())?;
+    let mut p = registry.get(&pid).ok_or_else(|| anyhow::anyhow!("no such partition: {partition_id}"))?.clone();
+    p = p.with_kdc_url(url.clone());
+    let index_spec = iron_config::index_spec();
+    iron_config::put_partition(&mut store, &config_dn, &index_spec, &p).await?;
+    println!("{partition_id}: kdc_url set to {url}");
     Ok(())
 }
 
