@@ -4,7 +4,7 @@
 //! Usage:
 //!   iron-kdc-ctl set-password <principal> <password>
 //!   iron-kdc-ctl export-keytab <principal> <output-file>
-//!   iron-kdc-ctl set-cross-realm-key <peer-realm> <secret>
+//!   iron-kdc-ctl set-cross-realm-key <to-realm> <from-realm> <secret>
 //!
 //! <principal> is the primary/instance part only (no `@REALM` -- the
 //! realm comes from IRON_KDC_REALM). `set-password` upserts: creates the
@@ -20,19 +20,22 @@
 //!
 //! `set-cross-realm-key` provisions the shared inter-realm key for a
 //! one-hop Kerberos trust (#11): stores it locally under the exact
-//! principal name `krbtgt/<peer-realm>@<this realm's IRON_KDC_REALM>` --
-//! the same string both this KDC and the peer realm's KDC compute from
-//! a referral ticket's own `sname`/`realm` fields, so decryption matches
-//! on both ends. Run the *identical* command (same peer-realm, same
-//! secret) against both KDCs -- once with IRON_KDC_* pointed at this
-//! realm's store, once at the peer's -- to provision both sides of the
-//! trust. Unlike `set-password`, the principal name here is built
-//! explicitly rather than assumed to be `<name>@<IRON_KDC_REALM>`,
-//! since the two realms named in a cross-realm key are never both "this
-//! realm".
+//! principal name `krbtgt/<to-realm>@<from-realm>` -- the same string
+//! both `<from-realm>`'s KDC (issuing a referral) and `<to-realm>`'s KDC
+//! (decrypting the AP-REQ built from it) independently compute from a
+//! referral ticket's own `sname`/`realm` fields, so it must be
+//! provisioned identically on both. Both realms named come from the
+//! command line, NOT from `IRON_KDC_REALM` (unlike `set-password`) --
+//! run the exact same three arguments against both KDCs (only
+//! IRON_KDC_FASTETCD_ENDPOINT/PARTITION_ID/BASE_DN change, to point at
+//! each store in turn) to provision both sides of the trust with
+//! byte-identical keys (see `iron_kdc::principal::set_shared_key`'s
+//! deterministic salt).
 //!
 //! Required env: IRON_KDC_FASTETCD_ENDPOINT, IRON_KDC_PARTITION_ID,
-//! IRON_KDC_BASE_DN, IRON_KDC_REALM.
+//! IRON_KDC_BASE_DN, IRON_KDC_REALM (set-cross-realm-key doesn't use the
+//! last one's value, but it's still required, matching every other
+//! command's env contract).
 
 use iron_kdc::keytab::KeytabEntry;
 use iron_partition::{ClusterRef, Dn, ForestId, Partition, PartitionRegistry};
@@ -64,7 +67,10 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     let (Some(cmd), Some(principal), Some(third)) = (args.get(1), args.get(2), args.get(3)) else {
-        anyhow::bail!("usage: iron-kdc-ctl <set-password|export-keytab> <principal> <password|output-file>, or set-cross-realm-key <peer-realm> <secret>");
+        anyhow::bail!(
+            "usage: iron-kdc-ctl <set-password|export-keytab> <principal> <password|output-file>, \
+             or set-cross-realm-key <to-realm> <from-realm> <secret>"
+        );
     };
 
     let endpoint = require_env("IRON_KDC_FASTETCD_ENDPOINT")?;
@@ -144,14 +150,18 @@ async fn main() -> anyhow::Result<()> {
             println!("wrote {} key(s) for {principal_fqn} to {output_path}", entries.len());
         }
         "set-cross-realm-key" => {
-            let peer_realm = principal.to_ascii_uppercase();
-            let secret = third;
+            let to_realm = principal.to_ascii_uppercase();
+            let from_realm = third.to_ascii_uppercase();
+            let secret = args.get(4).ok_or_else(|| {
+                anyhow::anyhow!("usage: iron-kdc-ctl set-cross-realm-key <to-realm> <from-realm> <secret>")
+            })?;
             // Deliberately NOT `{principal}@{realm}` (that's `set-password`'s
-            // convention) -- a cross-realm key's principal name embeds
-            // *both* realms explicitly (see module doc), so it's built by
-            // hand here rather than reusing the generic FQN helper.
-            let name = format!("krbtgt/{peer_realm}");
-            let principal_fqn = format!("{name}@{realm}");
+            // convention, keyed off IRON_KDC_REALM) -- a cross-realm key's
+            // principal name embeds *both* realms explicitly, taken from
+            // the command line so the same invocation works unchanged
+            // against either end of the trust (see module doc).
+            let name = format!("krbtgt/{to_realm}");
+            let principal_fqn = format!("{name}@{from_realm}");
             let (mut store, base_dn) = connect(&base_dn_str, &pid, &endpoint).await?;
             let fips = iron_crypto::FipsContext::new()?;
             let index_spec = iron_kdc::index_spec();
