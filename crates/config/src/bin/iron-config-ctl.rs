@@ -4,6 +4,7 @@
 //!   iron-config-ctl init-forest <forest-id> <config-id> <config-base-dn> <root-domain-id> <root-base-dn> [realm]
 //!   iron-config-ctl create-child <parent-id> <new-id> <new-base-dn> [realm]
 //!   iron-config-ctl set-ldap-url <partition-id> <ldap-url>
+//!   iron-config-ctl add-subordinate <parent-id> <child-id>
 //!   iron-config-ctl show
 //!
 //! `init-forest` bootstraps a brand-new forest: creates the configuration
@@ -28,8 +29,14 @@
 //! fact -- useful since a server's real address is often only known once
 //! it's actually deployed, after the partition record already exists.
 //!
+//! `add-subordinate` adds `child-id` to `parent-id`'s `subordinates` list
+//! if it isn't already there -- idempotent repair for a link that should
+//! already exist (e.g. `init-forest` re-run against an already-bootstrapped
+//! forest used to silently wipe the root domain's subordinates; that's
+//! fixed, but this repairs any registry a pre-fix run already damaged).
+//!
 //! Required env (all commands): IRON_CONFIG_FASTETCD_ENDPOINT.
-//! Required env (create-child/set-ldap-url/show): IRON_CONFIG_PARTITION_ID,
+//! Required env (create-child/set-ldap-url/add-subordinate/show): IRON_CONFIG_PARTITION_ID,
 //! IRON_CONFIG_BASE_DN -- the bootstrap pointer to the already-existing
 //! configuration partition.
 
@@ -57,8 +64,9 @@ async fn main() -> anyhow::Result<()> {
         "init-forest" => init_forest(&args[2..]).await,
         "create-child" => create_child(&args[2..]).await,
         "set-ldap-url" => set_ldap_url(&args[2..]).await,
+        "add-subordinate" => add_subordinate(&args[2..]).await,
         "show" => show().await,
-        other => anyhow::bail!("unknown command {other:?}; expected init-forest, create-child, set-ldap-url, or show"),
+        other => anyhow::bail!("unknown command {other:?}; expected init-forest, create-child, set-ldap-url, add-subordinate, or show"),
     }
 }
 
@@ -122,6 +130,32 @@ async fn set_ldap_url(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Adds `child-id` to `parent-id`'s `subordinates` list if it isn't
+/// already there -- a repair tool for exactly the bug `init-forest`
+/// used to have (blindly overwriting an existing parent record wiped
+/// this link out); idempotent, so re-running it is harmless.
+async fn add_subordinate(args: &[String]) -> anyhow::Result<()> {
+    let (Some(parent_id), Some(child_id)) = (args.first(), args.get(1)) else {
+        anyhow::bail!("usage: iron-config-ctl add-subordinate <parent-id> <child-id>");
+    };
+    let (mut store, config_dn, registry) = connect_and_load().await?;
+    let parent_pid = PartitionId::new(parent_id.clone())?;
+    let child_pid = PartitionId::new(child_id.clone())?;
+    if registry.get(&child_pid).is_none() {
+        anyhow::bail!("no such partition: {child_id}");
+    }
+    let mut parent = registry.get(&parent_pid).ok_or_else(|| anyhow::anyhow!("no such partition: {parent_id}"))?.clone();
+    if !parent.subordinates.contains(&child_pid) {
+        parent.subordinates.push(child_pid);
+        let index_spec = iron_config::index_spec();
+        iron_config::put_partition(&mut store, &config_dn, &index_spec, &parent).await?;
+        println!("{parent_id}: added subordinate {child_id}");
+    } else {
+        println!("{parent_id}: {child_id} is already a subordinate");
+    }
+    Ok(())
+}
+
 async fn init_forest(args: &[String]) -> anyhow::Result<()> {
     let (Some(forest_id), Some(config_id), Some(config_base_dn), Some(root_id), Some(root_base_dn)) =
         (args.first(), args.get(1), args.get(2), args.get(3), args.get(4))
@@ -143,6 +177,15 @@ async fn init_forest(args: &[String]) -> anyhow::Result<()> {
     let mut store = Store::connect(registry).await?;
     let index_spec = iron_config::index_spec();
 
+    // Load whatever's already there (empty on a genuinely fresh forest --
+    // scan_subtree over an as-yet-unwritten DN just returns nothing, not
+    // an error) so re-running init-forest (e.g. to fix a typo'd realm)
+    // can't silently wipe out subordinates a prior create-child already
+    // set. Blindly overwriting with a fresh Partition::domain(...) here
+    // was a real bug: it reset `subordinates` to empty, breaking the
+    // parent->child link every time this command ran again.
+    let existing = iron_config::load_registry(&mut store, &config_dn).await.unwrap_or_default();
+
     // The configuration partition describes itself, matching AD's
     // Configuration NC hosting its own crossRef object.
     iron_config::put_partition(&mut store, &config_dn, &index_spec, &config_partition).await?;
@@ -153,6 +196,9 @@ async fn init_forest(args: &[String]) -> anyhow::Result<()> {
     }
     if let Some(url) = env("IRON_CONFIG_ROOT_LDAP_URL") {
         root = root.with_ldap_url(url);
+    }
+    if let Some(prior) = existing.get(&root.id) {
+        root.subordinates = prior.subordinates.clone();
     }
     iron_config::put_partition(&mut store, &config_dn, &index_spec, &root).await?;
 
