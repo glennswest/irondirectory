@@ -1,6 +1,6 @@
 [package]
 name = "iron-gc"
-description = "Watch-fed Global Catalog aggregator: read-only partial replica across every domain partition in a forest, ports 3268/3269 (#12)."
+description = "Watch-fed Global Catalog / federated GAL aggregator: read-only partial replica across every domain partition in one or more forests, ports 3268/3269 (#12/#13)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,5 +1,5 @@
 [Unit]
-Description=iron-gcd - irondirectory watch-fed Global Catalog aggregator
+Description=iron-gcd - irondirectory watch-fed Global Catalog / federated GAL aggregator
 Documentation=https://github.com/glennswest/irondirectory
 After=network-online.target
 Wants=network-online.target

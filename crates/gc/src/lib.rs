@@ -1,24 +1,30 @@
-//! iron-gc: watch-fed Global Catalog aggregator (#12), ports 3268/3269.
+//! iron-gc: watch-fed Global Catalog / federated GAL aggregator
+//! (#12/#13), ports 3268/3269.
 //!
-//! Subscribes to every `Domain`-kind partition in a forest's
-//! `PartitionRegistry` (the same #9-persisted registry `iron-ldapd`/
-//! `iron-kdcd` load a one-time snapshot of), maintaining a live,
-//! continuously-updated, attribute-whitelisted partial replica
+//! Subscribes to every `Domain`-kind partition across one or more
+//! forests' `PartitionRegistry` (the same #9-persisted registry
+//! `iron-ldapd`/`iron-kdcd` load a one-time snapshot of), maintaining a
+//! live, continuously-updated, attribute-whitelisted partial replica
 //! (`aggregate::Aggregate`) in memory -- and serves anonymous bind +
 //! read-only search against it over a small LDAP-shaped protocol
 //! surface reusing `iron_ldap`'s wire framing, filter matching, and
-//! rootDSE builder. Same engine intended to power the cross-forest
-//! federated GAL (#13, D9) once that issue configures its own,
-//! stricter attribute whitelist and multi-forest registry loading.
+//! rootDSE builder. The library here is deliberately forest-agnostic --
+//! `watch::run` takes a single `Partition` and doesn't care which forest
+//! it came from -- so the SAME engine serves two deployment roles
+//! (`iron-gcd`'s doc comment has the operational details): a single
+//! forest's own internal Global Catalog (#12), or the D9 federated GAL
+//! aggregating several forests behind a stricter attribute whitelist
+//! (#13). Multi-forest bootstrap (loading N config partitions instead
+//! of one) and merging their registries lives entirely in the binary,
+//! not here.
 //!
-//! Happy-path scope (D10): one process watches one forest's domain
-//! partitions; the topology itself (which partitions exist) is a
-//! startup snapshot, not watched -- a new child domain added after
-//! this process starts requires a restart to pick up, matching every
-//! other daemon's `AppState::topology` limitation in this codebase.
-//! Cross-forest aggregation, multi-thousand-partition scale, and
-//! staleness-bound proving are explicitly deferred (D10), not this
-//! issue's scope.
+//! Happy-path scope (D10): the topology itself (which partitions/forests
+//! exist) is a startup snapshot, not watched -- a new child domain, or a
+//! whole new forest, added after a process starts requires a restart to
+//! pick up, matching every other daemon's `AppState::topology`
+//! limitation in this codebase. Multi-thousand-partition/many-forest
+//! scale and staleness-bound proving are explicitly deferred (D10), not
+//! this crate's scope.
 
 pub mod aggregate;
 pub mod session;

@@ -5,9 +5,19 @@
 # referral-topology config, iron-gcd's entire purpose is watching the
 # forest topology, so it cannot run without it.
 
+# Single-forest deployment (#12, this forest's own internal GC):
 IRON_GC_CONFIG_FASTETCD_ENDPOINT=http://etcd.g8.lo:2379
 IRON_GC_CONFIG_PARTITION_ID=g10-config
 IRON_GC_CONFIG_BASE_DN=cn=configuration,dc=g10,dc=lo
+
+# Federated GAL deployment (#13, D9): additional forests, `;`-separated,
+# each `endpoint|partition-id|base-dn` (`|`, not `=`, since a DN is
+# itself full of `=` signs). Combine with the single-forest trio above
+# (or omit it and list every forest here) -- at least one forest must
+# be configured one way or the other. A holdco-tier GAL deployment
+# would typically pair this with a much stricter IRON_GC_ATTRIBUTES
+# below than a single forest's own GC would use.
+#IRON_GC_FORESTS=http://etcd.acme.lo:2379|acme-config|cn=configuration,dc=acme,dc=com;http://etcd.wontco.lo:2379|wontco-config|cn=configuration,dc=wontco,dc=com
 
 #IRON_GC_LISTEN=0.0.0.0:3268
 #IRON_GC_HEALTH_LISTEN=0.0.0.0:8080
@@ -21,6 +31,8 @@ IRON_GC_CONFIG_BASE_DN=cn=configuration,dc=g10,dc=lo
 # Optional comma-separated attribute whitelist -- the "partial" in
 # partial replica. Unset uses iron_gc::aggregate::DEFAULT_ATTRIBUTES
 # (objectclass, cn, uid, mail, displayname, sn, givenname, uidnumber,
-# gidnumber), a conservative starting default for the in-forest case;
-# #13's cross-forest GAL will need its own, stricter list.
-#IRON_GC_ATTRIBUTES=objectclass,cn,uid,mail,displayname
+# gidnumber), a conservative starting default for a single forest's own
+# GC (#12). A federated GAL deployment (#13) crossing forest boundaries
+# should set this to something stricter -- e.g. just the fields an
+# address book actually needs:
+#IRON_GC_ATTRIBUTES=objectclass,cn,mail,displayname
