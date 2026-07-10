@@ -216,12 +216,16 @@ fn invalid_dn() -> LdapResult {
 pub struct Referrals<'a> {
     pub topology: Option<&'a iron_partition::PartitionRegistry>,
     pub static_list: &'a [(Dn, String)],
+    /// This instance's own partition id -- see `proactive_referral`.
+    pub own_partition_id: Option<&'a iron_partition::PartitionId>,
 }
 
 /// A naming context this server doesn't host, if `dn` falls under a
 /// partition known to `refs.topology` with an `ldap_url` set, or
 /// (falling back) at or below one of `refs.static_list`'s configured
-/// base DNs.
+/// base DNs. Used for the `NoPartitionFor` case (a DN genuinely
+/// unrelated to this server's own base DN) -- see `proactive_referral`
+/// for the child-domain case, which this alone can't catch.
 fn referral_for<'a>(refs: &Referrals<'a>, dn: &Dn) -> Option<&'a str> {
     if let Some(topology) = refs.topology {
         if let Some(url) = topology.resolve(dn).and_then(|p| p.ldap_url.as_deref()) {
@@ -229,6 +233,31 @@ fn referral_for<'a>(refs: &Referrals<'a>, dn: &Dn) -> Option<&'a str> {
         }
     }
     refs.static_list.iter().find(|(base, _)| dn.is_within(base)).map(|(_, url)| url.as_str())
+}
+
+/// If `refs.topology` resolves `dn` to a *different* partition than the
+/// one this instance itself serves, builds a `Referral` immediately --
+/// without ever attempting a local lookup. This is necessary, not just
+/// an optimization: a child domain's base DN is *structurally* a
+/// descendant of its parent's (`dc=emea,dc=g10,dc=lo` under
+/// `dc=g10,dc=lo`), so the parent's own single-partition `Store` would
+/// otherwise report `Ok(None)`/"no such object" for an entry that
+/// genuinely exists, just on the child's cluster -- it never raises
+/// `StoreError::NoPartitionFor`, so `referral_for` (reactive, keyed off
+/// that error) never gets a chance to fire. Every read/write handler
+/// calls this first, before touching `Store` at all.
+fn proactive_referral(refs: &Referrals, dn: &Dn) -> Option<LdapResult> {
+    let topology = refs.topology?;
+    let own_id = refs.own_partition_id?;
+    let owner = topology.resolve(dn)?;
+    if &owner.id == own_id {
+        return None; // genuinely ours -- proceed with the local lookup
+    }
+    let url = owner.ldap_url.as_deref()?;
+    let uri = format!("{}/{}", url.trim_end_matches('/'), dn);
+    let mut result = LdapResult::new(ResultCode::Referral, String::new().into(), String::new().into());
+    result.referral = Some(vec![uri.into()]);
+    Some(result)
 }
 
 /// Maps a `StoreError` to the LDAP result it should produce.
@@ -418,6 +447,10 @@ fn done_store_error(e: &iron_store::StoreError, referrals: &Referrals<'_>, dn: &
     vec![ProtocolOp::SearchResDone(SearchResultDone(store_error_result(e, referrals, dn)))]
 }
 
+fn done_result(result: LdapResult) -> Vec<ProtocolOp> {
+    vec![ProtocolOp::SearchResDone(SearchResultDone(result))]
+}
+
 /// Builds an `Entry` from an LDAP attribute list, hashing `userPassword`
 /// values (D4) rather than storing them as the client sent them. Returns
 /// `Err` if the request tries to set a password while the FIPS provider
@@ -511,6 +544,9 @@ async fn handle_add(
         Ok(dn) => dn,
         Err(_) => return AddResponse(invalid_dn()),
     };
+    if let Some(result) = proactive_referral(referrals, &dn) {
+        return AddResponse(result);
+    }
     let entry = match entry_from_attributes(&req.attributes, fips) {
         Ok(e) => e,
         Err(e) => return AddResponse(password_error_result(&e)),
@@ -536,6 +572,9 @@ async fn handle_delete(
         Ok(dn) => dn,
         Err(_) => return DelResponse(invalid_dn()),
     };
+    if let Some(result) = proactive_referral(referrals, &dn) {
+        return DelResponse(result);
+    }
     let result = match store.delete_entry(&dn, spec).await {
         Ok(()) => success(),
         Err(e) => store_error_result(&e, referrals, &dn),
@@ -554,6 +593,9 @@ async fn handle_modify(
         Ok(dn) => dn,
         Err(_) => return ModifyResponse(invalid_dn()),
     };
+    if let Some(result) = proactive_referral(referrals, &dn) {
+        return ModifyResponse(result);
+    }
     let mut entry = match store.get_entry(&dn).await {
         Ok(Some(e)) => e,
         Ok(None) => return ModifyResponse(LdapResult::new(ResultCode::NoSuchObject, String::new().into(), "".into())),
@@ -612,6 +654,9 @@ async fn handle_compare(store: &mut Store, req: &CompareRequest, referrals: &Ref
         Ok(dn) => dn,
         Err(_) => return CompareResponse(invalid_dn()),
     };
+    if let Some(result) = proactive_referral(referrals, &dn) {
+        return CompareResponse(result);
+    }
     let entry = match store.get_entry(&dn).await {
         Ok(Some(e)) => e,
         Ok(None) => return CompareResponse(LdapResult::new(ResultCode::NoSuchObject, String::new().into(), "".into())),
@@ -647,6 +692,9 @@ async fn handle_moddn(
         Ok(dn) if !dn.is_empty() => dn,
         _ => return ModifyDnResponse(invalid_dn()),
     };
+    if let Some(result) = proactive_referral(referrals, &old_dn) {
+        return ModifyDnResponse(result);
+    }
     let new_rdn_dn = match Dn::parse(&req.new_rdn) {
         Ok(dn) if dn.depth() == 1 => dn,
         _ => {
@@ -740,6 +788,9 @@ async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Refer
         ops.extend(done(ResultCode::Success, ""));
         return ops;
     }
+    if let Some(result) = proactive_referral(referrals, &base_dn) {
+        return done_result(result);
+    }
 
     let candidates: Vec<(Dn, Entry)> = match req.scope {
         SearchRequestScope::BaseObject => match store.get_entry(&base_dn).await {
@@ -823,7 +874,7 @@ fn project_attributes(
 
 #[cfg(test)]
 mod referral_tests {
-    use iron_partition::{ClusterRef, ForestId, Partition, PartitionRegistry};
+    use iron_partition::{ClusterRef, ForestId, Partition, PartitionId, PartitionRegistry};
 
     use super::*;
 
@@ -846,7 +897,7 @@ mod referral_tests {
     fn topology_referral_takes_priority_over_static_list() {
         let registry = registry_with_child(Some("ldap://child.example.com"));
         let static_list = [(dn("dc=emea,dc=g10,dc=lo"), "ldap://stale-static.example.com".to_string())];
-        let refs = Referrals { topology: Some(&registry), static_list: &static_list };
+        let refs = Referrals { topology: Some(&registry), static_list: &static_list, own_partition_id: None };
         let url = referral_for(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).unwrap();
         assert_eq!(url, "ldap://child.example.com");
     }
@@ -855,7 +906,7 @@ mod referral_tests {
     fn falls_back_to_static_list_when_topology_partition_has_no_ldap_url() {
         let registry = registry_with_child(None); // registered, but no ldap_url set yet
         let static_list = [(dn("dc=emea,dc=g10,dc=lo"), "ldap://static-fallback.example.com".to_string())];
-        let refs = Referrals { topology: Some(&registry), static_list: &static_list };
+        let refs = Referrals { topology: Some(&registry), static_list: &static_list, own_partition_id: None };
         let url = referral_for(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).unwrap();
         assert_eq!(url, "ldap://static-fallback.example.com");
     }
@@ -863,7 +914,7 @@ mod referral_tests {
     #[test]
     fn falls_back_to_static_list_when_no_topology_configured() {
         let static_list = [(dn("dc=emea,dc=g10,dc=lo"), "ldap://static-only.example.com".to_string())];
-        let refs = Referrals { topology: None, static_list: &static_list };
+        let refs = Referrals { topology: None, static_list: &static_list, own_partition_id: None };
         let url = referral_for(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).unwrap();
         assert_eq!(url, "ldap://static-only.example.com");
     }
@@ -871,14 +922,14 @@ mod referral_tests {
     #[test]
     fn no_match_in_either_source_is_none() {
         let registry = registry_with_child(Some("ldap://child.example.com"));
-        let refs = Referrals { topology: Some(&registry), static_list: &[] };
+        let refs = Referrals { topology: Some(&registry), static_list: &[], own_partition_id: None };
         assert!(referral_for(&refs, &dn("dc=totally,dc=unrelated")).is_none());
     }
 
     #[test]
     fn store_error_result_builds_a_real_referral_uri() {
         let registry = registry_with_child(Some("ldap://child.example.com"));
-        let refs = Referrals { topology: Some(&registry), static_list: &[] };
+        let refs = Referrals { topology: Some(&registry), static_list: &[], own_partition_id: None };
         let target = dn("cn=alice,dc=emea,dc=g10,dc=lo");
         let err = iron_store::StoreError::NoPartitionFor(target.to_string());
         let result = store_error_result(&err, &refs, &target);
@@ -889,10 +940,49 @@ mod referral_tests {
 
     #[test]
     fn store_error_result_falls_back_to_operations_error_with_no_match() {
-        let refs = Referrals { topology: None, static_list: &[] };
+        let refs = Referrals { topology: None, static_list: &[], own_partition_id: None };
         let target = dn("dc=totally,dc=unrelated");
         let err = iron_store::StoreError::NoPartitionFor(target.to_string());
         let result = store_error_result(&err, &refs, &target);
         assert_eq!(result.result_code, ResultCode::OperationsError);
+    }
+
+    // proactive_referral: the real bug this session found live -- a
+    // child domain's DN is *structurally* a descendant of its parent's,
+    // so the reactive NoPartitionFor path (referral_for/store_error_result,
+    // tested above) never fires for it; only a check against the actual
+    // partition topology, run BEFORE any local lookup, catches it.
+
+    #[test]
+    fn proactive_referral_fires_for_a_dn_owned_by_a_different_partition() {
+        let registry = registry_with_child(Some("ldap://child.example.com"));
+        let own_id = PartitionId::new("g10").unwrap();
+        let refs = Referrals { topology: Some(&registry), static_list: &[], own_partition_id: Some(&own_id) };
+        let result = proactive_referral(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).unwrap();
+        assert_eq!(result.result_code, ResultCode::Referral);
+        assert_eq!(result.referral.unwrap()[0].as_str(), "ldap://child.example.com/cn=alice,dc=emea,dc=g10,dc=lo");
+    }
+
+    #[test]
+    fn proactive_referral_is_none_for_a_dn_this_instance_itself_owns() {
+        let registry = registry_with_child(Some("ldap://child.example.com"));
+        let own_id = PartitionId::new("g10").unwrap();
+        let refs = Referrals { topology: Some(&registry), static_list: &[], own_partition_id: Some(&own_id) };
+        // Under the PARENT's own base DN, not the child's.
+        assert!(proactive_referral(&refs, &dn("cn=bob,dc=g10,dc=lo")).is_none());
+    }
+
+    #[test]
+    fn proactive_referral_is_none_when_own_partition_id_is_unset() {
+        let registry = registry_with_child(Some("ldap://child.example.com"));
+        let refs = Referrals { topology: Some(&registry), static_list: &[], own_partition_id: None };
+        assert!(proactive_referral(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).is_none());
+    }
+
+    #[test]
+    fn proactive_referral_is_none_when_no_topology_configured() {
+        let own_id = PartitionId::new("g10").unwrap();
+        let refs = Referrals { topology: None, static_list: &[], own_partition_id: Some(&own_id) };
+        assert!(proactive_referral(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).is_none());
     }
 }

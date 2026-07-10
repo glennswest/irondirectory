@@ -132,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
     let cluster = ClusterRef::plaintext([endpoint]);
     let forest = ForestId::new(pid.clone())?;
     let partition = Partition::domain(pid, forest, iron_partition::Dn::parse(&base_dn)?, cluster)?;
+    let own_partition_id = partition.id.clone();
     let mut registry = PartitionRegistry::new();
     registry.insert(partition)?;
 
@@ -151,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
         (None, None) => None,
         _ => anyhow::bail!("IRON_LDAP_TLS_CERT and IRON_LDAP_TLS_KEY must be set together"),
     };
-    let app = AppState::new(store, index_spec, tls_acceptor.clone(), referrals, topology);
+    let app = AppState::new(store, index_spec, tls_acceptor.clone(), referrals, topology, Some(own_partition_id));
 
     let mut tasks = Vec::new();
 

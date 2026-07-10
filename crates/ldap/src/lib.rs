@@ -65,6 +65,15 @@ pub struct AppState {
     /// watched -- refreshing it if the topology changes while this
     /// process is running is a later issue, not #10's happy-path scope.
     pub topology: Option<PartitionRegistry>,
+    /// This instance's own partition id, needed to tell "topology says
+    /// this DN is mine" apart from "topology says it belongs to someone
+    /// else" -- a child domain's base DN is *structurally* a descendant
+    /// of its parent's, so the parent's own single-partition `Store`
+    /// would otherwise "successfully" resolve a child DN (finding no
+    /// entry, not a `StoreError`) rather than ever reaching the
+    /// `NoPartitionFor` path `session::referral_for` checks. See
+    /// `session::proactive_referral`, checked before any local lookup.
+    pub own_partition_id: Option<iron_partition::PartitionId>,
 }
 
 impl AppState {
@@ -74,6 +83,7 @@ impl AppState {
         tls_acceptor: Option<Arc<SslAcceptor>>,
         referrals: Vec<(Dn, String)>,
         topology: Option<PartitionRegistry>,
+        own_partition_id: Option<iron_partition::PartitionId>,
     ) -> Arc<Self> {
         let fips = match FipsContext::new() {
             Ok(f) => Some(f),
@@ -93,13 +103,18 @@ impl AppState {
             tls_acceptor,
             referrals,
             topology,
+            own_partition_id,
         })
     }
 
-    /// Bundles this instance's two referral sources for a single
-    /// request (see `session::Referrals`) -- cheap, just borrows.
+    /// Bundles this instance's referral sources for a single request
+    /// (see `session::Referrals`) -- cheap, just borrows.
     pub fn referral_config(&self) -> session::Referrals<'_> {
-        session::Referrals { topology: self.topology.as_ref(), static_list: &self.referrals }
+        session::Referrals {
+            topology: self.topology.as_ref(),
+            static_list: &self.referrals,
+            own_partition_id: self.own_partition_id.as_ref(),
+        }
     }
 }
 
