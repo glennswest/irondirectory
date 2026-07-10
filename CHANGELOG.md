@@ -5,6 +5,37 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.10.0] — 2026-07-10
+
+### 2026-07-10 (post-v0.9.0)
+- **feat(config):** New `iron-config` crate + `iron-config-ctl` (#9) --
+  persists the `PartitionRegistry` in the forest configuration
+  partition (one JSON-blob record per partition; `Partition` already
+  round-trips via serde, so no new encode/decode logic needed). New
+  `Partition::configuration()` constructor in `iron-partition`.
+  `init-forest` bootstraps a brand-new forest (configuration partition
+  + root domain); `create-child` registers a child domain under an
+  existing parent and updates its `subordinates` list bidirectionally;
+  `show` inspects the live registry. Verified end to end against the
+  real shared fastetcd cluster: superior/subordinate links and
+  auto-derived realm persisted and reloaded correctly across separate
+  process invocations; duplicate-id rejection confirmed.
+- **fix(deploy):** Root-cause fix for a real incident where a
+  pattern-guessed `vm_id` collided with an unrelated, important VM and
+  `terraform destroy` deleted it -- `terraform-modules` v0.3.0 moves
+  the module's allowed vm_id range to 2000-2100 (disjoint from every
+  existing VM) with pool-scoped API token ACL enforcement (previously a
+  `root@pam` token with no ACL boundary at all); new
+  `get-free-vmid.sh` (canonical copy in `terraform-modules`) queries
+  live Proxmox state before any `vm_id` is written into a
+  `terragrunt.hcl`, with a lock against concurrent callers. Also
+  created dedicated, isolated Proxmox storages for this automation's
+  test VM disks and cloud-init snippets (`test-lvm-thin`,
+  `terraform-snippets`) rather than sharing `local-lvm`/`local` with
+  hand-created/production content -- `Datastore.AllocateSpace` isn't
+  scoped by content type, so a shared-storage grant is a residual risk
+  even with the vm_id/pool guardrails in place.
+
 ## [v0.9.0] — 2026-07-08
 
 ### 2026-07-08 (post-v0.8.0)

@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.9.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.10.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -23,8 +23,13 @@ real `ldapsearch -Y GSSAPI` and a full SSSD stack -- getent/id/su all
 working end to end against real iron-ldap + iron-kdc; #8 RHEL enrollment
 + host keytab CLOSED: new `iron-kdc-ctl export-keytab`, verified real
 GSSAPI SSH SSO and real rocketsmbd `sec=krb5` interop against iron-kdc,
-macOS bind carved out to #22). See CHANGELOG.md for the running list;
-Live infrastructure below has the verification details.
+macOS bind carved out to #22; #9 child-domain provisioning CLOSED: new
+`iron-config` crate persists the PartitionRegistry in the forest
+configuration partition, `iron-config-ctl init-forest`/`create-child`/
+`show` verified end to end against the live fastetcd cluster --
+superior/subordinate links and realm derivation persist and re-load
+correctly). See CHANGELOG.md for the running list; Live infrastructure
+below has the verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -381,9 +386,67 @@ macOS LDAP/krb5 bind carved out to #22 — would mean configuring real
 directory-services/Kerberos settings on an actual working Mac rather
 than a disposable VM, deferred rather than done inline.
 
+**Child-domain provisioning (#9)** — new `iron-config` crate
+(`crates/config`): persists the `PartitionRegistry` in the forest
+configuration partition. `iron-partition`'s own doc comment already
+described exactly what was missing ("The registry is itself persisted
+in the forest configuration partition ... this crate provides the
+in-memory model and its serialized form") — the `Partition`/
+`PartitionRegistry` model (superior/subordinate links, Configuration/
+Domain/Schema partition kinds, `resolve()`) was fully built and
+unit-tested already, just never wired to storage. Storage shape: one
+JSON-blob record per partition at `cn=<id>,<config-dn>` — `Partition`
+already round-trips via serde, so no new encode/decode logic was
+needed, just `load_registry`/`put_partition` over `iron-store`'s
+existing `scan_subtree`/`put_entry`. New `Partition::configuration()`
+constructor in `iron-partition` mirrors the existing `Partition::domain()`
+(no realm, never a superior).
+
+`iron-config-ctl`: `init-forest` bootstraps a brand-new forest (creates
+the configuration partition — which writes its own self-describing
+record into its own DIT, matching AD's Configuration NC hosting its own
+crossRef object — plus the forest's root domain, both on the same
+fastetcd cluster); `create-child` reads the existing registry, registers
+a new child domain under an existing parent (defaulting to the parent's
+own cluster; `IRON_CHILD_FASTETCD_ENDPOINT` overrides for a dedicated
+one), and updates the parent's `subordinates` list so the link is
+bidirectional; `show` inspects the live registry (also the tool #9's own
+verification used).
+
+Verified on a disposable VM against the real shared fastetcd cluster:
+`init-forest` + `create-child`, then a **separate** `show` invocation
+(a fresh process, forcing a real load-from-storage rather than reusing
+in-memory state) confirmed the parent's `subordinates` list, the
+child's `superior` link, and the child's auto-derived realm
+(`EMEA.G9DEMO.LO` from base DN `dc=emea,dc=g9demo,dc=lo`) all persisted
+and reloaded correctly; a duplicate-id `create-child` was correctly
+rejected. Happy-path only (D10): dedicated Raft cluster per naming
+context (D8's ideal) is an operational choice via
+`IRON_CHILD_FASTETCD_ENDPOINT`, not automated. `iron-ldapd`/`iron-kdcd`
+remain single-partition-per-process daemons — making them dynamically
+registry-aware (discovering new partitions without a restart) is a
+later issue, not #9's scope.
+
+Side effect of this issue's live verification, not iron-config's own
+code: found and fixed several `terraform-modules` Proxmox bootstrap
+gaps that only surfaced from actually running `terragrunt apply`
+end-to-end rather than just documenting the theory — `Datastore.Allocate`
+(distinct from `Datastore.AllocateSpace`, needed to read a storage's own
+definition before uploading a snippet file), an explicit SDN zone/bridge
+ACL path (not just the `SDN.Use` privilege on an ancestor path), and the
+requirement that a `privsep=1` token's effective permission is the
+*intersection* of the token's own ACL and its owning user's ACL — missing
+either one produces a 403 indistinguishable from the grant not existing
+at all. Also created a dedicated, snippets-content-only Proxmox storage
+(`terraform-snippets`) and a read-only role for the shared Fedora base
+image on `local`, closing a real (if narrower) gap of the same shape as
+the vm_id incident: `Datastore.AllocateSpace` isn't scoped by content
+type, so a token granted `local` for snippets could also touch its
+ISOs/vztmpl/import content.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
-by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.1.0`
+by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.2.0`
 (`deploy/terragrunt/etcd/`; do NOT copy .tf — reference the pinned module).
 - Nodes: dm1/dm2/dm3.g8.lo → VMID 131/132/133 → 192.168.8.41/.42/.43.
 - **fastetcd `v0.8.1`**, installed from the released RPM via cloud-init
@@ -516,8 +579,37 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
 #### Phase 1 — federation machinery (IN THE BASE, D8/D9/D10)
 Built as first-class in the base with **happy-path coverage** so the code paths
 are live from day one. Exhaustive proving suites are deferred (see Testing).
-- [ ] Child-domain provisioning: create partition + Raft cluster + realm, register
-      in PartitionRegistry, wire superior/subordinate references
+- [x] Child-domain provisioning (#9, CLOSED): new `iron-config` crate
+      persists the `PartitionRegistry` (already a fully-built,
+      unit-tested in-memory model in `iron-partition` -- this issue was
+      the missing storage wiring `iron-partition`'s own doc comment
+      already called out) in the forest configuration partition, one
+      JSON-blob record per partition at `cn=<id>,<config-dn>` --
+      `Partition` already round-trips via serde, so no new encode/decode
+      logic was needed. `iron-config-ctl` provisions: `init-forest`
+      bootstraps a brand-new forest (configuration partition + root
+      domain, the config partition writing its own self-describing
+      record into its own DIT -- matching AD's Configuration NC hosting
+      its own crossRef object), `create-child` registers a new child
+      domain under an existing parent and updates the parent's
+      `subordinates` list bidirectionally, `show` inspects the live
+      registry. Verified on a disposable VM against the real shared
+      fastetcd cluster: `init-forest` + `create-child`, then a
+      *separate* `show` invocation re-loaded the registry from storage
+      and confirmed both the parent→child `subordinates` link and the
+      child's `superior` link persisted correctly, plus the realm
+      auto-derived from the child's base DN (`EMEA.G9DEMO.LO`) and a
+      duplicate-id `create-child` correctly rejected. `Partition::domain`/
+      `iron-ldapd`/`iron-kdcd` remain single-partition-per-process for
+      now -- making them dynamically registry-aware is a later issue,
+      not #9's scope ("create a partition, register it, wire
+      superior/subordinate refs"). Also found and fixed, as a
+      side-effect of this issue's live verification: `terraform-modules`'
+      Proxmox bootstrap docs were missing several permissions
+      (`Datastore.Allocate` distinct from `Datastore.AllocateSpace`, an
+      explicit SDN zone/bridge ACL path, and the requirement that every
+      grant needs both the user AND the token) that only surfaced when
+      actually running `terragrunt apply` end to end.
 - [ ] LDAP referral generation + chasing (one hop) across naming contexts
 - [ ] Kerberos cross-realm `krbtgt` keys + one-hop referral-ticket routing
 - [ ] `iron-gc`: watch-fed Global Catalog aggregator (read-only partial replica,
