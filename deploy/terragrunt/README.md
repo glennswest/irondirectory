@@ -54,28 +54,46 @@ If `.env`'s token is genuinely lost, Proxmox never re-displays a token
 secret after creation, so you'll need a new one -- always the
 dedicated, pool-scoped service account, never `root@pam`:
 
+See `terraform-modules`' own `README.md` for the full, verified-working
+bootstrap (every command below was needed and confirmed end-to-end
+against a real `terragrunt apply` -- skipping any one just means
+hitting the same 403 mid-apply, one permission at a time):
+
 ```sh
-# One-time, as root on pve.g8.lo: a service user + token scoped to
-# EXACTLY the terraform-managed pool and the storages this repo uses.
 pveum user add terraform-svc@pve
-pveum role add TerraformOperator -privs "VM.Allocate,VM.Config.Disk,VM.Config.CPU,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.Config.Cloudinit,VM.Monitor,VM.PowerMgmt,VM.Console,Datastore.AllocateSpace,Datastore.Audit,Pool.Audit,Sys.Audit"
-pveum acl modify /pool/terraform-managed --users terraform-svc@pve --roles TerraformOperator
+pveum role add TerraformOperator -privs "VM.Allocate,VM.Audit,VM.Clone,VM.Config.CDROM,VM.Config.CPU,VM.Config.Cloudinit,VM.Config.Disk,VM.Config.HWType,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.GuestAgent.Audit,VM.Migrate,VM.PowerMgmt,VM.Snapshot,VM.Snapshot.Rollback,Datastore.Allocate,Datastore.AllocateSpace,Datastore.Audit,Pool.Audit,SDN.Use"
 pveum user token add terraform-svc@pve <name> --privsep 1
-pveum acl modify /pool/terraform-managed --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
-pveum acl modify /storage/<vm_datastore> --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
+export PROXMOX_API_TOKEN='terraform-svc@pve!<name>=<the-value>'
+
+# Every grant below needs BOTH the user AND the token -- a privsep=1
+# token's effective permission is the INTERSECTION of the two, not the
+# token's ACL alone. Missing one produces a 403 that looks like the
+# grant didn't take effect at all.
+pveum acl modify /pool/terraform-managed --users  terraform-svc@pve             --roles TerraformOperator
+pveum acl modify /pool/terraform-managed --tokens 'terraform-svc@pve!<name>'     --roles TerraformOperator
+pveum acl modify /storage/test-lvm-thin  --users  terraform-svc@pve             --roles TerraformOperator
+pveum acl modify /storage/test-lvm-thin  --tokens 'terraform-svc@pve!<name>'     --roles TerraformOperator
+# Exact SDN zone/bridge path the VM's NIC attaches to, not an ancestor path:
+pveum acl modify /sdn/zones/<zone>/<bridge> --users  terraform-svc@pve          --roles TerraformOperator
+pveum acl modify /sdn/zones/<zone>/<bridge> --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
 
 # Snippets get their OWN dedicated storage, not "local" -- Proxmox's
 # Datastore.AllocateSpace permission isn't scoped by content type, so a
 # token granted "local" for snippets could also touch its ISOs/vztmpl/
-# import content (there is no such thing as "snippets-only" access to a
-# storage that also hosts other content). An isolated storage with
-# nothing else on it closes that gap instead of accepting it as residual
-# risk -- one-time setup:
+# import content. One-time setup:
 pvesm add dir terraform-snippets --path /var/lib/terraform-snippets --content snippets
-pveum acl modify /storage/terraform-snippets --tokens 'terraform-svc@pve!<name>' --roles TerraformOperator
+pveum acl modify /storage/terraform-snippets --users  terraform-svc@pve             --roles TerraformOperator
+pveum acl modify /storage/terraform-snippets --tokens 'terraform-svc@pve!<name>'     --roles TerraformOperator
 
-export PROXMOX_API_TOKEN='terraform-svc@pve!<name>=<the-value>'
-# ...then save it into .env (chmod 600, gitignored) so it isn't lost again.
+# The Fedora base image really does live on "local" (fedora_image
+# defaults to local:import/...qcow2) -- grant READ-ONLY access there
+# instead of the write-capable role (VM-create accepts either
+# Datastore.AllocateSpace or Datastore.Audit, so read-only suffices):
+pveum role add TerraformImageReader -privs "Datastore.Audit"
+pveum acl modify /storage/local --users  terraform-svc@pve             --roles TerraformImageReader
+pveum acl modify /storage/local --tokens 'terraform-svc@pve!<name>'     --roles TerraformImageReader
+
+# ...then save the token into .env (chmod 600, gitignored) so it isn't lost again.
 ```
 
 `vm_datastore` and `snippet_datastore` in every unit's `inputs` should be
