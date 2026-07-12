@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.16.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.17.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -54,8 +54,15 @@ flow against real `il1.g8.lo`, correct password succeeding and a wrong
 one failing closed; ad hoc fix found during that pass: `iron-ldap` now
 implements RFC 4532's WhoAmI extended operation, deployed to the real
 `il1`/`il2`/`il3.g8.lo` fleet via a rolling rpm upgrade and verified
-live with `ldapwhoami`). See CHANGELOG.md for the running list; Live
-infrastructure below has the verification details.
+live with `ldapwhoami`; #15 iron-oidc CLOSED: new crate, a FIPS
+OAuth2/OpenID Connect authorization server (ES256 ID tokens via a new
+`iron_crypto::sign` module) authenticating against the same LDAP
+directory, verified with a full live authorization-code-grant run
+(login form → code → token exchange → userinfo) including code-replay
+rejection, open-redirect protection, and an independent third-party
+cryptographic verification of the ID token's signature). See
+CHANGELOG.md for the running list; Live infrastructure below has the
+verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -756,6 +763,81 @@ fleet -- each confirmed `active` and re-verified with both
 before moving to the next host. All three were still running a stale
 `0.5.0` package from an earlier session; this pass brings them current.
 
+**iron-oidc: FIPS OAuth2/OpenID Connect authorization server (#15)** —
+new crate. Implements the authorization code grant (RFC 6749) plus
+OpenID Connect Core's ID token/userinfo layer over `axum` (discovery
+document, JWKS, `/authorize` login form + code issuance, `/token` code
+exchange, `/userinfo`), authenticating against the same LDAP directory
+`iron-ldap` serves -- `Store::lookup_by_index` + `get_entry` +
+`iron_crypto::pbkdf2::verify_password`, not a second user store.
+
+Filled a real gap first: `iron-crypto` had zero asymmetric-signing
+capability (only PBKDF2 + symmetric AEAD/HMAC/Kerberos crypto) despite
+`ossl` (the FIPS provider binding underneath it) already exposing
+everything needed. New `iron_crypto::sign` module wraps `ossl`'s
+`EvpPkey`/`OsslSignature` for ES256 (ECDSA P-256 + SHA-256, RFC 7518
+§3.4) -- the FIPS-approved algorithm ID tokens are signed with, same
+FIPS-context-required posture as every other operation in the crate.
+Had to hand-write the DER-to-JOSE signature conversion (`der_to_jose`/
+`jose_to_der` in `sign.rs`): OpenSSL's ECDSA always produces a DER
+`SEQUENCE { r INTEGER, s INTEGER }`, but JWS's ES256 requires the fixed
+64-byte `R || S` concatenation instead, and `ossl` has no built-in
+option to emit that form directly (its only `raw`-signature knobs are
+for ML-DSA/SLH-DSA). JWT compact serialization itself
+(`crates/oidc/src/jwt.rs`) is hand-rolled on top of `iron_crypto::sign`
+rather than pulling in `jsonwebtoken`/`josekit` -- both bundle their
+own non-FIPS signing implementations, which would silently break the
+FIPS guarantee for exactly the one new crypto operation this issue
+needed it for.
+
+`axum` and `base64` are both direct dependencies now but zero *net
+new* ones -- both were already compiled transitively (`axum` via
+`etcd-client -> tonic -> axum`; `base64` via several existing deps),
+just promoted to direct at the versions already resolved. `axum` was
+worth it specifically because OIDC needs real routing, query/form/JSON
+parsing, and redirects across five endpoints -- past the point where
+hand-rolling (as `iron-ldap`/`iron-gc`'s single-endpoint health probes
+do) stays proportionate.
+
+Verified live end to end: real user seeded into a fresh partition
+(`g15oidc`) via a throwaway `iron-ldapd` (to get a proper PBKDF2
+`userPassword` through the real hashing path, then never needed
+again -- `iron-oidcd` talks to the same fastetcd partition directly).
+`curl` walked the full authorization-code-grant sequence a real
+OpenShift `oauth-server`/any OIDC relying party would: discovery +
+JWKS fetch, `GET /authorize` rendering a login form with the request's
+`client_id`/`redirect_uri`/`scope`/`state`/`nonce` preserved as hidden
+fields, a correct-password `POST /authorize` redirecting to the
+client's `redirect_uri` with a one-time code + the original `state`, a
+wrong password re-rendering the form with an error instead of
+redirecting, `POST /token` exchanging the code for a signed ID token +
+access token, and `GET /userinfo` with the access token returning the
+same claims re-read live from the directory. Also verified the
+security-critical negative paths: an unregistered `client_id` (or a
+registered one with a mismatched `redirect_uri`) gets a `400`, never a
+redirect (the open-redirect protection); replaying the *same*
+authorization code a second time correctly fails closed
+(`invalid_grant`); an invalid/garbage bearer token is rejected at
+`/userinfo`. Most importantly, **independently verified the ID
+token's ES256 signature using Python's `cryptography` library** (a
+real, standards-compliant ECDSA implementation with zero connection to
+this codebase) against the public key published in
+`/.well-known/jwks.json` -- confirming the signature is genuinely
+spec-correct, not merely self-consistent within `iron-oidc`'s own
+verify function; a deliberately tampered signing input was confirmed
+to fail that same independent verification.
+
+Happy-path scope (D10): single forest, single issuer, an ephemeral
+(non-persisted) signing key generated fresh at every process start --
+documented, not silently absent (a restart invalidates every
+previously-issued token and the previously-published JWKS). In-memory-
+only authorization-code/key state, so this doesn't horizontally scale
+past one replica yet. No built-in TLS termination (a plain HTTP
+service -- OpenShift's own edge/reencrypt Routes are the intended
+place to terminate TLS in front of it, not a gap for that specific
+consumer). D9's cross-forest brokering hook is explicitly deferred
+(D10) -- this is a single-forest IdP, not a broker.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.2.0`
@@ -1023,8 +1105,26 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       and that `ldapwhoami`'s WhoAmI extended operation isn't
       implemented (unrelated to OpenShift's plain-bind flow, tracked
       separately).
-- [ ] `iron-oidc`: FIPS OAuth2/OpenID Connect authorization server; OpenShift
-      OIDC IdP + token SSO for modern apps; cross-forest brokering hook (D9)
+- [x] `iron-oidc`: FIPS OAuth2/OpenID Connect authorization server (#15,
+      CLOSED): new crate, authorization code grant (RFC 6749) + OpenID
+      Connect Core ID token/userinfo over `axum`, authenticating against
+      the same LDAP directory `iron-ldap` serves. New
+      `iron_crypto::sign` module fills a real gap (zero prior asymmetric
+      signing capability) with ES256 via `ossl`'s `EvpPkey`/
+      `OsslSignature`, hand-converting DER ECDSA signatures to JWS's
+      fixed `R||S` form since `ossl` has no built-in option for it. JWT
+      serialization is hand-rolled on `iron_crypto::sign`, not a JWT
+      crate (those bundle non-FIPS signing). Verified live: full
+      authorization-code-grant run (login form → code → token exchange
+      → userinfo) against a real seeded user, code-replay rejection,
+      open-redirect protection (unregistered client/mismatched
+      redirect_uri both get `400`, never a redirect), and -- most
+      importantly -- the ID token's ES256 signature independently
+      verified with Python's `cryptography` library against the
+      published JWKS, proving genuine spec-correctness rather than
+      self-consistency. Single-forest, ephemeral signing key,
+      in-memory-only state, no built-in TLS (D10) -- the D9 cross-forest
+      brokering hook is explicitly deferred, not this issue's scope.
 - [ ] **SPNEGO** desktop→console SSO: RequestHeader IdP + mod_auth_gssapi proxy
       integration docs (reuses Tier 1 KDC)
 

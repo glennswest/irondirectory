@@ -5,6 +5,50 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.17.0] — 2026-07-12
+
+### 2026-07-12 (post-v0.16.0)
+- **feat(oidc):** New `iron-oidc` crate: FIPS OAuth2/OpenID Connect
+  authorization server (#15). Implements the authorization code grant
+  (RFC 6749) plus OpenID Connect Core's ID token/userinfo layer over
+  `axum`: discovery document, JWKS, `/authorize` (login form + code
+  issuance), `/token` (code exchange for a signed ID token + access
+  token), `/userinfo`. Authenticates against the same LDAP directory
+  `iron-ldap` serves (`Store::lookup_by_index` + `get_entry` +
+  `iron_crypto::pbkdf2::verify_password`), not a second user store.
+- **feat(crypto):** New `iron_crypto::sign` module: ES256 (ECDSA P-256
+  + SHA-256, RFC 7518 §3.4) signing/verification via `ossl`'s
+  `EvpPkey`/`OsslSignature`, routed through the same FIPS provider as
+  every other operation in the crate -- fills a real gap (zero prior
+  asymmetric-signing capability). Hand-converts between OpenSSL's DER
+  `ECDSA-Sig-Value` and JWS's fixed-size `R || S` encoding, since
+  `ossl` has no built-in option to emit the JOSE form directly.
+- JWT compact serialization (`crates/oidc/src/jwt.rs`) is hand-rolled
+  on top of `iron_crypto::sign` rather than a JWT/JOSE crate --
+  `jsonwebtoken`/`josekit` bundle their own non-FIPS signing
+  implementations, which would break the FIPS guarantee end to end.
+  `axum` and `base64` are both zero-net-new dependencies (already
+  resolved transitively), promoted to direct rather than hand-rolling
+  real HTTP routing/redirects across five endpoints.
+
+Verified live end to end against a real seeded LDAP user: `curl`
+walked the full authorization-code-grant sequence a real OIDC relying
+party would (discovery + JWKS fetch, login form rendering with
+request params preserved, correct-password redirect with a one-time
+code, wrong-password re-render with an error, code exchange for
+tokens, userinfo returning live-read claims). Also verified: an
+unregistered `client_id`/mismatched `redirect_uri` gets a `400`, never
+a redirect (open-redirect protection); replaying the same
+authorization code a second time fails closed (`invalid_grant`); an
+invalid bearer token is rejected at `/userinfo`. Most importantly, the
+ID token's ES256 signature was independently verified using Python's
+`cryptography` library against the published JWKS -- confirming
+genuine spec-correctness, not just internal self-consistency; a
+tampered signing input was confirmed to fail that same independent
+verification. Single-forest, ephemeral (non-persisted) signing key,
+in-memory-only authorization-code state, no built-in TLS termination
+(D10) -- D9's cross-forest brokering hook is explicitly deferred.
+
 ## [v0.16.0] — 2026-07-10
 
 ### 2026-07-10 (post-v0.15.0)
