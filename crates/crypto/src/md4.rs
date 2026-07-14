@@ -104,14 +104,16 @@ pub fn ntowf(password: &str) -> [u8; 16] {
 mod tests {
     use super::*;
 
-    // RFC 1320 Appendix A.5's own test suite -- verified against the
-    // published spec, not re-derived from this implementation.
+    // RFC 1320 Appendix A.5's own test suite, independently cross-checked
+    // against pycryptodome's `Crypto.Hash.MD4` (a real, separately-
+    // implemented library) -- caught a transcription typo in the "abc"
+    // case's hand-copied expected value before this landed.
     #[test]
     fn rfc1320_test_vectors() {
         let cases: &[(&[u8], &str)] = &[
             (b"", "31d6cfe0d16ae931b73c59d7e0c089c0"),
             (b"a", "bde52cb31de33e46245e05fbdbd6fb24"),
-            (b"abc", "a448017aaf21d8525fc10ae87ef6db41"),
+            (b"abc", "a448017aaf21d8525fc10ae87aa6729d"),
             (b"message digest", "d9130a8164549fe818874806e1c7014b"),
             (b"abcdefghijklmnopqrstuvwxyz", "d79e1c308aa5bbcdeea8ed63df412da9"),
             (b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", "043f8582f241db351ce627e153e7f0e4"),
