@@ -41,7 +41,7 @@ pub const NETLOGON_NEG_SUPPORTS_AES: u32 = 0x0100_0000;
 /// Attribute holding a computer account's NTOWF (hex-encoded 16 bytes) --
 /// a stand-in for real `SamrSetInformationUser2` password-setting
 /// (out of scope this pass, see crate docs): provisioned directly (e.g.
-/// via `iron-kdc-ctl set-computer-secret`) so this handshake has a real
+/// via `iron-rpc-ctl set-computer-secret`) so this handshake has a real
 /// shared secret to authenticate against.
 pub const NTOWF_ATTR: &str = "netlogonntowf";
 
