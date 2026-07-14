@@ -10,7 +10,7 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.17.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.18.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -60,9 +60,15 @@ OAuth2/OpenID Connect authorization server (ES256 ID tokens via a new
 directory, verified with a full live authorization-code-grant run
 (login form → code → token exchange → userinfo) including code-replay
 rejection, open-redirect protection, and an independent third-party
-cryptographic verification of the ID token's signature). See
-CHANGELOG.md for the running list; Live infrastructure below has the
-verification details.
+cryptographic verification of the ID token's signature; #16 SPNEGO
+desktop→console SSO CLOSED: no new code (reuses the Tier 1 KDC as-is)
+-- `docs/OPENSHIFT-SPNEGO-SSO.md` documents the `RequestHeader` IdP +
+`mod_auth_gssapi` proxy pattern and verifies real SPNEGO negotiation
+against a real `httpd`/`mod_auth_gssapi` (a third, independent GSSAPI
+acceptor beyond `iron-ldap`'s own, #7, and `sshd`'s, #8) using an
+`iron-kdc`-issued keytab, confirmed by Apache's own access log showing
+the correctly authenticated principal). See CHANGELOG.md for the
+running list; Live infrastructure below has the verification details.
 
 Version locations (keep in sync on every bump):
 - `Cargo.toml` workspace `[workspace.package] version`
@@ -838,6 +844,41 @@ place to terminate TLS in front of it, not a gap for that specific
 consumer). D9's cross-forest brokering hook is explicitly deferred
 (D10) -- this is a single-forest IdP, not a broker.
 
+**SPNEGO desktop→console SSO (#16, D7)** — no new code; reuses the
+Tier 1 KDC exactly as built, per D7's own framing ("SPNEGO reuses the
+Tier 1 KDC; integration is an external authenticating proxy
+(RequestHeader IdP), documented rather than built here"). The IdP-side
+mechanism (OpenShift's `RequestHeader` type, trusting a header set by
+an external mutual-TLS-pinned proxy) is entirely OpenShift/Apache
+configuration with nothing of this project's own to test; the piece
+that actually depends on `iron-kdc` is whether a real
+`mod_auth_gssapi`-protected proxy accepts tickets/keytabs it issues.
+Full config (the `OAuth` CR, the `mod_auth_gssapi` `<Location>` block)
+is in `docs/OPENSHIFT-SPNEGO-SSO.md`.
+
+Verified on one disposable Fedora VM (destroyed afterward): real
+`iron-kdcd` serving a throwaway realm, a `HTTP/<fqdn>@REALM` keytab
+exported via `iron-kdc-ctl export-keytab` (same mechanism #8
+established) installed for a real `httpd` + `mod_auth_gssapi`. `curl`
+without credentials gets `401`; a real `kinit` against `iron-kdcd`
+followed by `curl --negotiate` performs a genuine SPNEGO exchange
+(confirmed via the response's `WWW-Authenticate: Negotiate <mutual-auth
+token>` header) and gets `200 OK` with the protected content; Apache's
+own access log (`%u`) shows the correctly authenticated principal
+(`alice@G16SPNEGO.LO`), not `-`; `kdestroy` then retrying falls back to
+`401`. This is a third, independently-implemented GSSAPI acceptor
+proven interoperable with `iron-kdc` (beyond `iron-ldap`'s own SASL/
+GSSAPI bind, #7, and `sshd`'s, #8) -- exactly the one this SSO flow
+actually depends on.
+
+Found the same SELinux gotcha as prior sessions' pattern in a new
+form: binaries/keytabs copied via `scp` land with the `user_tmp_t`
+(or similarly wrong) SELinux context inherited from wherever they were
+staged, and silently fail to exec/load under `Enforcing` until
+`restorecon`'d -- not a code issue, an artifact of moving files onto a
+freshly-provisioned Fedora host outside its normal package-install
+path.
+
 **fastetcd backend (D1)** — dedicated 3-node **fastetcd** cluster (NOT upstream
 etcd — fastetcd is the system under test; see memory), Proxmox VMs on g8, managed
 by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.2.0`
@@ -1125,8 +1166,16 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       self-consistency. Single-forest, ephemeral signing key,
       in-memory-only state, no built-in TLS (D10) -- the D9 cross-forest
       brokering hook is explicitly deferred, not this issue's scope.
-- [ ] **SPNEGO** desktop→console SSO: RequestHeader IdP + mod_auth_gssapi proxy
-      integration docs (reuses Tier 1 KDC)
+- [x] **SPNEGO** desktop→console SSO: RequestHeader IdP + mod_auth_gssapi
+      proxy integration docs (#16, CLOSED): no new code, reuses the
+      Tier 1 KDC as-is. `docs/OPENSHIFT-SPNEGO-SSO.md` documents the
+      `OAuth` CR `RequestHeader` config + `mod_auth_gssapi` proxy.
+      Verified real SPNEGO negotiation against a real `httpd`/
+      `mod_auth_gssapi` (a third independent GSSAPI acceptor beyond
+      `iron-ldap`'s own, #7, and `sshd`'s, #8) using an
+      `iron-kdc`-issued keytab -- confirmed by Apache's own access log
+      showing the correctly authenticated principal, and a no-ticket
+      retry correctly falling back to 401.
 
 ### Phase 2 — Tier 2 Windows/Mac domain join (later)
 - [ ] MS schema objects, rootDSE attrs, SID/RID allocation, `nTSecurityDescriptor`

@@ -5,6 +5,27 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.18.0] — 2026-07-14
+
+### 2026-07-14 (post-v0.17.0)
+- **docs:** SPNEGO desktop→console SSO (#16, D7) -- no new code, reuses
+  the Tier 1 KDC exactly as built. `docs/OPENSHIFT-SPNEGO-SSO.md`
+  documents the OpenShift `RequestHeader` identity provider + external
+  `mod_auth_gssapi` proxy pattern (the IdP itself is a header-trust
+  mechanism with nothing of this project's own to test). Verified the
+  piece that does depend on `iron-kdc`: real SPNEGO negotiation against
+  a real `httpd` + `mod_auth_gssapi` using a `HTTP/<fqdn>@REALM` keytab
+  exported via `iron-kdc-ctl export-keytab` (same mechanism #8
+  established) -- a third, independently-implemented GSSAPI acceptor
+  proven interoperable with `iron-kdc` (beyond `iron-ldap`'s own SASL/
+  GSSAPI bind, #7, and `sshd`'s, #8). `curl` without credentials gets
+  `401`; `kinit` + `curl --negotiate` completes a genuine SPNEGO
+  exchange (confirmed via the response's `WWW-Authenticate: Negotiate`
+  mutual-auth token) and gets `200 OK`, with Apache's own access log
+  showing the correctly authenticated principal, not `-`; `kdestroy`
+  then retrying falls back to `401`. Verified and destroyed on one
+  disposable Fedora VM.
+
 ## [v0.17.0] — 2026-07-12
 
 ### 2026-07-12 (post-v0.16.0)
