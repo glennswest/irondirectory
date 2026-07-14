@@ -47,6 +47,12 @@ pub enum JoinError {
 pub struct SimConfig {
     pub rpc_addr: String,
     pub kdc_addr: String,
+    /// The real partition id `iron-rpcd`/`iron-kdcd` were started with --
+    /// this harness's own direct-store connection (see module docs) must
+    /// use the *same* id, since `iron-store` keys are partition-scoped
+    /// (`/iron/<partition-id>/tree/...`, D2) and a mismatched id here
+    /// would silently read/write a completely different keyspace.
+    pub partition_id: String,
     pub base_dn: String,
     pub realm: String,
     pub service_principal: String,
@@ -106,9 +112,9 @@ async fn connect_store(config: &SimConfig) -> Result<Store, JoinError> {
     // iron-kdcd's -- this is the "test-harness-only" provisioning path
     // described in the module docs, not something a real client has.
     let cluster = iron_partition::ClusterRef::plaintext([std::env::var("IRON_SIM_FASTETCD_ENDPOINT").expect("IRON_SIM_FASTETCD_ENDPOINT required")]);
-    let forest = iron_partition::ForestId::new("sim")?;
+    let forest = iron_partition::ForestId::new(config.partition_id.clone())?;
     let base_dn = Dn::parse(&config.base_dn)?;
-    let partition = iron_partition::Partition::domain("sim".to_string(), forest, base_dn, cluster)?;
+    let partition = iron_partition::Partition::domain(config.partition_id.clone(), forest, base_dn, cluster)?;
     let mut registry = iron_partition::PartitionRegistry::new();
     registry.insert(partition)?;
     Ok(Store::connect(registry).await?)

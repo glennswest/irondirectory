@@ -7,11 +7,14 @@
 //!   iron-simulate login <count> <username> <password>
 //!
 //! Required env: IRON_SIM_RPC_ADDR (e.g. 127.0.0.1:13445),
-//! IRON_SIM_KDC_ADDR (e.g. 127.0.0.1:8888), IRON_SIM_BASE_DN,
-//! IRON_SIM_REALM, IRON_SIM_FASTETCD_ENDPOINT (direct store access for
-//! provisioning -- see `join` module docs), IRON_SIM_SERVICE_PRINCIPAL
-//! (a principal this harness provisions itself so it can decrypt
-//! resulting service tickets to inspect their PAC).
+//! IRON_SIM_KDC_ADDR (e.g. 127.0.0.1:8888), IRON_SIM_PARTITION_ID (must
+//! match whatever `iron-rpcd`/`iron-kdcd` were started with --
+//! `iron-store` keys are partition-scoped, a mismatch here silently
+//! reads/writes the wrong keyspace), IRON_SIM_BASE_DN, IRON_SIM_REALM,
+//! IRON_SIM_FASTETCD_ENDPOINT (direct store access for provisioning --
+//! see `join` module docs), IRON_SIM_SERVICE_PRINCIPAL (a principal
+//! this harness provisions itself so it can decrypt resulting service
+//! tickets to inspect their PAC).
 //!
 //! Needs OPENSSL_CONF pointing at a FIPS-activating config (see
 //! docs/FIPS.md), same as every other Kerberos-touching binary here.
@@ -32,6 +35,7 @@ fn build_config() -> anyhow::Result<SimConfig> {
     Ok(SimConfig {
         rpc_addr: require_env("IRON_SIM_RPC_ADDR")?,
         kdc_addr: require_env("IRON_SIM_KDC_ADDR")?,
+        partition_id: require_env("IRON_SIM_PARTITION_ID")?,
         base_dn: require_env("IRON_SIM_BASE_DN")?,
         realm: require_env("IRON_SIM_REALM")?,
         service_principal: require_env("IRON_SIM_SERVICE_PRINCIPAL")?,
