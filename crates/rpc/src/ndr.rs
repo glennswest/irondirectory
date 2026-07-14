@@ -211,6 +211,19 @@ impl<'a> NdrReader<'a> {
         String::from_utf16(&units).map_err(|_| NdrError::BadString)
     }
 
+    /// A directly-embedded `WSTR` (MS-NRPC's `ComputerName`/`AccountName`
+    /// parameters, among others) -- the *same* conformant-and-varying
+    /// wire shape as [`Self::unicode_string_deferred`], just read at the
+    /// point it appears in the fixed part rather than behind a pointer's
+    /// deferred data (there's no `RPC_UNICODE_STRING` `Length`/
+    /// `MaximumLength`/referent prefix for a plain `WSTR` field -- it
+    /// isn't a pointer at all, unlike `LPWSTR`). A distinct name here so
+    /// call sites don't read as "the deferred half of a pointer I must
+    /// have read a header for," which would be wrong for this shape.
+    pub fn embedded_wstr(&mut self) -> Result<String, NdrError> {
+        self.unicode_string_deferred()
+    }
+
     /// A SID in its NDR (`RPC_SID`) representation.
     pub fn sid_deferred(&mut self) -> Result<Sid, NdrError> {
         let count = self.u32()? as usize;

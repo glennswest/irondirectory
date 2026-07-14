@@ -85,12 +85,21 @@ pub async fn dispatch(state: &NetlogonState, session: &mut Session, opnum: u16, 
 
 fn server_req_challenge(session: &mut Session, stub: &[u8]) -> Option<Vec<u8>> {
     let mut r = NdrReader::new(stub);
-    let _primary_name_referent = r.u32().ok()?; // PLOGONSRV_HANDLE -- often null, not read further
-    let (_len, computer_name_referent) = r.unicode_string_header().ok()?;
-    if computer_name_referent != 0 {
-        let _ = r.unicode_string_deferred().ok()?;
-    }
+    // NetrServerReqChallenge(PrimaryName: PLOGONSRV_HANDLE (a pointer,
+    // LPWSTR), ComputerName: WSTR (embedded directly, NOT a pointer --
+    // no RPC_UNICODE_STRING-style Length/MaximumLength/referent prefix),
+    // ClientChallenge: NETLOGON_CREDENTIAL (8 raw bytes)). Fixed part
+    // first, deferred data (only PrimaryName's, if non-null) after --
+    // found live against a real impacket client: an earlier version of
+    // this function treated ComputerName like an RPC_UNICODE_STRING
+    // pointer and read ClientChallenge before ComputerName's real
+    // (embedded, not deferred) content, misaligning every subsequent read.
+    let primary_name_referent = r.u32().ok()?;
+    let _computer_name = r.embedded_wstr().ok()?;
     let client_challenge: [u8; 8] = r.bytes(8).ok()?.try_into().ok()?;
+    if primary_name_referent != 0 {
+        let _primary_name = r.unicode_string_deferred().ok()?;
+    }
 
     // A real server generates this randomly; a fixed-but-documented
     // transform of the client's own challenge is acceptable for this
@@ -111,24 +120,35 @@ fn server_req_challenge(session: &mut Session, stub: &[u8]) -> Option<Vec<u8>> {
 async fn server_authenticate3(state: &NetlogonState, session: &Session, stub: &[u8]) -> Option<Vec<u8>> {
     let (client_challenge, server_challenge) = session.challenges?;
 
+    // NetrServerAuthenticate3(PrimaryName: PLOGONSRV_HANDLE (pointer),
+    // AccountName: WSTR (embedded), SecureChannelType:
+    // NETLOGON_SECURE_CHANNEL_TYPE (NDRENUM -> 2-byte USHORT on the
+    // wire), ComputerName: WSTR (embedded), ClientCredential:
+    // NETLOGON_CREDENTIAL (8 bytes), NegotiateFlags: ULONG). Same fixed-
+    // then-deferred ordering fix as `server_req_challenge` -- AccountName/
+    // ComputerName are directly-embedded WSTRs, not RPC_UNICODE_STRING
+    // pointers.
     let mut r = NdrReader::new(stub);
-    let _primary_name_referent = r.u32().ok()?;
-    let (_len, account_name_referent) = r.unicode_string_header().ok()?;
-    let account_name = if account_name_referent != 0 { r.unicode_string_deferred().ok()? } else { return None };
+    let primary_name_referent = r.u32().ok()?;
+    let account_name = r.embedded_wstr().ok()?;
     let _secure_channel_type = r.u16().ok()?;
-    let (_len, computer_name_referent) = r.unicode_string_header().ok()?;
-    if computer_name_referent != 0 {
-        let _ = r.unicode_string_deferred().ok()?;
-    }
+    let _computer_name = r.embedded_wstr().ok()?;
     let client_credential: [u8; 8] = r.bytes(8).ok()?.try_into().ok()?;
     let negotiate_flags = r.u32().ok()?;
+    if primary_name_referent != 0 {
+        let _primary_name = r.unicode_string_deferred().ok()?;
+    }
 
     if negotiate_flags & NETLOGON_NEG_SUPPORTS_AES == 0 {
         return None; // only the AES path is implemented -- see module docs
     }
 
+    // WSTR fields are conventionally NUL-terminated on the wire (unlike
+    // RPC_UNICODE_STRING, which carries an explicit Length instead) --
+    // strip it before using this as a DIT lookup key.
+    let account_name = account_name.trim_end_matches('\0');
     let mut store = state.store.lock().await;
-    let dns = store.lookup_by_index(&state.base_dn, "cn", &account_name).await.ok()?;
+    let dns = store.lookup_by_index(&state.base_dn, "cn", account_name).await.ok()?;
     let [dn] = dns.as_slice() else { return None };
     let entry = store.get_entry(dn).await.ok()??;
     drop(store);
