@@ -5,6 +5,58 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.19.0] — 2026-07-14
+
+### 2026-07-14 (post-v0.18.0)
+- **feat(partition):** New `iron-partition::sid` module: a hand-rolled
+  MS-DTYP §2.4.2 SID codec (`Sid::encode`/`decode`/`parse`, the
+  deliberately mixed-endianness wire format -- 6-byte big-endian
+  authority, little-endian sub-authorities). New
+  `iron-partition::security_descriptor` module: MS-DTYP §2.4.6
+  self-relative `SECURITY_DESCRIPTOR` builder/decoder --
+  `default_descriptor` grants Domain Admins `GENERIC_ALL` and
+  Authenticated Users `GENERIC_READ` via a 2-ACE DACL. `Partition`
+  gained a `domain_sid` field, a `with_domain_sid` builder, and a new
+  `Partition::schema(...)` constructor (`PartitionKind::Schema` already
+  existed since #9 but nothing ever built one).
+- **feat(store):** New `iron-store::ridpool` module: `allocate_rid`
+  allocates sequential RIDs from `FIRST_ALLOCATABLE_RID` (1000) via a
+  real etcd compare-and-swap retry loop, safe against a second
+  independent process (not just in-process mutex serialization).
+- **feat(ldap):** New `iron-ldap::security` module:
+  `stamp_security_principal` auto-assigns an `objectSid` (allocated
+  from the partition's RID pool) and a default `nTSecurityDescriptor`
+  to any newly-added `user`/`computer`/`group` entry, exactly like a
+  real DC does at object creation -- a no-op if the partition has no
+  provisioned domain SID yet. Both attributes are binary (MS-DTYP) but
+  `Entry`'s values are UTF-8-only, so they're stored as base64 text and
+  decoded to raw bytes only at the wire-projection boundary. Added a
+  `computer` object class to the built-in schema validator (#17).
+- **feat(config):** `iron-config-ctl init-forest` now provisions a
+  schema partition and generates a random domain SID
+  (`S-1-5-21-a-b-c`, idempotent across re-runs); `create-child`
+  generates one for every new child domain; new `set-domain-sid`
+  command sets one explicitly.
+- **fix(ldap):** rootDSE's `schemaNamingContext`/`configurationNamingContext`
+  had never actually been reachable for any real multi-partition forest
+  since #9 -- `handle_search` built rootDSE from `Store`'s own local
+  single-partition routing registry instead of the loaded forest
+  topology. Fixed by consulting `Referrals::topology` first, falling
+  back to the local registry only when no topology is configured.
+  Found live while verifying #17.
+- **fix(ldap):** `stamp_security_principal` had the identical bug --
+  it consulted `Store`'s local routing registry (`domain_sid` always
+  `None`) instead of the loaded topology, so newly-stamped
+  `objectSid`/`nTSecurityDescriptor` never appeared on any entry
+  despite a real domain SID being provisioned. Fixed the same way.
+- **docs:** MS schema objects/SID-RID allocation/`nTSecurityDescriptor`
+  (#17, D6 Tier 2) verified live against a fresh forest on the shared
+  fastetcd cluster; `objectSid`/`nTSecurityDescriptor` independently
+  decoded and verified correct via a from-scratch Python MS-DTYP
+  decoder. Real ~500-class Microsoft schema, `cn=subschema` publishing,
+  and ACE-based authorization enforcement remain explicitly out of
+  scope.
+
 ## [v0.18.0] — 2026-07-14
 
 ### 2026-07-14 (post-v0.17.0)

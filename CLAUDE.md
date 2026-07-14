@@ -10,7 +10,38 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.18.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
+`0.19.0` — Phase 2 underway: #17 MS schema objects/SID-RID allocation/
+`nTSecurityDescriptor` CLOSED. New `iron-partition::sid`/
+`security_descriptor` modules (hand-rolled MS-DTYP §2.4.2/§2.4.6
+codecs), a real etcd-CAS-backed RID pool (`iron-store::ridpool`), a
+`computer` object class, and `iron-ldap`'s new `security` module
+auto-stamping `objectSid` + a default `nTSecurityDescriptor` onto
+newly-added `user`/`computer`/`group` entries -- exactly like a real
+DC does at object creation, not something a client computes. Not the
+real ~500-class Microsoft schema or `cn=subschema` publishing (D6
+Tier 3, deferred for DRSUAPI replication only); this extends the
+project's existing hand-picked schema subset just enough to make
+Windows-join-relevant attributes storable and visible. Verified live
+against a fresh forest on the shared fastetcd cluster, and found +
+fixed two real bugs in the process: rootDSE's `schemaNamingContext`/
+`configurationNamingContext` had never actually been reachable for any
+real multi-partition forest since #9 (`handle_search` built rootDSE
+from `Store`'s own local single-partition routing registry rather than
+the loaded forest topology -- the lookup mechanism existed but never
+received a registry with more than one partition in it); and, same
+root cause, newly-stamped `objectSid`/`nTSecurityDescriptor` never
+appeared on new entries because `stamp_security_principal` had the
+same bug -- both fixed by consulting `Referrals::topology` first.
+Independently verified via a from-scratch Python MS-DTYP decoder (not
+reusing any of this project's own code): `objectSid` decodes to the
+correct domain-SID-plus-RID form, and the default
+`nTSecurityDescriptor` decodes to the expected control flags
+(`SE_DACL_PRESENT`/`SE_SELF_RELATIVE`), Domain-Admins owner/group, and
+a 2-ACE DACL (Domain Admins `GENERIC_ALL`, Authenticated Users
+`GENERIC_READ`). ACE-based authorization enforcement, PAC/SAMR/domain-
+join integration are explicitly out of scope (later issues).
+
+Previous: `0.18.0` — Phase 0 done (#1 FIPS crypto, #2 connection harness), Phase 1
 underway (#3 DIT layer, #4 iron-ldap CLOSED: rootDSE/bind/search/add/
 delete/modify/compare/modify-DN/StartTLS/LDAPS + authenticated bind via
 PBKDF2 + cross-NC referrals + AD/RFC2307 schema validation, redundant
@@ -1177,8 +1208,73 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       showing the correctly authenticated principal, and a no-ticket
       retry correctly falling back to 401.
 
+#### Phase 2 — Tier 2 Windows/Mac domain join (later)
+- [x] MS schema objects, SID/RID allocation, `nTSecurityDescriptor` (#17,
+      CLOSED): new `iron-partition::sid` (hand-rolled MS-DTYP §2.4.2 SID
+      codec -- deliberately mixed-endianness, distinct from `iron-kdc`'s
+      all-big-endian keytab format) and `iron-partition::security_descriptor`
+      (MS-DTYP §2.4.6 self-relative `SECURITY_DESCRIPTOR` builder/decoder:
+      owner/group = Domain Admins, a 2-ACE DACL granting Domain Admins
+      `GENERIC_ALL` and Authenticated Users `GENERIC_READ`). A new
+      `iron-store::ridpool` allocates RIDs from a real etcd
+      compare-and-swap loop (`Compare`/`Txn`/`TxnOp`), not the existing
+      read-then-write-in-one-mutex-guarded-txn pattern `store/index.rs`
+      uses -- a RID pool has to stay correct even against a second,
+      independent process (e.g. a future SAMR service, #19), so it needs
+      genuine CAS, not just in-process serialization. `iron-ldap`'s new
+      `security` module auto-stamps `objectSid` + a default
+      `nTSecurityDescriptor` onto any newly-added `user`/`computer`/
+      `group` entry whose partition has a provisioned `domain_sid` --
+      exactly mirroring a real DC assigning both automatically at object
+      creation, never something a client computes itself; a silent no-op
+      (not an error) for any other objectClass, or for a partition with
+      no domain SID yet. Both attributes are fundamentally binary but
+      `Entry`'s values are UTF-8-only (a gap flagged since #4's design as
+      "out of scope until a concrete need shows up") -- rather than add a
+      new `Entry` value variant, they're stored as base64 text and
+      decoded to raw bytes only at the LDAP wire-projection boundary.
+      `iron-config-ctl init-forest` now also provisions a schema
+      partition (`Partition::schema`, mirroring #9's `configuration()`
+      constructor almost exactly -- `PartitionKind::Schema` and
+      `PartitionRegistry::schema_partition()` already existed since #9,
+      but nothing had ever actually constructed one) and generates a
+      random `S-1-5-21-a-b-c` domain SID (idempotent -- a re-run
+      preserves the existing SID rather than regenerating it); a new
+      `set-domain-sid` command lets one be set explicitly. Verified live
+      against a fresh forest (`g17sid`) on the shared fastetcd cluster:
+      real `user`/`computer` entries added via `ldapadd` came back from
+      `ldapsearch` carrying `objectSid`/`nTSecurityDescriptor`, and a
+      from-scratch Python MS-DTYP decoder (not reusing any of this
+      project's own code) independently confirmed `objectSid` decodes to
+      the domain SID plus the allocated RID, and the descriptor decodes
+      to the correct control flags (`SE_DACL_PRESENT`/
+      `SE_SELF_RELATIVE`), Domain-Admins owner/group, and the intended
+      2-ACE DACL. Found and fixed two real bugs live, both the same root
+      cause: `handle_search` built rootDSE from `Store`'s own local
+      single-partition routing registry rather than the loaded forest
+      topology, so `schemaNamingContext`/`configurationNamingContext`
+      had never actually been reachable for any real multi-partition
+      forest since #9 (the lookup mechanism was already correctly wired,
+      it just never received a registry with more than one partition in
+      it) -- confirmed by a real before/after `ldapsearch` against
+      rootDSE. The identical bug existed in the new
+      `stamp_security_principal`, which also consulted `Store`'s local
+      registry (always `domain_sid: None`) instead of the loaded
+      topology, so newly-stamped attributes silently never appeared on
+      any entry despite a real domain SID being provisioned -- fixed
+      the same way, by consulting `Referrals::topology` first and
+      falling back to the local registry only when no topology is
+      configured. Explicitly NOT in scope: the real ~500-class Microsoft
+      schema, `cn=subschema` publishing, or DRSUAPI-fidelity schema data
+      (D6 places that in Tier 3, deferred/skip -- needed only for
+      replication against a real Windows DC, not for Windows-join
+      prerequisites); ACE-based authorization enforcement (the
+      descriptor is stored and independently verified, not yet
+      evaluated to gate anything); Kerberos PAC group-SID population and
+      SAMR/domain-join integration are #18/#19/#20.
+
 ### Phase 2 — Tier 2 Windows/Mac domain join (later)
-- [ ] MS schema objects, rootDSE attrs, SID/RID allocation, `nTSecurityDescriptor`
+- [x] MS schema objects, rootDSE attrs, SID/RID allocation, `nTSecurityDescriptor` (#17, CLOSED — see Live infrastructure below)
 - [ ] Kerberos PAC generation (group SIDs)
 - [ ] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake); SYSVOL via rocketsmbd
 - [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind
