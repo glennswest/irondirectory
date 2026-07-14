@@ -120,9 +120,16 @@ async fn lookup_names_in_domain(state: &SamrState, stub: &[u8]) -> Option<Vec<u8
     let mut r = NdrReader::new(stub);
     let _domain_handle = r.handle().ok()?;
     let count = r.u32().ok()?;
-    // RPC_UNICODE_STRING_ARRAY: a conformant array of RPC_UNICODE_STRING
-    // (MaximumCount header, then `count` fixed-part headers, then deferred data).
+    // Names: RPC_UNICODE_STRING_ARRAY -- embedded directly (not behind a
+    // pointer), and *conformant-varying* (impacket's
+    // NDRUniConformantVaryingArray): MaximumCount, Offset, ActualCount
+    // (3 header words, not 1 -- an earlier version of this function only
+    // read one and misaligned every read after it, caught live against a
+    // real impacket client), then `count` RPC_UNICODE_STRING fixed-part
+    // headers, then deferred string data.
     let _max_count = r.u32().ok()?;
+    let _offset = r.u32().ok()?;
+    let _actual_count = r.u32().ok()?;
     let mut headers = Vec::with_capacity(count as usize);
     for _ in 0..count {
         headers.push(r.unicode_string_header().ok()?);
