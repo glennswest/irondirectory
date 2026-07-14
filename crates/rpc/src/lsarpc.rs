@@ -142,12 +142,15 @@ mod tests {
 
         assert_ne!(name_ref, 0);
         let name = r.unicode_string_deferred().unwrap();
+        r.pad_to_4(); // writer pads each string to 4 -- reader must consume it explicitly now
         assert_eq!(name, "IRONLO");
         assert_ne!(dns_ref, 0);
         let dns_name = r.unicode_string_deferred().unwrap();
+        r.pad_to_4();
         assert_eq!(dns_name, "iron.lo");
         assert_ne!(forest_ref, 0);
         let dns_forest = r.unicode_string_deferred().unwrap();
+        r.pad_to_4();
         assert_eq!(dns_forest, "iron.lo");
         let decoded_sid = r.sid_deferred().unwrap();
         assert_eq!(decoded_sid, sid);

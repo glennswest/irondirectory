@@ -88,18 +88,27 @@ fn server_req_challenge(session: &mut Session, stub: &[u8]) -> Option<Vec<u8>> {
     // NetrServerReqChallenge(PrimaryName: PLOGONSRV_HANDLE (a pointer,
     // LPWSTR), ComputerName: WSTR (embedded directly, NOT a pointer --
     // no RPC_UNICODE_STRING-style Length/MaximumLength/referent prefix),
-    // ClientChallenge: NETLOGON_CREDENTIAL (8 raw bytes)). Fixed part
-    // first, deferred data (only PrimaryName's, if non-null) after --
-    // found live against a real impacket client: an earlier version of
-    // this function treated ComputerName like an RPC_UNICODE_STRING
-    // pointer and read ClientChallenge before ComputerName's real
-    // (embedded, not deferred) content, misaligning every subsequent read.
+    // ClientChallenge: NETLOGON_CREDENTIAL (8 raw bytes)).
+    //
+    // Verified byte-for-byte against a real request impacket actually
+    // produces (not assumed): PrimaryName's referent is immediately
+    // followed by *its own* deferred WSTR content right there (NOT
+    // batched after every fixed field the way a struct's own internal
+    // pointers defer -- a plain RPC parameter list defers per-parameter,
+    // in place), padded to 4 bytes only because the next field
+    // (ComputerName's u32-led header) needs that alignment. ComputerName's
+    // own embedded content is NOT followed by padding, because the next
+    // field (ClientChallenge, 8 raw bytes) needs none. An earlier version
+    // of this function assumed pointer data was always batched at the
+    // end (the rule that happens to hold for `iron-kdc::pac`'s
+    // KERB_VALIDATION_INFO *struct*) and got this badly wrong.
     let primary_name_referent = r.u32().ok()?;
-    let _computer_name = r.embedded_wstr().ok()?;
-    let client_challenge: [u8; 8] = r.bytes(8).ok()?.try_into().ok()?;
     if primary_name_referent != 0 {
         let _primary_name = r.unicode_string_deferred().ok()?;
+        r.pad_to_4();
     }
+    let _computer_name = r.embedded_wstr().ok()?;
+    let client_challenge: [u8; 8] = r.bytes(8).ok()?.try_into().ok()?;
 
     // A real server generates this randomly; a fixed-but-documented
     // transform of the client's own challenge is acceptable for this
@@ -124,20 +133,30 @@ async fn server_authenticate3(state: &NetlogonState, session: &Session, stub: &[
     // AccountName: WSTR (embedded), SecureChannelType:
     // NETLOGON_SECURE_CHANNEL_TYPE (NDRENUM -> 2-byte USHORT on the
     // wire), ComputerName: WSTR (embedded), ClientCredential:
-    // NETLOGON_CREDENTIAL (8 bytes), NegotiateFlags: ULONG). Same fixed-
-    // then-deferred ordering fix as `server_req_challenge` -- AccountName/
-    // ComputerName are directly-embedded WSTRs, not RPC_UNICODE_STRING
-    // pointers.
+    // NETLOGON_CREDENTIAL (8 bytes), NegotiateFlags: ULONG).
+    //
+    // Same per-parameter (not batched) deferral as `server_req_challenge`,
+    // verified against a real request byte-for-byte: PrimaryName's
+    // deferred content (if any) comes right after its referent, padded
+    // to 4 because AccountName's header needs it. AccountName's own
+    // embedded content is NOT padded afterward -- the next field
+    // (SecureChannelType, 2 bytes) doesn't need 4-byte alignment, and in
+    // practice the two together often land back on a 4-byte boundary
+    // before ComputerName's header anyway. ComputerName's content is
+    // likewise unpadded before ClientCredential (8 raw bytes, no
+    // alignment requirement).
     let mut r = NdrReader::new(stub);
     let primary_name_referent = r.u32().ok()?;
+    if primary_name_referent != 0 {
+        let _primary_name = r.unicode_string_deferred().ok()?;
+        r.pad_to_4();
+    }
     let account_name = r.embedded_wstr().ok()?;
     let _secure_channel_type = r.u16().ok()?;
+    r.pad_to_4(); // ComputerName's header (a u32-led conformant array) needs 4-byte alignment
     let _computer_name = r.embedded_wstr().ok()?;
     let client_credential: [u8; 8] = r.bytes(8).ok()?.try_into().ok()?;
     let negotiate_flags = r.u32().ok()?;
-    if primary_name_referent != 0 {
-        let _primary_name = r.unicode_string_deferred().ok()?;
-    }
 
     if negotiate_flags & NETLOGON_NEG_SUPPORTS_AES == 0 {
         return None; // only the AES path is implemented -- see module docs

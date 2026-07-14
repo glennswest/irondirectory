@@ -193,6 +193,15 @@ impl<'a> NdrReader<'a> {
     }
 
     /// The conformant-and-varying `WCHAR` buffer deferred data.
+    ///
+    /// Does **not** consume trailing alignment padding -- found live
+    /// (MS-NRPC's `NetrServerAuthenticate3`) that NDR only pads to the
+    /// *next field's own* alignment requirement, not unconditionally to
+    /// 4 bytes: a `WSTR` immediately followed by a 2-byte field can have
+    /// zero padding between them, while one followed by another u32/
+    /// conformant-array field needs padding up to a 4-byte boundary.
+    /// Callers must call [`Self::pad_to_4`] themselves when (and only
+    /// when) the *next* field genuinely needs 4-byte alignment.
     pub fn unicode_string_deferred(&mut self) -> Result<String, NdrError> {
         let max_count = self.u32()? as usize;
         let _offset = self.u32()?;
@@ -207,7 +216,6 @@ impl<'a> NdrReader<'a> {
         if max_count > actual_count {
             self.bytes((max_count - actual_count) * 2)?;
         }
-        self.pad_to_4();
         String::from_utf16(&units).map_err(|_| NdrError::BadString)
     }
 

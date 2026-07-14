@@ -136,7 +136,9 @@ async fn lookup_names_in_domain(state: &SamrState, stub: &[u8]) -> Option<Vec<u8
     }
     let mut names = Vec::with_capacity(count as usize);
     for (_len, referent) in &headers {
-        names.push(if *referent != 0 { r.unicode_string_deferred().ok()? } else { String::new() });
+        let name = if *referent != 0 { r.unicode_string_deferred().ok()? } else { String::new() };
+        r.pad_to_4(); // each RPC_UNICODE_STRING's deferred data is 4-byte aligned before the next
+        names.push(name);
     }
 
     let mut store = state.store.lock().await;
@@ -197,6 +199,7 @@ async fn create_user2_in_domain(state: &SamrState, domain_sid: &Sid, stub: &[u8]
     let _domain_handle = r.handle().ok()?;
     let (_len, referent) = r.unicode_string_header().ok()?;
     let name = if referent != 0 { r.unicode_string_deferred().ok()? } else { return None };
+    r.pad_to_4(); // AccountType (a plain ULONG) needs 4-byte alignment
     let _account_type = r.u32().ok()?;
     let _desired_access = r.u32().ok()?;
 
