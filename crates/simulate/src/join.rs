@@ -43,6 +43,7 @@ pub enum JoinError {
     NoPac,
 }
 
+#[derive(Clone)]
 pub struct SimConfig {
     pub rpc_addr: String,
     pub kdc_addr: String,
