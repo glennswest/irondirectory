@@ -12,6 +12,7 @@ pub mod aead;
 pub mod digest;
 pub mod hmac;
 pub mod kerberos;
+pub mod md4;
 pub mod pbkdf2;
 pub mod sign;
 

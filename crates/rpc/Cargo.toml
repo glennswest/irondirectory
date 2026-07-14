@@ -1,0 +1,18 @@
+[package]
+name = "iron-rpc"
+description = "Minimal MS-RPCE (DCE/RPC) server: PDU framing, NDR, SAMR/LSARPC/NETLOGON (#19)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+iron-crypto = { path = "../crypto" }
+iron-partition = { path = "../partition" }
+iron-store = { path = "../store" }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
