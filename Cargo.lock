@@ -928,6 +928,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "iron-simulate"
+version = "0.21.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "iron-crypto",
+ "iron-kdc",
+ "iron-partition",
+ "iron-rpc",
+ "iron-store",
+ "rasn",
+ "rasn-kerberos",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "iron-store"
 version = "0.21.0"
 dependencies = [

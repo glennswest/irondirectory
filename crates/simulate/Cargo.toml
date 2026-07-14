@@ -1,0 +1,25 @@
+[package]
+name = "iron-simulate"
+description = "Native Rust domain-join + login simulation harness for scale testing (#23)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+iron-crypto = { path = "../crypto" }
+iron-kdc = { path = "../kdc" }
+iron-partition = { path = "../partition" }
+iron-rpc = { path = "../rpc" }
+iron-store = { path = "../store" }
+rasn = { workspace = true }
+rasn-kerberos = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

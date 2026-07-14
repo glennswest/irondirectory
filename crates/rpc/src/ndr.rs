@@ -94,6 +94,19 @@ impl NdrWriter {
     /// The conformant-and-varying `WCHAR` buffer deferred data for a
     /// non-null `RPC_UNICODE_STRING`.
     pub fn unicode_string_deferred(&mut self, s: &str) {
+        self.embedded_wstr(s);
+        self.pad_to_4();
+    }
+
+    /// A directly-embedded `WSTR` (no `RPC_UNICODE_STRING` header, no
+    /// pointer) -- the fixed-part encoding MS-NRPC's `ComputerName`/
+    /// `AccountName` use. Does **not** pad afterward; unlike
+    /// [`Self::unicode_string_deferred`] (always followed by another
+    /// 4-byte-aligned field or the end of the buffer in this crate's own
+    /// use), an embedded `WSTR` can be immediately followed by a field
+    /// needing no alignment at all -- callers call [`Self::pad_to_4`]
+    /// themselves if (and only if) the next field needs it.
+    pub fn embedded_wstr(&mut self, s: &str) {
         let units: Vec<u16> = s.encode_utf16().collect();
         self.u32(units.len() as u32); // MaximumCount
         self.u32(0); // Offset
@@ -101,7 +114,6 @@ impl NdrWriter {
         for u in units {
             self.u16(u);
         }
-        self.pad_to_4();
     }
 
     /// A SID in its NDR (`RPC_SID`) representation: the trailing

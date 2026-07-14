@@ -69,8 +69,11 @@ pub fn compute_session_key_aes(fips: &FipsContext, ntowf: &[u8; 16], client_chal
 }
 
 /// MS-NRPC 3.1.4.4.1's credential-encryption primitive: AES-128-CFB8
-/// with a zero IV over the 8-byte challenge/credential value.
-fn compute_credential(fips: &FipsContext, session_key: &[u8; 16], challenge: &[u8; 8]) -> Result<[u8; 8], iron_crypto::Error> {
+/// with a zero IV over the 8-byte challenge/credential value. `pub`
+/// (not just `pub(crate)`) since the simulation harness (#23) -- this
+/// crate's first genuine RPC *client* -- needs the exact same math to
+/// compute its own client credential and verify the server's.
+pub fn compute_credential(fips: &FipsContext, session_key: &[u8; 16], challenge: &[u8; 8]) -> Result<[u8; 8], iron_crypto::Error> {
     let out = iron_crypto::aead::aes128_cfb8_encrypt(fips, session_key, challenge)?;
     Ok(out[..8].try_into().unwrap())
 }

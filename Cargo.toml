@@ -16,6 +16,7 @@ members = [
     "crates/gc",        # watch-fed Global Catalog / federated GAL aggregator (D8/D9) (#12)
     "crates/crypto",   # FIPS crypto facade over the `ossl` crate — validated (#1)
     "crates/rpc",       # MS-RPCE (DCE/RPC): PDU framing, NDR, SAMR/LSARPC/NETLOGON (#19)
+    "crates/simulate",  # native domain-join + login simulation harness (#23)
     # "crates/server",  # binary: wires the services together (standalone + k8s)
 ]
 
