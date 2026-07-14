@@ -58,6 +58,7 @@ pub async fn authenticate3(
     w.null_ptr(); // PrimaryName
     w.embedded_wstr(account_name);
     w.u16(2); // SecureChannelType = WorkstationSecureChannel
+    w.pad_to_4(); // ComputerName's header (a u32-led conformant array) needs 4-byte alignment -- matches the server's own read-side fix
     w.embedded_wstr(computer_name);
     w.bytes(&client_credential);
     w.u32(NETLOGON_NEG_SUPPORTS_AES);
