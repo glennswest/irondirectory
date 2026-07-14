@@ -223,20 +223,32 @@ async fn create_user2_in_domain(state: &SamrState, domain_sid: &Sid, stub: &[u8]
     Some(w.buf)
 }
 
-/// Minimal (`UserId` only, not a full `SAMPR_USER_ALL_INFORMATION`) --
-/// this server's synthetic user handles already carry the RID (see
-/// module docs), so nothing needs looking up in the DIT to answer this.
+/// `UserPrimaryGroupInformation` (level 9) -- the simplest real
+/// `SAMPR_USER_INFO_BUFFER` union arm (`USER_PRIMARY_GROUP_INFORMATION`
+/// is just one `ULONG`), returned regardless of the level the caller
+/// actually asked for. Deliberately not `UserAllInformation` (level 21,
+/// what a real join client typically requests): that arm is a large
+/// struct with a dozen-plus fields, and claiming that level while
+/// returning a truncated body isn't just incomplete, it desyncs the
+/// wire (found live -- a real impacket client's own generic union
+/// decode reads exactly as many bytes as the discriminant promises).
+/// Honestly declaring level 9 here, matching what's actually sent, is
+/// correct NDR even though it doesn't answer what UserAllInformation
+/// would have. This server's synthetic user handles already carry the
+/// RID (see module docs), so nothing needs looking up in the DIT to
+/// answer this.
 async fn query_information_user2(_state: &SamrState, _domain_sid: &Sid, stub: &[u8]) -> Option<Vec<u8>> {
     let mut r = NdrReader::new(stub);
     let handle = r.handle().ok()?;
     let _info_level = r.u16().ok()?;
-    let rid = rid_from_user_handle(&handle)?;
+    rid_from_user_handle(&handle)?; // validates it's a handle this server issued
 
+    const DEFAULT_PRIMARY_GROUP_RID: u32 = 513; // Domain Users -- see iron-kdc::pac
     let mut w = NdrWriter::new();
     w.referent_id(); // Buffer: PSAMPR_USER_INFO_BUFFER
-    w.u16(21); // UserInformationClass = UserAllInformation (matching level requested in practice)
+    w.u16(9); // UserInformationClass = UserPrimaryGroupInformation
     w.u16(0); // pad
-    w.u32(rid); // minimal: report the RID as UserId (not full SAMPR_USER_ALL_INFORMATION shape)
+    w.u32(DEFAULT_PRIMARY_GROUP_RID);
     w.u32(0); // STATUS_SUCCESS
     Some(w.buf)
 }
