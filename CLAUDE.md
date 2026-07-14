@@ -50,8 +50,7 @@ surfaced **real, not-yet-fixed concurrency bugs** under load (RPC
 `FAULT_UNK_IF` faults and a store read-after-write race — "no such
 account after creation" — both intermittent, ~40% failure rate at
 concurrency 25, 0% at concurrency <= 5) — exactly the class of finding
-this harness was built to surface; not fixed in this pass, follow-up
-not yet filed.
+this harness was built to surface; not fixed in this pass, filed as #24.
 
 Previous: `0.21.0` — Phase 2 underway: #19 SAMR/LSARPC/NETLOGON over DCE-RPC
 CLOSED. New `iron-rpc` crate: hand-rolled MS-RPCE PDU framing + NDR,
@@ -1539,16 +1538,16 @@ may be misconfigured", meaning `iron-simulate`'s own direct store read
 raced ahead of SAMR's `CreateUser2` write completing/propagating) --
 roughly 40% failure rate at concurrency 25, 0% at concurrency <= 5.
 This is exactly the class of finding the harness was built to surface;
-neither bug is fixed in this pass, and a follow-up issue for the
-underlying `iron-rpc`/`iron-store` concurrency behavior has not yet
-been filed.
+neither bug is fixed in this pass -- filed as #24 for the underlying
+`iron-rpc`/`iron-store` concurrency behavior.
 
 ### Phase 2 — Tier 2 Windows/Mac domain join (later)
 - [x] MS schema objects, rootDSE attrs, SID/RID allocation, `nTSecurityDescriptor` (#17, CLOSED — see Live infrastructure below)
 - [x] Kerberos PAC generation (group SIDs) (#18, CLOSED — see Live infrastructure below)
 - [x] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake) (#19, CLOSED — see Live infrastructure below); SYSVOL via rocketsmbd is a separate, not-yet-filed cross-project follow-up
-- [x] Native Rust domain-join + login simulation harness for scale testing (#23, CLOSED — see Live infrastructure below); found real, not-yet-fixed RPC/store concurrency bugs at scale, follow-up not yet filed
+- [x] Native Rust domain-join + login simulation harness for scale testing (#23, CLOSED — see Live infrastructure below); found real RPC/store concurrency bugs at scale, filed as #24
 - [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind
+- [ ] `iron-rpc`/`iron-store` concurrency bugs found via #23 scale testing (#24): intermittent RPC `FAULT_UNK_IF` faults and a store read-after-write race under concurrent load (~40% failure rate at concurrency 25, 0% at concurrency <= 5)
 
 ### Deferred — exhaustive federation testing (D10), not capability
 - [ ] Many-partition / many-cluster scale matrices

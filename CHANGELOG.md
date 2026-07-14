@@ -46,8 +46,8 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 - **finding:** A 25-concurrent-join scale run found real, not-yet-fixed
   concurrency bugs in `iron-rpc`/`iron-store` under load (intermittent
   RPC `FAULT_UNK_IF` faults and a store read-after-write race) --
-  ~40% failure rate at concurrency 25, 0% at concurrency <= 5. Follow-up
-  not yet filed.
+  ~40% failure rate at concurrency 25, 0% at concurrency <= 5. Filed
+  as #24.
 
 ## [v0.21.0] — 2026-07-14
 
