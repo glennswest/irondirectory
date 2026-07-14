@@ -121,6 +121,7 @@ several SSO surfaces so different consumers integrate the way they prefer:
 | OpenShift (console) | RequestHeader + SPNEGO proxy | 1.5 | Kerberos desktop→console SSO (mod_auth_gssapi) |
 | Windows | Domain join (Kerberos+PAC+DCE-RPC) | 2 | Full AD-join; see D6 |
 | macOS | LDAP/krb5 bind **or** AD bind | 1 / 2 | Light path (Tier 1) or `dsconfigad` (Tier 2) |
+| iPadOS / iOS | MDM enrollment + Kerberos SSO extension, or OIDC | 1.5 | **No domain join** -- Apple removed AD-binding APIs from iOS entirely, there is no `dsconfigad` equivalent. An iPad's path in is an MDM profile configuring Apple's Kerberos SSO extension (Safari/per-app SSO against `iron-kdc`) or a native app/web login via `iron-oidc` -- reuses Tier 1/1.5 surfaces already built, not new server-side work, but the MDM-profile-authoring side is unbuilt. Flagged important; not yet scheduled as an issue. |
 
 - **Native OIDC** is a new crate (`iron-oidc`): a FIPS OAuth2/OpenID Connect
   authorization server. Self-contained — no external Keycloak runtime.
