@@ -845,7 +845,20 @@ async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Refer
     };
 
     if base_dn.is_empty() && req.scope == SearchRequestScope::BaseObject {
-        let entry_op = ProtocolOp::SearchResEntry(rootdse::build(store.registry()));
+        // Found live during #17's verification: this used to always
+        // pass `store.registry()` -- the *local*, single-partition
+        // registry `Store` uses purely for DN-to-cluster routing, never
+        // the full forest topology (`AppState::topology`, #9/#10).
+        // `configurationNamingContext`/`schemaNamingContext` could
+        // therefore never appear for a real multi-partition forest,
+        // even once config/schema partitions were actually provisioned
+        // (#9/#17) -- the registry rootDSE was built from simply never
+        // had them in it. Prefer the loaded topology when one is
+        // configured; fall back to the local registry (still correct
+        // for a deployment with no configuration partition set up,
+        // e.g. the standalone il1/il2/il3 replicas).
+        let registry = referrals.topology.unwrap_or_else(|| store.registry());
+        let entry_op = ProtocolOp::SearchResEntry(rootdse::build(registry));
         let mut ops = vec![entry_op];
         ops.extend(done(ResultCode::Success, ""));
         return ops;
