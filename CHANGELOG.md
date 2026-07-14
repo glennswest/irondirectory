@@ -5,6 +5,54 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.21.0] — 2026-07-14
+
+### 2026-07-14 (post-v0.20.0)
+- **feat(rpc):** New `iron-rpc` crate: a minimal MS-RPCE (DCE/RPC)
+  server -- hand-rolled PDU framing (`bind`/`bind_ack`/`request`/
+  `response`/`fault`) and NDR reader/writer, plus real handlers for
+  LSARPC (`LsarOpenPolicy2`/`LsarQueryInformationPolicy2`/`LsarClose`),
+  SAMR (`SamrConnect5`/`LookupDomainInSamServer`/`OpenDomain`/
+  `LookupNamesInDomain`/`CreateUser2InDomain`/`OpenUser`/
+  `QueryInformationUser2`/`CloseHandle`), and NETLOGON's secure-channel
+  handshake (`NetrServerReqChallenge`/`NetrServerAuthenticate3`, AES-
+  negotiated path). `SamrCreateUser2InDomain` writes a genuine DIT
+  entry with a real allocated `objectSid` (#19).
+- **feat(rpc):** New `iron-rpcd` binary: a standalone `ncacn_ip_tcp`
+  listener for testing against real Samba `rpcclient`/`net rpc` and
+  impacket-based clients, since real Windows `Add-Computer` needs
+  `ncacn_np` (SMB named pipes) -- `rocketsmbd`'s territory, not this
+  pass's scope.
+- **feat(rpc):** New `iron-rpc-ctl set-computer-secret`: provisions a
+  computer account's NTOWF directly, standing in for real
+  `SamrSetInformationUser2` password-setting (which needs an
+  authenticated NTLMSSP RPC bind's session key -- out of scope).
+- **feat(crypto):** New `iron_crypto::md4` -- a narrow, explicitly
+  cited D4 exception (pure Rust, zero `ossl`/FIPS-context involvement)
+  for NTOWF (`NT hash = MD4(UTF-16LE(password))`), which MS-NRPC's
+  Netlogon secure channel structurally requires even in its modern
+  AES-negotiated form. New `iron_crypto::aead::aes128_cfb8_encrypt`
+  keeps the HMAC-SHA256 session-key derivation and AES-CFB8 credential
+  encryption downstream of NTOWF fully inside the FIPS boundary.
+- **fix(rpc):** Found and fixed 5 real wire-format bugs live against
+  independent clients: `SamrConnect5`'s `SAMPR_REVISION_INFO` response
+  was missing its union tag/Revision fields; `SamrLookupNamesInDomain`'s
+  request array was missing 2 of 3 NDR header words (conformant-
+  *varying*, not plain conformant); `SamrQueryInformationUser2` claimed
+  a response level far larger than its actual truncated body; MS-NRPC's
+  `ComputerName`/`AccountName` are directly-embedded `WSTR` values, not
+  `RPC_UNICODE_STRING` pointers; and NDR alignment padding is inserted
+  only when the *next* field needs it, not unconditionally after every
+  string.
+- **docs:** SAMR/LSARPC/NETLOGON over DCE-RPC (#19, D6 Tier 2) verified
+  end to end against a from-scratch Python harness built on impacket's
+  own NDR/nrpc/samr/lsad modules, including an independently-recomputed
+  NETLOGON session key and server credential proving the secure channel
+  is cryptographically genuine. Real Windows `Add-Computer` still needs
+  `ncacn_np`/SMB transport (rocketsmbd) and authenticated RPC bind
+  (NTLMSSP) for real password-setting -- both explicitly out of scope,
+  tracked for #20.
+
 ## [v0.20.0] — 2026-07-14
 
 ### 2026-07-14 (post-v0.19.0)

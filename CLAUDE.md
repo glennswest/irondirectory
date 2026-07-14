@@ -10,7 +10,28 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.20.0` — Phase 2 underway: #18 Kerberos PAC generation (group SIDs)
+`0.21.0` — Phase 2 underway: #19 SAMR/LSARPC/NETLOGON over DCE-RPC
+CLOSED. New `iron-rpc` crate: hand-rolled MS-RPCE PDU framing + NDR,
+real LSARPC/SAMR handlers (`SamrCreateUser2InDomain` writes a genuine
+DIT entry with a real allocated `objectSid`), and NETLOGON's
+`NetrServerReqChallenge`/`NetrServerAuthenticate3` secure-channel
+handshake -- cryptographically verified end to end (independently
+recomputed session key + server credential) against a from-scratch
+Python harness built on impacket's own NDR/nrpc/samr/lsad modules.
+New `iron_crypto::md4` -- a narrow, cited D4 exception (pure Rust, no
+`ossl`/FIPS-context involvement) for NTOWF, which MS-NRPC's secure
+channel structurally requires even in its AES-negotiated form; the
+HMAC-SHA256/AES-CFB8 steps downstream stay fully FIPS-audited (new
+`iron_crypto::aead::aes128_cfb8_encrypt`). Found and fixed 5 real wire-
+format bugs live (missing union fields, missing NDR array header
+words, a mismatched response level, WSTR-vs-pointer confusion, and a
+subtle "padding only when the next field needs it" alignment rule).
+Unauthenticated `ncacn_ip_tcp` transport only, no real
+`SamrSetInformationUser2` password-setting (needs NTLMSSP RPC auth) --
+see Live infrastructure below for the full scope and verification
+narrative.
+
+Previous: `0.20.0` — Phase 2 underway: #18 Kerberos PAC generation (group SIDs)
 CLOSED. New `iron-kdc::pac` module embeds a signed MS-PAC in every
 AS-REP/TGS-REP for principals with a provisioned `objectSid` (#17) --
 hand-rolled `KERB_VALIDATION_INFO` NDR encoding, verified byte-for-byte
@@ -1343,11 +1364,71 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       claims, resource groups, or extra/foreign SIDs; PAC *verification*
       (a resource server checking a PAC's signature) is out of scope,
       this is PAC *generation* only.
+- [x] SAMR/LSARPC/NETLOGON over DCE-RPC (#19, CLOSED): new `iron-rpc`
+      crate -- a minimal MS-RPCE (DCE/RPC) server: hand-rolled PDU
+      framing (`bind`/`bind_ack`/`request`/`response`/`fault`) and NDR
+      reader/writer, plus real handlers for LSARPC (`LsarOpenPolicy2`/
+      `LsarQueryInformationPolicy2`/`LsarClose`), SAMR (`SamrConnect5`/
+      `LookupDomainInSamServer`/`OpenDomain`/`LookupNamesInDomain`/
+      `CreateUser2InDomain`/`OpenUser`/`QueryInformationUser2`/
+      `CloseHandle`), and NETLOGON's secure-channel handshake
+      (`NetrServerReqChallenge`/`NetrServerAuthenticate3`, AES-negotiated
+      path only) -- the actual Windows-join handshake. `SamrCreateUser2InDomain`
+      creates a genuine DIT entry with a real allocated `objectSid`
+      (#17's RID pool), not an in-memory stub. Transport is
+      unauthenticated `ncacn_ip_tcp` only (a plain TCP listener) -- real
+      Windows `Add-Computer` needs `ncacn_np` (SMB named pipes), which is
+      `rocketsmbd`'s territory (the sister project's "SMB half" role),
+      not filed as a cross-project issue yet. `SamrSetInformationUser2`
+      (real password-setting) needs an authenticated (NTLMSSP) RPC
+      bind's session key to decrypt wire-encrypted password material --
+      a distinct, large protocol surface explicitly out of scope; new
+      `iron-rpc-ctl set-computer-secret` stands in for it during
+      testing. NETLOGON's handshake structurally requires a computer
+      account's NTOWF (`NT hash = MD4(UTF-16LE(password))`) even in the
+      modern AES-negotiated variant -- confirmed as a real, unavoidable
+      MS-NRPC requirement (not a design choice this project could route
+      around), and approved as a narrow, explicitly cited D4 exception
+      (new `iron_crypto::md4`, pure Rust, zero `ossl`/FIPS-context
+      involvement so it can't accidentally leak into any FIPS-audited
+      path) scoped only to this one legacy interop need -- the HMAC-
+      SHA256 session-key derivation and AES-CFB8 credential encryption
+      downstream of NTOWF stay fully inside the FIPS boundary via new
+      `iron_crypto::aead::aes128_cfb8_encrypt`. Verified end to end
+      against real, independent clients on the shared fastetcd cluster
+      (no VM needed): Samba's own `rpcclient` confirmed the wire
+      framing/wire compatibility bar in principle, and a from-scratch
+      Python harness built directly on
+      [impacket](https://github.com/fortra/impacket)'s NDR/nrpc/samr/
+      lsad modules drove full LSARPC/SAMR/NETLOGON sessions --
+      including, for NETLOGON, an independently-recomputed session key
+      and server credential proving the secure channel is
+      cryptographically genuine, not just wire-shaped. Found and fixed
+      five real bugs live: `SamrConnect5`'s `SAMPR_REVISION_INFO`
+      response was missing its union tag/Revision fields entirely;
+      `SamrLookupNamesInDomain`'s request array was missing 2 of its 3
+      NDR header words (conformant-*varying*, not plain conformant);
+      `SamrQueryInformationUser2` claimed a response level
+      (`UserAllInformation`) far larger than the truncated body actually
+      sent, desyncing a real client's generic union decode; MS-NRPC's
+      `ComputerName`/`AccountName` parameters turned out to be
+      directly-embedded `WSTR` values, not `RPC_UNICODE_STRING`-style
+      pointers, discovered only by dumping impacket's own real request
+      bytes field-by-field; and, most subtly, NDR alignment padding
+      turned out to be inserted only when the *next* field actually
+      needs it (a u32/pointer/conformant-array header), not
+      unconditionally after every string -- MS-NRPC packs `AccountName`
+      directly against a 2-byte `SecureChannelType` field with zero
+      padding between them. Explicitly out of scope: authenticated RPC
+      bind (NTLMSSP), `ncacn_np`/SMB transport, real password-setting,
+      and anything past what a `WorkstationSecureChannel` join needs --
+      #20 is where a real end-to-end Windows/macOS join gets attempted
+      against whatever of this is reachable.
 
 ### Phase 2 — Tier 2 Windows/Mac domain join (later)
 - [x] MS schema objects, rootDSE attrs, SID/RID allocation, `nTSecurityDescriptor` (#17, CLOSED — see Live infrastructure below)
 - [x] Kerberos PAC generation (group SIDs) (#18, CLOSED — see Live infrastructure below)
-- [ ] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake); SYSVOL via rocketsmbd
+- [x] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake) (#19, CLOSED — see Live infrastructure below); SYSVOL via rocketsmbd is a separate, not-yet-filed cross-project follow-up
 - [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind
 
 ### Deferred — exhaustive federation testing (D10), not capability
