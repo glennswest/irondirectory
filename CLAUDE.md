@@ -10,7 +10,20 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.19.0` — Phase 2 underway: #17 MS schema objects/SID-RID allocation/
+`0.20.0` — Phase 2 underway: #18 Kerberos PAC generation (group SIDs)
+CLOSED. New `iron-kdc::pac` module embeds a signed MS-PAC in every
+AS-REP/TGS-REP for principals with a provisioned `objectSid` (#17) --
+hand-rolled `KERB_VALIDATION_INFO` NDR encoding, verified byte-for-byte
+against impacket's independent NDR decoder, with both PAC signatures
+(including the RFC 8009 SHA-2 checksum path this project defaults to)
+independently re-verified via a from-scratch Python implementation
+validated against RFC 8009's own published test vectors. Moved the
+`objectSid`/`nTSecurityDescriptor` base64 storage convention from
+`iron-ldap::security` into a new `iron-store::binary_attrs` so
+`iron-kdc` can read `objectSid` without a circular crate dependency.
+See Live infrastructure below for the full verification narrative.
+
+Previous: `0.19.0` — Phase 2 underway: #17 MS schema objects/SID-RID allocation/
 `nTSecurityDescriptor` CLOSED. New `iron-partition::sid`/
 `security_descriptor` modules (hand-rolled MS-DTYP §2.4.2/§2.4.6
 codecs), a real etcd-CAS-backed RID pool (`iron-store::ridpool`), a
@@ -1272,10 +1285,68 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       descriptor is stored and independently verified, not yet
       evaluated to gate anything); Kerberos PAC group-SID population and
       SAMR/domain-join integration are #18/#19/#20.
+- [x] Kerberos PAC generation with group SIDs (#18, CLOSED): new
+      `iron-kdc::pac` module embeds a signed MS-PAC (`AD-WIN2K-PAC`
+      authorization-data, MS-KILE) in every AS-REP/TGS-REP ticket for a
+      principal with a provisioned `objectSid` (#17) -- without it, a
+      real Windows client accepts the ticket but has no group
+      memberships to authorize against. Hand-rolls the one NDR-marshaled
+      buffer this needs (`KERB_VALIDATION_INFO`, MS-PAC §2.5 -- pointer/
+      conformant-array deferral, the SID's NDR "conformant structure"
+      max_count hoisting) rather than pulling in a generic NDR/DCE-RPC
+      crate (none exists yet; #19 is where that infrastructure would
+      actually earn its keep, same "one shape by hand" approach as
+      #17's `sid`/`security_descriptor` modules). Group SIDs come from a
+      new `"member"` reverse-index entry added to both `iron-kdc`'s and
+      `iron-ldap`'s `IndexSpec`s (indexing happens at write time, by
+      whichever tool wrote the group entry). Moved the base64 binary-
+      attribute storage convention (`objectSid`/`nTSecurityDescriptor`,
+      #17) from `iron-ldap::security` into a new `iron-store::binary_attrs`
+      so `iron-kdc` can read a principal's `objectSid` without depending
+      on all of `iron-ldap` (which already depends on `iron-kdc` for
+      GSSAPI, #7 -- the other direction would have been circular).
+      PAC signing (MS-PAC §2.8.2): the server checksum is an HMAC over
+      the whole PAC (both signature buffers zeroed) using the ticket's
+      own server key; the KDC/privsvr checksum is an HMAC using the
+      krbtgt key, but over the server checksum's own signature bytes
+      only -- a chained signature, not two independent checksums of the
+      same buffer, a detail confirmed against a working reference
+      ([impacket](https://github.com/fortra/impacket)'s `krb5.pac`
+      `sign_pac`) rather than trusted from memory alone. AES-SHA1
+      enctypes (RFC 3962) use MS-PAC checksum types 15/16; the newer
+      AES-SHA2 enctypes (RFC 8009, this project's actual default per
+      `principal::DEFAULT_ENCTYPES`) reuse their own etype number as the
+      checksum type (19/20) -- also confirmed against impacket's
+      `krb5.constants.ChecksumTypes` and RFC 8009 §2, not assumed.
+      Verified: a real generated PAC parsed byte-for-byte correctly by
+      impacket's own independent NDR decoder (`PACTYPE`/`VALIDATION_INFO`/
+      `KERB_VALIDATION_INFO`) -- `EffectiveName`/`FullName`/`UserId`
+      (RID)/`PrimaryGroupId`/`GroupIds` (RIDs + attributes)/
+      `LogonDomainId` (SID) all round-tripped exactly as constructed.
+      Signature verification needed going further: this impacket build's
+      checksum table has no entries at all for RFC 8009's SHA-2 checksum
+      types (19/20, this project's default), so both PAC signatures were
+      independently re-verified with a from-scratch Python HMAC-SHA2 KDF
+      implementation (stdlib `hmac`/`hashlib` only, not a port of
+      `iron_crypto`'s Rust code) -- itself first validated against RFC
+      8009 Appendix A's own published test vectors (`Kc` derivation and
+      checksum output, both enctypes) before being trusted to verify
+      anything, then confirmed the server and KDC checksums on a real
+      generated PAC exactly matched what `iron-kdc` produced. No real
+      Windows machine exists in this project's test infra to validate
+      PAC *acceptance* against (that gap is explicitly #20's, not
+      re-litigated here) -- "verified" here means spec-conformant
+      structure plus independently-recomputed-correct signatures, not
+      "a real Windows DC accepted this ticket." Scope (D10): one
+      `KERB_LOGON_INFO` + `PAC_CLIENT_INFO` + the two required
+      signatures -- no `PAC_UPN_DNS_INFO`, compound-identity/device
+      claims, resource groups, or extra/foreign SIDs; PAC *verification*
+      (a resource server checking a PAC's signature) is out of scope,
+      this is PAC *generation* only.
 
 ### Phase 2 — Tier 2 Windows/Mac domain join (later)
 - [x] MS schema objects, rootDSE attrs, SID/RID allocation, `nTSecurityDescriptor` (#17, CLOSED — see Live infrastructure below)
-- [ ] Kerberos PAC generation (group SIDs)
+- [x] Kerberos PAC generation (group SIDs) (#18, CLOSED — see Live infrastructure below)
 - [ ] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake); SYSVOL via rocketsmbd
 - [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind
 

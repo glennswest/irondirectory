@@ -5,6 +5,34 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.20.0] — 2026-07-14
+
+### 2026-07-14 (post-v0.19.0)
+- **feat(kdc):** New `iron-kdc::pac` module: generates and embeds a
+  signed MS-PAC (`AD-WIN2K-PAC` authorization-data, MS-KILE) in every
+  AS-REP/TGS-REP ticket for a principal with a provisioned `objectSid`
+  (#17) -- `KERB_VALIDATION_INFO` (hand-rolled NDR), `PAC_CLIENT_INFO`,
+  and the server + KDC/privsvr signature buffers (#18).
+- **feat(kdc):** New `"member"` secondary index (added to both
+  `iron-kdc`'s and `iron-ldap`'s `IndexSpec`s) gives an efficient
+  reverse lookup from a user DN to the `groupOfNames` entries that list
+  it, populating the PAC's group SIDs.
+- **refactor(store):** Moved the base64 binary-attribute storage
+  convention (`objectSid`/`nTSecurityDescriptor`, #17) from
+  `iron-ldap::security` into a new `iron-store::binary_attrs` so
+  `iron-kdc` can read `objectSid` without depending on all of
+  `iron-ldap` (which already depends on `iron-kdc` for GSSAPI, #7).
+- **docs:** Kerberos PAC generation (#18) verified: a real generated
+  PAC parsed byte-for-byte correctly by impacket's independent NDR
+  decoder; both PAC signatures (including the RFC 8009 SHA-2 checksum
+  path this project defaults to, which this impacket build's own
+  checksum table doesn't support) independently re-verified via a
+  from-scratch Python HMAC-SHA2 implementation, itself validated
+  against RFC 8009 Appendix A's published test vectors before being
+  trusted. No real Windows machine exists yet to validate PAC
+  *acceptance* (tracked as #20); "verified" here means spec-conformant
+  structure plus independently-recomputed-correct signatures.
+
 ## [v0.19.0] — 2026-07-14
 
 ### 2026-07-14 (post-v0.18.0)
