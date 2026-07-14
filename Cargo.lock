@@ -791,6 +791,7 @@ name = "iron-config"
 version = "0.18.0"
 dependencies = [
  "anyhow",
+ "iron-crypto",
  "iron-partition",
  "iron-store",
  "serde_json",
@@ -868,6 +869,7 @@ name = "iron-ldap"
 version = "0.18.0"
 dependencies = [
  "anyhow",
+ "base64",
  "futures",
  "iron-config",
  "iron-crypto",

@@ -27,6 +27,8 @@ pub mod error;
 pub mod key;
 pub mod partition;
 pub mod registry;
+pub mod security_descriptor;
+pub mod sid;
 
 pub use dn::{Ava, Dn, Rdn};
 pub use error::{PartitionError, Result};
@@ -34,3 +36,4 @@ pub use partition::{
     realm_from_dn, ClusterRef, ForestId, Partition, PartitionId, PartitionKind, TlsRef,
 };
 pub use registry::PartitionRegistry;
+pub use sid::Sid;

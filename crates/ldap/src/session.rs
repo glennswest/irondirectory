@@ -602,12 +602,19 @@ async fn handle_add(
     if let Some(result) = proactive_referral(referrals, &dn) {
         return AddResponse(result);
     }
-    let entry = match entry_from_attributes(&req.attributes, fips) {
+    let mut entry = match entry_from_attributes(&req.attributes, fips) {
         Ok(e) => e,
         Err(e) => return AddResponse(password_error_result(&e)),
     };
     if let Err(msg) = crate::schema::validate(&entry) {
         return AddResponse(LdapResult::new(ResultCode::ObjectClassViolation, String::new().into(), msg.into()));
+    }
+    // #17: a user/computer/group entry gets an objectSid + default
+    // nTSecurityDescriptor auto-assigned here, exactly like a real DC
+    // does at object creation -- a no-op if the partition has no
+    // domain SID provisioned yet (see `security` module docs).
+    if let Err(e) = crate::security::stamp_security_principal(store, &dn, &mut entry).await {
+        return AddResponse(store_error_result(&e, referrals, &dn));
     }
 
     let result = match store.put_entry(&dn, &entry, spec).await {
@@ -916,7 +923,18 @@ fn project_attributes(
             } else {
                 entry
                     .get(name)
-                    .map(|vs| vs.iter().map(|v| v.clone().into_bytes()).collect())
+                    .map(|vs| {
+                        // objectSid/nTSecurityDescriptor (#17) are stored
+                        // as base64 text (Entry's values are UTF-8-string
+                        // only); decode back to real binary here, at the
+                        // wire boundary, rather than returning the
+                        // base64 text itself as if it were the value.
+                        if crate::security::is_binary_attr(name) {
+                            vs.iter().map(|v| crate::security::decode_binary_attr(v)).collect()
+                        } else {
+                            vs.iter().map(|v| v.clone().into_bytes()).collect()
+                        }
+                    })
                     .unwrap_or_default()
             };
             PartialAttribute::new(

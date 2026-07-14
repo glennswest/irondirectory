@@ -7,11 +7,15 @@
 //! persisted forest registry from #9, falling back to the static
 //! `AppState::referrals` list; chased one hop end-to-end, #10), built-in
 //! AD-shaped + RFC 2307 posix schema validation (`schema` module) on
-//! add/modify, and the RFC 4532 WhoAmI extended operation (reports the
+//! add/modify, the RFC 4532 WhoAmI extended operation (reports the
 //! connection's current bind identity -- `dn:...` for simple bind,
-//! `u:<principal>` for GSSAPI, empty for anonymous). Not yet: subtree
-//! rename, other extended ops, full schema-subentry publishing
-//! (`cn=subschema`).
+//! `u:<principal>` for GSSAPI, empty for anonymous), and SID/RID
+//! allocation + a default `nTSecurityDescriptor` auto-stamped onto
+//! newly-added `user`/`computer`/`group` entries when their partition
+//! has a provisioned domain SID (`security` module, #17). Not yet:
+//! subtree rename, other extended ops, full schema-subentry publishing
+//! (`cn=subschema`), ACE-based authorization enforcement (the
+//! descriptor is stored, not yet evaluated to gate anything).
 
 pub mod conn;
 pub mod filter;
@@ -20,6 +24,7 @@ pub mod gssapi;
 pub mod health;
 pub mod rootdse;
 pub mod schema;
+pub mod security;
 pub mod session;
 pub mod tls;
 

@@ -15,6 +15,7 @@ iron-store = { path = "../store" }
 iron-crypto = { path = "../crypto" }
 iron-kdc = { path = "../kdc" }
 iron-config = { path = "../config" }
+base64 = { workspace = true }
 rasn = { workspace = true }
 rasn-ldap = { workspace = true }
 rasn-kerberos = { workspace = true }

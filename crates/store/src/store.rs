@@ -108,4 +108,11 @@ impl Store {
             })
             .collect()
     }
+
+    /// Allocates the next RID (#17) from `dn`'s partition's pool.
+    pub async fn allocate_rid(&mut self, dn_in_partition: &Dn) -> Result<u32, StoreError> {
+        let pid = self.resolve(dn_in_partition)?.id.clone();
+        let client = self.client_mut(&pid)?;
+        crate::ridpool::allocate_rid(client, &pid).await
+    }
 }

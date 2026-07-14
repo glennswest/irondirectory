@@ -26,11 +26,20 @@ const CLASSES: &[ObjectClass] = &[
     ObjectClass { name: "inetOrgPerson", must: &["cn", "sn"] },
     ObjectClass { name: "organizationalUnit", must: &["ou"] },
     ObjectClass { name: "groupOfNames", must: &["cn", "member"] },
-    // AD-shaped (Microsoft's real `user`/`group` classes carry a much
-    // larger MAY list and inherit through a deep chain; this models just
-    // the structurally-required core, enough to catch an obviously
-    // incomplete entry).
+    // AD-shaped (Microsoft's real `user`/`computer`/`group` classes
+    // carry a much larger MAY list and inherit through a deep chain;
+    // this models just the structurally-required core, enough to catch
+    // an obviously incomplete entry). `objectSid`/`sAMAccountName`/
+    // `userAccountControl`/`nTSecurityDescriptor` (#17) are deliberately
+    // NOT listed as MUST/MAY here -- `Entry`/this validator are
+    // schema-free beyond MUST-completeness (no closed-world MAY
+    // rejection exists), so they're just ordinary attribute names the
+    // auto-provisioning hook in `session.rs` (`stamp_security_principal`)
+    // writes directly; adding a MAY-tracking mechanism to enforce them
+    // is out of scope until something actually needs to reject an
+    // unrecognized attribute.
     ObjectClass { name: "user", must: &["cn"] },
+    ObjectClass { name: "computer", must: &["cn"] },
     ObjectClass { name: "group", must: &["cn"] },
     // RFC 2307 posix auxiliary classes
     ObjectClass {

@@ -7,6 +7,10 @@
 //! - [`model::Entry`] is the stored (multi-valued attribute map) format.
 //! - [`index`] atomically maintains secondary indexes alongside entry
 //!   writes via a single etcd transaction per write.
+//! - [`ridpool`] allocates RIDs (#17) via a real etcd compare-and-swap
+//!   loop, not `index`'s read-then-write-in-one-txn pattern -- a RID
+//!   pool must stay correct even if a second, independent process
+//!   touches the same partition.
 //! - [`store::Store`] is the multi-cluster connection registry (invariant
 //!   #4): resolves a DN to its partition and the client for that
 //!   partition's cluster.
@@ -14,6 +18,7 @@
 pub mod entry;
 pub mod index;
 pub mod model;
+pub mod ridpool;
 pub mod store;
 
 use etcd_client::{Certificate, Client, ConnectOptions, Error as EtcdError, Identity, TlsOptions};
@@ -38,6 +43,8 @@ pub enum StoreError {
     NoPartitionFor(String),
     #[error("not connected to the cluster for partition {0}")]
     NotConnected(String),
+    #[error("RID pool for partition {0} is corrupt: {1}")]
+    RidPoolCorrupt(String, String),
 }
 
 /// Connects to the fastetcd cluster described by `cluster`. Plaintext if

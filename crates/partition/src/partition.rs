@@ -185,6 +185,14 @@ pub struct Partition {
     /// client's own krb5.conf/DNS gets it to the next KDC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kdc_url: Option<String>,
+    /// This domain's SID (#17, MS-DTYP §2.4.2, `S-1-5-21-a-b-c` string
+    /// form), present for domain partitions once provisioned. A real
+    /// object SID is this value plus one more sub-authority (the
+    /// allocated RID) -- see `crate::sid::Sid::with_sub_authority`.
+    /// `None` until a domain SID has been generated and set (e.g. via
+    /// `iron-config-ctl`); a domain created before #17 has no SID yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_sid: Option<String>,
 }
 
 impl Partition {
@@ -208,6 +216,7 @@ impl Partition {
             subordinates: Vec::new(),
             ldap_url: None,
             kdc_url: None,
+            domain_sid: None,
         })
     }
 
@@ -228,6 +237,30 @@ impl Partition {
             subordinates: Vec::new(),
             ldap_url: None,
             kdc_url: None,
+            domain_sid: None,
+        })
+    }
+
+    /// Start building a schema partition (#17) -- the forest-wide NC
+    /// that will eventually hold real `attributeSchema`/`classSchema`
+    /// objects; for now, provisioning one just makes `iron-ldap`'s
+    /// rootDSE `schemaNamingContext` attribute (already wired to look
+    /// for a `Schema`-kind partition, see
+    /// `PartitionRegistry::schema_partition`) resolve to something
+    /// real. No realm, no superior -- same shape as `configuration()`.
+    pub fn schema(id: impl Into<String>, forest: ForestId, base_dn: Dn, cluster: ClusterRef) -> Result<Self, PartitionError> {
+        Ok(Partition {
+            id: PartitionId::new(id)?,
+            forest,
+            base_dn,
+            kind: PartitionKind::Schema,
+            realm: None,
+            cluster,
+            superior: None,
+            subordinates: Vec::new(),
+            ldap_url: None,
+            kdc_url: None,
+            domain_sid: None,
         })
     }
 
@@ -252,6 +285,13 @@ impl Partition {
     /// Builder: set the KDC host:port hint.
     pub fn with_kdc_url(mut self, url: impl Into<String>) -> Self {
         self.kdc_url = Some(url.into());
+        self
+    }
+
+    /// Builder: set this domain's SID (the `S-1-5-21-a-b-c` string
+    /// form, #17).
+    pub fn with_domain_sid(mut self, sid: impl Into<String>) -> Self {
+        self.domain_sid = Some(sid.into());
         self
     }
 }
@@ -346,5 +386,35 @@ mod tests {
         let back: Partition = serde_json::from_str(&j).unwrap();
         assert_eq!(p, back);
         assert_eq!(p.kdc_url.as_deref(), Some("kdc1.g10.lo:88"));
+    }
+
+    #[test]
+    fn schema_builder_has_no_realm_or_superior() {
+        let p = Partition::schema(
+            "schema",
+            ForestId::new("acme").unwrap(),
+            Dn::parse("cn=schema,cn=configuration,dc=lo").unwrap(),
+            ClusterRef::plaintext(["http://127.0.0.1:2379"]),
+        )
+        .unwrap();
+        assert_eq!(p.kind, PartitionKind::Schema);
+        assert_eq!(p.realm, None);
+        assert_eq!(p.superior, None);
+    }
+
+    #[test]
+    fn with_domain_sid_roundtrips_through_serde() {
+        let p = Partition::domain(
+            "g10",
+            ForestId::new("acme").unwrap(),
+            Dn::parse("dc=g10,dc=lo").unwrap(),
+            ClusterRef::plaintext(["http://127.0.0.1:2379"]),
+        )
+        .unwrap()
+        .with_domain_sid("S-1-5-21-1004336348-1177238915-682003330");
+        let j = serde_json::to_string(&p).unwrap();
+        let back: Partition = serde_json::from_str(&j).unwrap();
+        assert_eq!(p, back);
+        assert_eq!(p.domain_sid.as_deref(), Some("S-1-5-21-1004336348-1177238915-682003330"));
     }
 }
