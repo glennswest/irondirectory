@@ -5,6 +5,50 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.22.0] — 2026-07-14
+
+### 2026-07-14 (post-v0.21.0)
+- **feat(simulate):** New `iron-simulate` crate (#23, filed mid-session
+  after a direct request for "an accurate simulation of windows server
+  joining domain, and normal pc's joining domain, so we can do scale
+  testing"): `iron-simulate join <count> [prefix]` / `login <count>
+  <user> <pass>` drives N concurrent full realistic sequences --
+  LSARPC -> SAMR -> harness-only secret provisioning -> NETLOGON ->
+  Kerberos AS-REQ -> TGS-REQ -> PAC-buffer check -- reusing `iron-rpc`'s
+  NDR/PDU primitives for the RPC client side.
+- **feat(simulate):** New from-scratch Kerberos *client*
+  (`krb_client.rs`) -- AS-REQ/AS-REP with PA-ENC-TIMESTAMP preauth,
+  TGS-REQ/TGS-REP -- built on the same `rasn`/`rasn-kerberos`/
+  `iron_crypto::kerberos` foundation `iron-kdc`'s server side uses;
+  nothing in this workspace had spoken Kerberos as a client before.
+- **fix(simulate):** Hardcoded `"sim"` placeholder partition id in the
+  harness's direct-store connection was silently reading/writing a
+  different etcd keyspace than `iron-rpcd`/`iron-kdcd` actually used.
+- **fix(simulate):** Client-side NETLOGON encoder was missing the same
+  NDR alignment pad #19 found server-side (padding only when the
+  *next* field needs it, not unconditionally after every string).
+- **fix(simulate):** `as_exchange`/`tgs_exchange` were passed
+  `name@realm` instead of the bare name they expect, double-appending
+  the realm and producing `KDC_ERR_C_PRINCIPAL_UNKNOWN`.
+- **fix(simulate):** The real bug behind a long HMAC-mismatch chase --
+  `simulate_join`/`simulate_login` were re-deriving the service
+  principal's Kerberos key from its password + a *guessed* salt
+  (`principal@realm`) to decrypt the service ticket, but
+  `principal::set_password` always generates a fresh random salt
+  unrelated to the principal name. Fixed by reading the service
+  principal's stored key directly instead, mirroring how the KDC
+  itself looks up a principal's key.
+- **test(crypto):** New `iron_crypto::kerberos` regression tests for
+  two real FIPS provider constraints found while chasing the above
+  (PBKDF2 needs a password >= 8 bytes and a salt >= 16 bytes,
+  regardless of enctype/digest family or FipsContext reuse) --
+  confirmed non-issues for the actual bug, kept as guardrails.
+- **finding:** A 25-concurrent-join scale run found real, not-yet-fixed
+  concurrency bugs in `iron-rpc`/`iron-store` under load (intermittent
+  RPC `FAULT_UNK_IF` faults and a store read-after-write race) --
+  ~40% failure rate at concurrency 25, 0% at concurrency <= 5. Follow-up
+  not yet filed.
+
 ## [v0.21.0] — 2026-07-14
 
 ### 2026-07-14 (post-v0.20.0)

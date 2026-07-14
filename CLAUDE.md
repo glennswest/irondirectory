@@ -10,7 +10,50 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.21.0` — Phase 2 underway: #19 SAMR/LSARPC/NETLOGON over DCE-RPC
+`0.22.0` — Phase 2 underway: #23 native Rust domain-join + login
+simulation harness CLOSED (filed mid-session, not part of the
+original #17-#22 backlog, after the user asked for "an accurate
+simulation of windows server joining domain, and normal pc's joining
+domain, so we can do scale testing"). New `iron-simulate` crate:
+`iron-simulate join <count> [prefix]` / `login <count> <user> <pass>`
+drives N concurrent full realistic sequences — LSARPC → SAMR →
+(harness-only secret provisioning, standing in for real
+`SamrSetInformationUser2`) → NETLOGON → Kerberos AS-REQ → TGS-REQ →
+PAC-buffer verification — reusing `iron-rpc`'s NDR/PDU primitives for
+the RPC client side and a brand-new from-scratch Kerberos *client*
+(`krb_client.rs`; nothing in this workspace previously spoke Kerberos
+as a client) built on the same `rasn`/`rasn-kerberos`/`iron_crypto`
+foundation the server side uses. Found and fixed three real bugs live
+(a hardcoded placeholder partition id silently reading/writing the
+wrong etcd keyspace, a missing NDR alignment pad in the client's own
+NETLOGON encoder mirroring an earlier server-side fix, and a
+principal-name double-realm-append), plus one substantive one that
+consumed most of the debugging time: `simulate_join`/`simulate_login`
+were **re-deriving** the service principal's Kerberos key from
+`service_password` + a *guessed* salt (`principal@realm`) to decrypt
+the service ticket and check its PAC — but `principal::set_password`
+always generates a fresh **random** salt unrelated to the principal
+name, so the guessed salt silently produced the wrong key and failed
+ticket decryption with a HMAC mismatch that read exactly like a real
+crypto bug. Burned a long detour chasing it as a `FipsContext`-reuse/
+OpenSSL-FIPS-provider issue (isolated two *genuine*, separately
+confirmed FIPS provider constraints along the way — PBKDF2 needs a
+password >= 8 bytes and a salt >= 16 bytes, both now covered by
+`iron_crypto::kerberos` regression tests — but neither explained the
+live failure) before re-reading `join.rs` closely enough to see the
+actual bug: fixed by having the harness read the service principal's
+*stored* key directly (mirroring how the KDC itself looks up a
+principal's key) instead of re-deriving it. Verified end-to-end on
+dev.g8.lo against live `iron-rpcd`/`iron-kdcd`: single join/login both
+succeed with correct PAC buffers; a 25-concurrent-join scale run
+surfaced **real, not-yet-fixed concurrency bugs** under load (RPC
+`FAULT_UNK_IF` faults and a store read-after-write race — "no such
+account after creation" — both intermittent, ~40% failure rate at
+concurrency 25, 0% at concurrency <= 5) — exactly the class of finding
+this harness was built to surface; not fixed in this pass, follow-up
+not yet filed.
+
+Previous: `0.21.0` — Phase 2 underway: #19 SAMR/LSARPC/NETLOGON over DCE-RPC
 CLOSED. New `iron-rpc` crate: hand-rolled MS-RPCE PDU framing + NDR,
 real LSARPC/SAMR handlers (`SamrCreateUser2InDomain` writes a genuine
 DIT entry with a real allocated `objectSid`), and NETLOGON's
@@ -1425,10 +1468,86 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       #20 is where a real end-to-end Windows/macOS join gets attempted
       against whatever of this is reachable.
 
+**iron-simulate (#23, native domain-join/login scale-test harness)** --
+new `iron-simulate` crate, filed mid-session after the user asked for
+"an accurate simulation of windows server joining domain, and normal
+pc's joining domain, so we can do scale testing" -- not part of the
+original #17-#22 backlog. Two binaries' worth of behavior in one CLI:
+`iron-simulate join <count> [prefix]` drives N concurrent full
+sequences (LSARPC -> SAMR -> harness-only secret provisioning,
+standing in for real `SamrSetInformationUser2` -- see module docs for
+exactly what a real client can't do that this harness can -> NETLOGON
+-> Kerberos AS-REQ -> TGS-REQ -> PAC-buffer check); `iron-simulate
+login <count> <user> <pass>` does the AS-REQ/TGS-REQ/PAC-check part
+only, for an existing principal. Reuses `iron-rpc`'s NDR/PDU
+primitives directly for the RPC client side; the Kerberos side needed
+a brand-new from-scratch client (`krb_client.rs` -- AS-REQ/AS-REP with
+PA-ENC-TIMESTAMP preauth, TGS-REQ/TGS-REP), since nothing in this
+workspace had ever spoken Kerberos as a *client* before (every prior
+issue verified against real `kinit`/`klist`/MIT krb5 instead) -- built
+on the same `rasn`/`rasn-kerberos` types and `iron_crypto::kerberos`
+primitives `iron-kdc`'s own server side uses, reusing its wire framing
+and string/time helpers directly rather than duplicating them.
+
+Found and fixed three small real bugs live: a hardcoded `"sim"`
+placeholder partition id in the harness's own direct-store connection,
+silently reading/writing a completely different etcd keyspace than
+`iron-rpcd`/`iron-kdcd` were actually using; a missing NDR alignment
+pad in the *client's* NETLOGON encoder (the same "padding only when
+the next field needs it" rule #19 found server-side, needed again for
+the client's own `AccountName`/`ComputerName` encoding); and
+`as_exchange`/`tgs_exchange` being passed `name@realm` instead of the
+bare name they actually expect (`realm` is always a separate
+parameter) -- silently double-appending the realm and producing
+`KDC_ERR_C_PRINCIPAL_UNKNOWN`.
+
+One more bug consumed most of the session's debugging time and is
+worth recording in full, since the detour is as instructive as the
+fix: `simulate_join`/`simulate_login` decrypt the resulting service
+ticket (to check its PAC) by **re-deriving** the service principal's
+Kerberos key from `config.service_password` and a *guessed* salt
+(`principal@realm`) -- but `principal::set_password` always generates
+a fresh **random** salt unrelated to the principal name (see its own
+docs), so the guessed salt silently produced the wrong key. The
+resulting HMAC-verification failure on decrypt read exactly like a
+real crypto bug, and was chased for a long time as a hypothesized
+`FipsContext`-reuse issue: extensive live bisection (isolating exact
+operation sequences, standalone repro binaries, tokio-spawn vs direct
+execution, cross-thread execution, hand-transcribed vs. the real
+compiled function) never found a genuine context-reuse defect, but
+*did* independently confirm two real, narrow OpenSSL FIPS provider
+constraints along the way -- PBKDF2 requires a password >= 8 bytes and
+a salt >= 16 bytes, regardless of enctype/digest family or how many
+prior unrelated operations share the `FipsContext` -- now covered by
+permanent `iron_crypto::kerberos` regression tests
+(`string_to_key_rejects_password_shorter_than_8_bytes`,
+`string_to_key_twice_with_different_enctype_families_on_one_context`).
+Neither constraint explained the live failure, which only became
+visible once a minimal repro was built by calling the *actual compiled
+join flow* end-to-end rather than a hand-copied equivalent -- the real
+fix was having the harness read the service principal's already-*
+stored* key directly (mirroring exactly how the KDC itself looks up a
+principal's key in `tgs_exchange`) instead of re-deriving anything.
+
+Verified end-to-end against live `iron-rpcd`/`iron-kdcd` on
+dev.g8.lo: a single join and a single login both succeed with correct
+PAC buffer types (`[1, 10, 6, 7]`). A 25-concurrent-join scale run
+(the actual point of this harness) surfaced **real, not-yet-fixed
+concurrency bugs** -- intermittent RPC `FAULT_UNK_IF` faults and a
+store read-after-write race ("no such account after creation -- store
+may be misconfigured", meaning `iron-simulate`'s own direct store read
+raced ahead of SAMR's `CreateUser2` write completing/propagating) --
+roughly 40% failure rate at concurrency 25, 0% at concurrency <= 5.
+This is exactly the class of finding the harness was built to surface;
+neither bug is fixed in this pass, and a follow-up issue for the
+underlying `iron-rpc`/`iron-store` concurrency behavior has not yet
+been filed.
+
 ### Phase 2 — Tier 2 Windows/Mac domain join (later)
 - [x] MS schema objects, rootDSE attrs, SID/RID allocation, `nTSecurityDescriptor` (#17, CLOSED — see Live infrastructure below)
 - [x] Kerberos PAC generation (group SIDs) (#18, CLOSED — see Live infrastructure below)
 - [x] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake) (#19, CLOSED — see Live infrastructure below); SYSVOL via rocketsmbd is a separate, not-yet-filed cross-project follow-up
+- [x] Native Rust domain-join + login simulation harness for scale testing (#23, CLOSED — see Live infrastructure below); found real, not-yet-fixed RPC/store concurrency bugs at scale, follow-up not yet filed
 - [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind
 
 ### Deferred — exhaustive federation testing (D10), not capability

@@ -10,15 +10,17 @@ provides the **SMB file-server** half (SYSVOL/NETLOGON shares, Kerberos service
 acceptor). Together they form a clean-room, FIPS-clean alternative to a Windows
 or Samba domain controller.
 
-> **Status:** `v0.21.0` — Phase 0 done, Phase 1 underway, Phase 2 started
+> **Status:** `v0.22.0` — Phase 0 done, Phase 1 underway, Phase 2 started
 > (`iron-partition`'s `sid`/`security_descriptor` modules, a real
 > etcd-CAS RID pool, `iron-ldap` auto-stamping `objectSid` +
 > a default `nTSecurityDescriptor` onto new `user`/`computer`/`group`
 > entries, `iron-kdc` embedding a signed **Kerberos PAC** with
-> group SIDs in every ticket, and a new **`iron-rpc`** crate serving
+> group SIDs in every ticket, a new **`iron-rpc`** crate serving
 > **SAMR/LSARPC/NETLOGON** — the Windows-join handshake itself,
 > verified against real impacket-based clients including a
-> cryptographically genuine NETLOGON secure channel — Windows-join
+> cryptographically genuine NETLOGON secure channel, and a new
+> **`iron-simulate`** crate driving concurrent, fully realistic
+> join+login sequences for scale testing — Windows-join
 > prerequisites, D6 Tier 2). Phase 1.5's
 > OpenShift LDAP identity provider and SPNEGO desktop→console SSO also
 > ship, docs-only — see `docs/OPENSHIFT-LDAP-IDP.md` and
