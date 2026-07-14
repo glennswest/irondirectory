@@ -613,7 +613,7 @@ async fn handle_add(
     // nTSecurityDescriptor auto-assigned here, exactly like a real DC
     // does at object creation -- a no-op if the partition has no
     // domain SID provisioned yet (see `security` module docs).
-    if let Err(e) = crate::security::stamp_security_principal(store, &dn, &mut entry).await {
+    if let Err(e) = crate::security::stamp_security_principal(store, referrals.topology, &dn, &mut entry).await {
         return AddResponse(store_error_result(&e, referrals, &dn));
     }
 

@@ -49,11 +49,28 @@ fn declares_security_principal_class(entry: &Entry) -> bool {
 /// alone (e.g. an `organizationalUnit`), and a partition with no domain
 /// SID yet just doesn't stamp anything -- exactly like a real domain
 /// before its SID is assigned, not a broken add.
-pub async fn stamp_security_principal(store: &mut Store, dn: &Dn, entry: &mut Entry) -> Result<(), StoreError> {
+///
+/// `topology` should be `Referrals::topology` -- the forest-wide
+/// registry loaded from the persisted configuration partition (#9).
+/// `Store::registry()` is deliberately NOT consulted first: it's a
+/// bare, locally-constructed single-partition registry built at
+/// startup purely for DN-to-cluster routing, and never carries a
+/// provisioned `domain_sid` -- the same gap that made rootDSE's
+/// `schemaNamingContext`/`configurationNamingContext` never appear
+/// until that lookup was corrected (see `session::handle_search`).
+/// Falls back to `store.registry()` only when no topology is
+/// configured at all, matching `referral_for`'s fallback shape.
+pub async fn stamp_security_principal(
+    store: &mut Store,
+    topology: Option<&iron_partition::PartitionRegistry>,
+    dn: &Dn,
+    entry: &mut Entry,
+) -> Result<(), StoreError> {
     if !declares_security_principal_class(entry) {
         return Ok(());
     }
-    let Some(domain_sid_str) = store.registry().resolve(dn).and_then(|p| p.domain_sid.clone()) else {
+    let registry = topology.unwrap_or_else(|| store.registry());
+    let Some(domain_sid_str) = registry.resolve(dn).and_then(|p| p.domain_sid.clone()) else {
         return Ok(());
     };
     let Some(domain_sid) = Sid::parse(&domain_sid_str) else {
