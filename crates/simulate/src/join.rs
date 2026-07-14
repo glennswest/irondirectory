@@ -107,6 +107,24 @@ pub async fn ensure_service_principal(config: &SimConfig, fips: &FipsContext) ->
     Ok(())
 }
 
+/// Reads the service principal's *stored* key directly, rather than
+/// re-deriving it from `config.service_password` -- `set_password`
+/// generates a fresh random salt (see its own docs), unrelated to the
+/// principal name, so re-deriving with a guessed salt (e.g.
+/// `principal@realm`) would silently produce the wrong key and fail
+/// ticket decryption with a HMAC mismatch that looks like a crypto bug
+/// but is really just a wrong key (found live: this exact mistake).
+/// Mirrors how the KDC itself looks up a principal's key (`tgs_exchange`).
+async fn fetch_service_key(config: &SimConfig) -> Result<iron_kdc::principal::PrincipalKey, JoinError> {
+    let mut store = connect_store(config).await?;
+    let base_dn = Dn::parse(&config.base_dn)?;
+    let principal_fqn = format!("{}@{}", config.service_principal, config.realm);
+    let dns = store.lookup_by_index(&base_dn, iron_kdc::principal::ATTR_PRINCIPAL_NAME, &principal_fqn).await?;
+    let [dn] = dns.as_slice() else { return Err(JoinError::AccountMissing) };
+    let entry = store.get_entry(dn).await?.ok_or(JoinError::AccountMissing)?;
+    Ok(iron_kdc::principal::key_for_enctype(&entry, Enctype::Aes256CtsHmacSha384_192)?)
+}
+
 async fn connect_store(config: &SimConfig) -> Result<Store, JoinError> {
     // The simulator's own store connection is separate from iron-rpcd's/
     // iron-kdcd's -- this is the "test-harness-only" provisioning path
@@ -166,12 +184,8 @@ pub async fn simulate_join(config: &SimConfig, fips: &FipsContext, computer_name
     let tgt = krb_client::as_exchange(fips, &config.kdc_addr, &config.realm, computer_name, password).await?;
     let service_ticket = krb_client::tgs_exchange(fips, &config.kdc_addr, &config.realm, &tgt, &config.service_principal).await?;
 
-    let service_key = iron_crypto::kerberos::string_to_key(fips, Enctype::Aes256CtsHmacSha384_192, &config.service_password, format!("{}@{}", config.service_principal, config.realm).as_bytes(), None)?;
-    let enc_ticket = krb_client::decrypt_ticket(fips, &service_ticket.ticket, &service_key, Enctype::Aes256CtsHmacSha384_192)
-        .or_else(|_| {
-            let key128 = iron_crypto::kerberos::string_to_key(fips, Enctype::Aes256CtsHmacSha1_96, &config.service_password, format!("{}@{}", config.service_principal, config.realm).as_bytes(), None)?;
-            krb_client::decrypt_ticket(fips, &service_ticket.ticket, &key128, Enctype::Aes256CtsHmacSha1_96)
-        })?;
+    let service_key = fetch_service_key(config).await?;
+    let enc_ticket = krb_client::decrypt_ticket(fips, &service_ticket.ticket, &service_key.key, service_key.enctype)?;
     let pac_bytes = krb_client::extract_pac(&enc_ticket).ok_or(JoinError::NoPac)?;
     let pac_buffer_types = krb_client::pac_buffer_types(&pac_bytes).ok_or(JoinError::NoPac)?;
 
@@ -196,8 +210,8 @@ pub async fn simulate_login(config: &SimConfig, fips: &FipsContext, username: &s
     let tgt = krb_client::as_exchange(fips, &config.kdc_addr, &config.realm, username, password).await?;
     let service_ticket = krb_client::tgs_exchange(fips, &config.kdc_addr, &config.realm, &tgt, &config.service_principal).await?;
 
-    let service_key = iron_crypto::kerberos::string_to_key(fips, Enctype::Aes256CtsHmacSha384_192, &config.service_password, format!("{}@{}", config.service_principal, config.realm).as_bytes(), None)?;
-    let enc_ticket = krb_client::decrypt_ticket(fips, &service_ticket.ticket, &service_key, Enctype::Aes256CtsHmacSha384_192)?;
+    let service_key = fetch_service_key(config).await?;
+    let enc_ticket = krb_client::decrypt_ticket(fips, &service_ticket.ticket, &service_key.key, service_key.enctype)?;
     let pac_bytes = krb_client::extract_pac(&enc_ticket).ok_or(JoinError::NoPac)?;
     let pac_buffer_types = krb_client::pac_buffer_types(&pac_bytes).ok_or(JoinError::NoPac)?;
 

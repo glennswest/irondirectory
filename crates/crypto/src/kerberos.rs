@@ -725,6 +725,70 @@ mod tests {
     }
 
     #[test]
+    fn string_to_key_rejects_password_shorter_than_8_bytes() {
+        // Found live while debugging #23: this FIPS provider build
+        // enforces a PBKDF2 password-length floor of 8 bytes (returns a
+        // generic Ossl error below that, regardless of salt length or
+        // enctype/digest family) -- not documented in the `ossl` crate
+        // itself, discovered by bisection. iron-kdc's own passwords are
+        // always operator/user-supplied and realistically >= 8 bytes,
+        // but this guards the boundary explicitly.
+        let ctx = FipsContext::new().unwrap();
+        let salt = b"0123456789abcdef"; // 16 bytes, meets MIN_SALT_LEN
+        assert!(string_to_key(&ctx, Enctype::Aes256CtsHmacSha384_192, b"short7", salt, None).is_err());
+        assert!(string_to_key(&ctx, Enctype::Aes256CtsHmacSha384_192, b"exactly8", salt, None).is_ok());
+    }
+
+    #[test]
+    fn string_to_key_twice_with_different_enctype_families_on_one_context() {
+        // Two string_to_key calls for *different* enctype families
+        // (RFC 8009's SHA-2-based PBKDF2, then RFC 3962's SHA-1-based
+        // PBKDF2) on the same FipsContext, with a proper >=8-byte
+        // password and >=16-byte salt throughout -- confirms reusing one
+        // FipsContext across mixed digest families is fine by itself;
+        // an earlier investigation that seemed to show this failing
+        // turned out to be an artifact of using an under-length literal
+        // salt in the repro, not a real FipsContext-reuse issue.
+        let ctx = FipsContext::new().unwrap();
+        let salt = b"0123456789abcdef";
+        let _k1 = string_to_key(&ctx, Enctype::Aes256CtsHmacSha384_192, b"computer-secret", salt, None).unwrap();
+        let _k2 = string_to_key(&ctx, Enctype::Aes256CtsHmacSha1_96, b"computer-secret", salt, None).unwrap();
+    }
+
+    #[test]
+    fn decrypt_on_a_different_os_thread_after_encrypt_on_the_original_one() {
+        // encrypt happens on the current thread and decrypt happens
+        // after handing the *same* FipsContext to a freshly spawned
+        // std::thread -- mirroring what a multi-threaded tokio runtime
+        // can do across an `.await` point (resume a task on a different
+        // worker thread). Confirms FipsContext is safely `Send` and
+        // usable across threads for this pattern.
+        let ctx = FipsContext::new().unwrap();
+        let enctype = Enctype::Aes256CtsHmacSha384_192;
+        let key = string_to_key(&ctx, enctype, b"hunter22", b"IRON.LOtestuser1", None).unwrap();
+        let _pa_enc_ts = encrypt(&ctx, enctype, &key, 1, b"some preauth timestamp bytes").unwrap();
+        let ct = encrypt(&ctx, enctype, &key, 3, b"some as-rep bytes").unwrap();
+
+        let result = std::thread::spawn(move || decrypt(&ctx, enctype, &key, 3, &ct)).join().unwrap();
+        assert_eq!(result.unwrap(), b"some as-rep bytes");
+    }
+
+    #[test]
+    fn decrypt_after_a_different_key_usage_encrypt_on_the_same_context() {
+        // encrypt(usage=1) then decrypt(usage=3) on the SAME FipsContext,
+        // mirroring AS-REQ preauth (usage 1) followed by AS-REP decrypt
+        // (usage 3) with the client's own long-term key.
+        let ctx = FipsContext::new().unwrap();
+        let enctype = Enctype::Aes256CtsHmacSha384_192;
+        let key = string_to_key(&ctx, enctype, b"hunter22", b"IRON.LOtestuser1", None).unwrap();
+
+        let _pa_enc_ts = encrypt(&ctx, enctype, &key, 1, b"some preauth timestamp bytes").unwrap();
+        let ct = encrypt(&ctx, enctype, &key, 3, b"some as-rep bytes").unwrap();
+        let pt = decrypt(&ctx, enctype, &key, 3, &ct).unwrap();
+        assert_eq!(pt, b"some as-rep bytes");
+    }
+
+    #[test]
     fn encrypt_decrypt_roundtrip_all_enctypes() {
         let ctx = FipsContext::new().unwrap();
         for enctype in [
