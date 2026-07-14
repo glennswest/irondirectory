@@ -211,6 +211,100 @@ pub fn parse_request_body(body: &[u8]) -> Option<RequestBody<'_>> {
     Some(RequestBody { ctx_id, opnum, stub_data: &body[8..] })
 }
 
+// ---------------------------------------------------------------------
+// Client-side builders/parsers (#23 -- the simulation harness is this
+// crate's first RPC *client*, everything above was server-only).
+// ---------------------------------------------------------------------
+
+/// Builds a `bind` PDU offering one presentation context per
+/// `(ctx_id, abstract_syntax)` pair, each against the NDR 2.0 transfer
+/// syntax (the only one this crate's server half understands, and the
+/// only one a client built against it needs to offer).
+pub fn build_bind(call_id: u32, max_frag: u16, ctx_items: &[(u16, [u8; 20])]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&max_frag.to_le_bytes());
+    body.extend_from_slice(&max_frag.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes()); // assoc_group = 0 (let the server assign one)
+    body.push(ctx_items.len() as u8); // ctx_num
+    body.push(0); // Reserved
+    body.extend_from_slice(&0u16.to_le_bytes()); // Reserved2
+    for (ctx_id, abstract_syntax) in ctx_items {
+        body.extend_from_slice(&ctx_id.to_le_bytes());
+        body.push(1); // TransItems (one transfer syntax offered)
+        body.push(0); // pad
+        body.extend_from_slice(abstract_syntax);
+        body.extend_from_slice(&*NDR_TRANSFER_SYNTAX);
+    }
+
+    let frag_len = (16 + body.len()) as u16;
+    let mut out = Vec::with_capacity(frag_len as usize);
+    write_common_header(&mut out, PTYPE_BIND, frag_len, call_id);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// Whether every presentation context in a `bind_ack` PDU's body was
+/// accepted (`Result == 0`) -- this crate's own server only ever
+/// accepts-all-or-rejects-all in one pass, so a per-context breakdown
+/// isn't needed here.
+pub fn parse_bind_ack_all_accepted(body: &[u8]) -> Option<bool> {
+    if body.len() < 10 {
+        return None;
+    }
+    let secondary_addr_len = u16::from_le_bytes([body[8], body[9]]) as usize;
+    let mut pos = 10 + secondary_addr_len;
+    pos += (4 - (pos % 4)) % 4; // align ctx_num to the PDU start, per build_bind_ack
+    if body.len() < pos + 4 {
+        return None;
+    }
+    let ctx_num = body[pos] as usize;
+    pos += 4; // ctx_num(1) + Reserved(1) + Reserved2(2)
+    if ctx_num == 0 {
+        return Some(false);
+    }
+    for _ in 0..ctx_num {
+        if body.len() < pos + 2 {
+            return None;
+        }
+        let result = u16::from_le_bytes([body[pos], body[pos + 1]]);
+        if result != 0 {
+            return Some(false);
+        }
+        pos += 24; // Result(2) + Reason(2) + TransferSyntax(20)
+    }
+    Some(true)
+}
+
+/// Builds a `request` PDU for `opnum` on `ctx_id`, wrapping `stub_data`
+/// (the NDR-encoded request parameters).
+pub fn build_request(call_id: u32, ctx_id: u16, opnum: u16, stub_data: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(8 + stub_data.len());
+    body.extend_from_slice(&(stub_data.len() as u32).to_le_bytes()); // alloc_hint
+    body.extend_from_slice(&ctx_id.to_le_bytes());
+    body.extend_from_slice(&opnum.to_le_bytes());
+    body.extend_from_slice(stub_data);
+
+    let frag_len = (16 + body.len()) as u16;
+    let mut out = Vec::with_capacity(frag_len as usize);
+    write_common_header(&mut out, PTYPE_REQUEST, frag_len, call_id);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// A parsed `response`/`fault` PDU body -- `Ok` for a `response`
+/// (stub data), `Err` for a `fault` (the NCA status code).
+pub fn parse_response_body(ptype: u8, body: &[u8]) -> Option<Result<&[u8], u32>> {
+    if body.len() < 8 {
+        return None;
+    }
+    match ptype {
+        PTYPE_RESPONSE => Some(Ok(&body[8..])),
+        // alloc_hint(4) + ctx_id(2) + cancel_count(1) + reserved(1) + status(4) -- see build_fault.
+        PTYPE_FAULT if body.len() >= 12 => Some(Err(u32::from_le_bytes(body[8..12].try_into().ok()?))),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +386,51 @@ mod tests {
         assert_eq!(req.ctx_id, 3);
         assert_eq!(req.opnum, 64);
         assert_eq!(req.stub_data, &[9, 9, 9]);
+    }
+
+    #[test]
+    fn build_bind_round_trips_through_the_server_side_parser() {
+        let pdu = build_bind(1, 4280, &[(0, *crate::uuid::SAMR_SYNTAX), (1, *crate::uuid::LSARPC_SYNTAX)]);
+        let (hdr, frag_len) = parse_header(&pdu).unwrap();
+        assert_eq!(hdr.ptype, PTYPE_BIND);
+        assert_eq!(frag_len as usize, pdu.len());
+        let items = parse_bind_body(&pdu[16..]).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].ctx_id, 0);
+        assert_eq!(items[0].abstract_syntax, *crate::uuid::SAMR_SYNTAX);
+        assert_eq!(items[1].ctx_id, 1);
+        assert_eq!(items[1].abstract_syntax, *crate::uuid::LSARPC_SYNTAX);
+    }
+
+    #[test]
+    fn parse_bind_ack_all_accepted_reads_the_servers_own_output() {
+        let accepted = build_bind_ack(1, 4280, 1, &[CtxResult::accept(), CtxResult::accept()]);
+        assert_eq!(parse_bind_ack_all_accepted(&accepted[16..]), Some(true));
+
+        let rejected = build_bind_ack(1, 4280, 1, &[CtxResult::accept(), CtxResult::reject_abstract_syntax_not_supported()]);
+        assert_eq!(parse_bind_ack_all_accepted(&rejected[16..]), Some(false));
+    }
+
+    #[test]
+    fn build_request_round_trips_through_the_server_side_parser() {
+        let pdu = build_request(7, 2, 64, &[1, 2, 3]);
+        let (hdr, frag_len) = parse_header(&pdu).unwrap();
+        assert_eq!(hdr.ptype, PTYPE_REQUEST);
+        assert_eq!(frag_len as usize, pdu.len());
+        let req = parse_request_body(&pdu[16..]).unwrap();
+        assert_eq!(req.ctx_id, 2);
+        assert_eq!(req.opnum, 64);
+        assert_eq!(req.stub_data, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn parse_response_body_reads_the_servers_own_response_and_fault() {
+        let resp = build_response(5, 0, &[9, 8, 7]);
+        let (hdr, _) = parse_header(&resp).unwrap();
+        assert_eq!(parse_response_body(hdr.ptype, &resp[16..]), Some(Ok(&[9u8, 8, 7][..])));
+
+        let fault = build_fault(5, 0, FAULT_UNK_IF);
+        let (hdr, _) = parse_header(&fault).unwrap();
+        assert_eq!(parse_response_body(hdr.ptype, &fault[16..]), Some(Err(FAULT_UNK_IF)));
     }
 }
