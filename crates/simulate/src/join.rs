@@ -156,10 +156,14 @@ pub async fn simulate_join(config: &SimConfig, fips: &FipsContext, computer_name
     let mut nl = netlogon_client::connect(&config.rpc_addr).await?;
     let client_challenge = [1u8, 2, 3, 4, 5, 6, 7, 8];
     let server_challenge = netlogon_client::req_challenge(&mut nl, computer_name, &client_challenge).await?;
-    netlogon_client::authenticate3(&mut nl, fips, &principal_fqn.replace(&format!("@{}", config.realm), ""), computer_name, &ntowf, &client_challenge, &server_challenge)
-        .await?;
+    netlogon_client::authenticate3(&mut nl, fips, computer_name, computer_name, &ntowf, &client_challenge, &server_challenge).await?;
 
-    let tgt = krb_client::as_exchange(fips, &config.kdc_addr, &config.realm, &principal_fqn, password).await?;
+    // `as_exchange`/`tgs_exchange` take the *bare* principal name --
+    // `realm` is always a separate parameter, never appended by the
+    // caller (found live: passing `principal_fqn` here double-appended
+    // the realm, since `string_to_principal_name` has no way to know
+    // where a bare name ends and a realm suffix begins).
+    let tgt = krb_client::as_exchange(fips, &config.kdc_addr, &config.realm, computer_name, password).await?;
     let service_ticket = krb_client::tgs_exchange(fips, &config.kdc_addr, &config.realm, &tgt, &config.service_principal).await?;
 
     let service_key = iron_crypto::kerberos::string_to_key(fips, Enctype::Aes256CtsHmacSha384_192, &config.service_password, format!("{}@{}", config.service_principal, config.realm).as_bytes(), None)?;
@@ -188,9 +192,8 @@ pub async fn simulate_join(config: &SimConfig, fips: &FipsContext, computer_name
 /// `iron-kdc-ctl set-password`, or provisioned by the caller beforehand).
 pub async fn simulate_login(config: &SimConfig, fips: &FipsContext, username: &str, password: &[u8]) -> Result<LoginReport, JoinError> {
     let start = Instant::now();
-    let principal_fqn = format!("{username}@{}", config.realm);
 
-    let tgt = krb_client::as_exchange(fips, &config.kdc_addr, &config.realm, &principal_fqn, password).await?;
+    let tgt = krb_client::as_exchange(fips, &config.kdc_addr, &config.realm, username, password).await?;
     let service_ticket = krb_client::tgs_exchange(fips, &config.kdc_addr, &config.realm, &tgt, &config.service_principal).await?;
 
     let service_key = iron_crypto::kerberos::string_to_key(fips, Enctype::Aes256CtsHmacSha384_192, &config.service_password, format!("{}@{}", config.service_principal, config.realm).as_bytes(), None)?;
