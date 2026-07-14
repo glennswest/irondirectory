@@ -917,12 +917,14 @@ dependencies = [
 name = "iron-rpc"
 version = "0.20.0"
 dependencies = [
+ "anyhow",
  "iron-crypto",
  "iron-partition",
  "iron-store",
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

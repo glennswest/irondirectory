@@ -5,6 +5,25 @@ use ossl::OsslSecret;
 pub const TAG_LEN: usize = 16;
 pub const NONCE_LEN: usize = 12;
 
+/// AES-128-CFB8 (8-bit feedback), zero IV -- MS-NRPC 3.1.4.4.1's
+/// Netlogon credential-encryption primitive (#19). Not authenticated
+/// (no tag) -- CFB8 is a streaming mode, used here only to encrypt an
+/// 8-byte challenge/credential value under a session key both sides
+/// already derived via `hmac::hmac_sha256`, not for confidentiality of
+/// arbitrary data. Goes through the FIPS provider like every other
+/// cipher in this crate -- AES-CFB8 is itself a FIPS-approved mode; only
+/// the *key derivation* feeding into this (NTOWF, `crate::md4`) is the
+/// cited D4 exception, not this function.
+pub fn aes128_cfb8_encrypt(ctx: &FipsContext, key: &[u8; 16], data: &[u8]) -> Result<Vec<u8>, Error> {
+    let iv = vec![0u8; 16];
+    let mut cipher = OsslCipher::new(ctx.inner(), EncAlg::AesCfb8(AesSize::Aes128), true, OsslSecret::from_slice(key), Some(iv), None)?;
+    let mut out = vec![0u8; data.len() + 16];
+    let mut n = cipher.update(data, &mut out)?;
+    n += cipher.finalize(&mut out[n..])?;
+    out.truncate(n);
+    Ok(out)
+}
+
 /// AES-256-GCM encrypt. `out` must be `plaintext.len() + TAG_LEN` bytes;
 /// the tag is appended after the ciphertext.
 pub fn aes256_gcm_encrypt(

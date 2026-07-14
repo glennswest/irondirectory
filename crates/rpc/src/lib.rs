@@ -37,4 +37,5 @@ pub mod ndr;
 pub mod netlogon;
 pub mod pdu;
 pub mod samr;
+pub mod server;
 pub mod uuid;
