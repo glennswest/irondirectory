@@ -869,7 +869,6 @@ name = "iron-ldap"
 version = "0.19.0"
 dependencies = [
  "anyhow",
- "base64",
  "futures",
  "iron-config",
  "iron-crypto",
@@ -918,6 +917,7 @@ dependencies = [
 name = "iron-store"
 version = "0.19.0"
 dependencies = [
+ "base64",
  "etcd-client",
  "iron-partition",
  "serde",

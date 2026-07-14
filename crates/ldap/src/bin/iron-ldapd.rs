@@ -137,7 +137,11 @@ async fn main() -> anyhow::Result<()> {
     registry.insert(partition)?;
 
     let store = Store::connect(registry).await?;
-    let index_spec = IndexSpec::new(["cn", "mail", "uid"]);
+    // "member" (#18) lets iron-kdc's PAC generation efficiently reverse-look-up
+    // a user's group memberships (groupOfNames entries whose "member" list
+    // contains that user's DN) -- must match iron-kdc's own index_spec()
+    // since indexing happens at write time, by whichever tool wrote the entry.
+    let index_spec = IndexSpec::new(["cn", "mail", "uid", "member"]);
 
     let topology = load_topology().await?;
 

@@ -146,6 +146,18 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         Ok(Some(e)) => e,
         _ => return krberror::build(KDC_ERR_S_PRINCIPAL_UNKNOWN, &realm_str, kdc_sname, Some(format!("no such principal {service_principal}")), None).into(),
     };
+    // #18: re-derive the PAC fresh from the client's *current* directory
+    // state at every hop, rather than carrying the TGT's own PAC forward --
+    // consistent with this KDC never trusting stale client-presented data
+    // over a live store lookup.
+    let client_principal = format!("{}@{}", principal_name_to_string(&tgt.cname), crate::realm_to_string(&tgt.crealm));
+    let pac_context = match store.lookup_by_index(&app.base_dn, crate::principal::ATTR_PRINCIPAL_NAME, &client_principal).await {
+        Ok(dns) if dns.len() == 1 => match store.get_entry(&dns[0]).await {
+            Ok(Some(client_entry)) => crate::pac::gather_context(&mut store, &app.base_dn, app.topology.as_ref(), &realm_str, &dns[0], &client_entry).await,
+            _ => None,
+        },
+        _ => None,
+    };
     drop(store);
     let service_keys = match crate::principal::keys(&service_entry) {
         Ok(k) => k,
@@ -172,6 +184,14 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     let end_time = crate::time::plus_seconds(TICKET_LIFETIME_SECS.min(crate::time::diff_seconds(&auth_time, &tgt.end_time)));
     let flags = TicketFlags::reserved(); // no INITIAL flag on a service ticket
 
+    // #18: server signature uses the requested service's own key; KDC
+    // signature uses `issuer_key` -- the krbtgt key that decrypted the
+    // presented TGT, i.e. this realm's own vouching key.
+    let authorization_data = pac_context.as_ref().and_then(|ctx| {
+        let input = ctx.as_input(tgt.auth_time.0.timestamp());
+        crate::pac::generate(&app.fips, &input, &service_key.key, service_key.enctype, &issuer_key.key, issuer_key.enctype).ok().and_then(crate::wrap_pac_authorization_data)
+    });
+
     let enc_ticket_part = EncTicketPart {
         flags: flags.clone(),
         key: new_session_key.clone(),
@@ -183,7 +203,7 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         end_time: end_time.clone(),
         renew_till: None,
         caddr: None,
-        authorization_data: None,
+        authorization_data,
     };
     let enc_ticket_bytes = match rasn::der::encode(&enc_ticket_part) {
         Ok(b) => b,

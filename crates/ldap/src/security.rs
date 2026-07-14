@@ -15,17 +15,13 @@
 //! exactly the smaller, documented-encoding-convention fix the gap
 //! calls for.
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use iron_partition::{security_descriptor, Dn, Sid};
+use iron_store::binary_attrs::{encode_binary_attr, OBJECT_SID_ATTR, NT_SECURITY_DESCRIPTOR_ATTR};
 use iron_store::model::Entry;
 use iron_store::store::Store;
 use iron_store::StoreError;
 
-/// `objectSid`, stored as base64 (see module docs).
-pub const OBJECT_SID_ATTR: &str = "objectsid";
-/// `nTSecurityDescriptor`, stored as base64 (see module docs).
-pub const NT_SECURITY_DESCRIPTOR_ATTR: &str = "ntsecuritydescriptor";
+pub use iron_store::binary_attrs::{decode_binary_attr, is_binary_attr};
 
 /// objectClasses real AD treats as security principals -- these get an
 /// `objectSid`/`nTSecurityDescriptor`; nothing else does.
@@ -80,28 +76,12 @@ pub async fn stamp_security_principal(
 
     let rid = store.allocate_rid(dn).await?;
     let object_sid = domain_sid.with_sub_authority(rid);
-    entry.set(OBJECT_SID_ATTR, [STANDARD.encode(object_sid.encode())]);
+    entry.set(OBJECT_SID_ATTR, [encode_binary_attr(&object_sid.encode())]);
 
     let descriptor = security_descriptor::default_descriptor(&domain_sid);
-    entry.set(NT_SECURITY_DESCRIPTOR_ATTR, [STANDARD.encode(descriptor)]);
+    entry.set(NT_SECURITY_DESCRIPTOR_ATTR, [encode_binary_attr(&descriptor)]);
 
     Ok(())
-}
-
-/// Attributes whose stored value is base64-encoded binary data (see
-/// module docs) -- `session::project_attributes` decodes these to raw
-/// bytes rather than treating the stored string as the wire value
-/// verbatim, the way every other attribute works.
-pub fn is_binary_attr(name: &str) -> bool {
-    name.eq_ignore_ascii_case(OBJECT_SID_ATTR) || name.eq_ignore_ascii_case(NT_SECURITY_DESCRIPTOR_ATTR)
-}
-
-/// Decodes a stored base64 value back to raw wire bytes. Falls back to
-/// the stored string's own UTF-8 bytes on a decode failure (should
-/// never happen for a value this module itself wrote) rather than
-/// dropping the value or panicking.
-pub fn decode_binary_attr(value: &str) -> Vec<u8> {
-    STANDARD.decode(value).unwrap_or_else(|_| value.as_bytes().to_vec())
 }
 
 #[cfg(test)]
@@ -128,15 +108,5 @@ mod tests {
     fn declares_security_principal_class_false_with_no_objectclass_at_all() {
         let e = Entry::new();
         assert!(!declares_security_principal_class(&e));
-    }
-
-    #[test]
-    fn binary_attr_roundtrips_through_base64() {
-        let raw = vec![1u8, 5, 21, 0, 0, 0, 0, 0, 5, 0, 0, 0];
-        let encoded = STANDARD.encode(&raw);
-        assert!(is_binary_attr("objectSid"));
-        assert!(is_binary_attr("NTSECURITYDESCRIPTOR"));
-        assert!(!is_binary_attr("cn"));
-        assert_eq!(decode_binary_attr(&encoded), raw);
     }
 }

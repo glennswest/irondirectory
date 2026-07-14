@@ -11,10 +11,15 @@
 //!   loop, not `index`'s read-then-write-in-one-txn pattern -- a RID
 //!   pool must stay correct even if a second, independent process
 //!   touches the same partition.
+//! - [`binary_attrs`] is the shared base64-in-`Entry` convention for
+//!   MS-DTYP binary values (`objectSid`/`nTSecurityDescriptor`, #17),
+//!   used by both `iron-ldap`'s wire projection and `iron-kdc`'s PAC
+//!   generation (#18).
 //! - [`store::Store`] is the multi-cluster connection registry (invariant
 //!   #4): resolves a DN to its partition and the client for that
 //!   partition's cluster.
 
+pub mod binary_attrs;
 pub mod entry;
 pub mod index;
 pub mod model;

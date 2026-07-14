@@ -119,6 +119,11 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         Ok(Some(e)) => e,
         _ => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some("krbtgt principal entry missing".into()), None).into(),
     };
+    // #18: gathered here (while `store` is still locked, for the "member"
+    // reverse-index lookup) but embedded into the ticket below, once the
+    // krbtgt key -- also this TGT's PAC-signing key, since krbtgt IS the
+    // "server" for a TGT -- is known.
+    let pac_context = crate::pac::gather_context(&mut store, &app.base_dn, app.topology.as_ref(), &realm_str, &client_dn, &client_entry).await;
     drop(store);
 
     let krbtgt_keys = match crate::principal::keys(&krbtgt_entry) {
@@ -142,6 +147,16 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     let end_time = crate::time::plus_seconds(TICKET_LIFETIME_SECS);
     let flags = TicketFlags::initial();
 
+    // #18: for a TGT, krbtgt is both the ticket's "server" (its own key
+    // encrypts this ticket, right below) and the "KDC" vouching for the
+    // PAC -- so both PAC signatures use the same krbtgt key.
+    let authorization_data = pac_context.as_ref().and_then(|ctx| {
+        let input = ctx.as_input(auth_time.0.timestamp());
+        crate::pac::generate(&app.fips, &input, &krbtgt_key.key, krbtgt_key.enctype, &krbtgt_key.key, krbtgt_key.enctype)
+            .ok()
+            .and_then(crate::wrap_pac_authorization_data)
+    });
+
     let enc_ticket_part = EncTicketPart {
         flags: flags.clone(),
         key: session_key.clone(),
@@ -153,7 +168,7 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         end_time: end_time.clone(),
         renew_till: None,
         caddr: None,
-        authorization_data: None,
+        authorization_data,
     };
     let enc_ticket_bytes = match rasn::der::encode(&enc_ticket_part) {
         Ok(b) => b,

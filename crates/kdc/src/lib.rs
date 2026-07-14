@@ -17,6 +17,7 @@
 pub mod as_exchange;
 pub mod keytab;
 pub mod krberror;
+pub mod pac;
 pub mod principal;
 pub mod server;
 pub mod tgs_exchange;
@@ -44,9 +45,13 @@ pub const CLOCK_SKEW_SECS: i64 = 300;
 /// Attributes `iron-kdc` reads/writes on shared DIT entries -- passed to
 /// `Store::put_entry`/`lookup_by_index` alongside whatever `iron-ldap`
 /// already indexes, so principal lookups work regardless of which tool
-/// wrote the entry.
+/// wrote the entry. `"member"` (#18) gives `pac::group_sids` an
+/// efficient reverse lookup from a user DN to the `groupOfNames` entries
+/// that list it -- must match `iron-ldap`'s own index spec, since
+/// whichever tool actually writes a group entry is the one whose spec
+/// determines what gets indexed for it.
 pub fn index_spec() -> IndexSpec {
-    IndexSpec::new(["cn", "mail", "uid", principal::ATTR_PRINCIPAL_NAME])
+    IndexSpec::new(["cn", "mail", "uid", "member", principal::ATTR_PRINCIPAL_NAME])
 }
 
 /// Shared server state handed to every request.
@@ -136,6 +141,28 @@ pub fn principal_name_to_string(pn: &PrincipalName) -> String {
 /// The well-known ticket-granting-service principal name for `realm`.
 pub fn krbtgt_principal_name(realm: &str) -> PrincipalName {
     string_to_principal_name(&format!("krbtgt/{realm}"))
+}
+
+/// The well-known `AD-WIN2K-PAC` authorization-data type (MS-KILE).
+const AD_WIN2K_PAC: i32 = 128;
+
+/// Wraps a signed PAC blob (`pac::generate`, #18) as ticket
+/// authorization-data: an outer `AD-IF-RELEVANT` (RFC 4120 §5.2.6.1)
+/// element whose own `data` is a DER-encoded `AuthorizationData`
+/// containing exactly one `AD-WIN2K-PAC` element -- this two-level
+/// wrapping (not just a bare `AD-WIN2K-PAC` entry) is what MS-KILE
+/// actually puts on the wire, and what lets a client ignore the PAC
+/// entirely (per AD-IF-RELEVANT's own semantics) if it doesn't
+/// recognize it. `None` only if DER-encoding the inner element fails
+/// (unreachable for well-formed input; kept as `Option` rather than
+/// `expect` since this is on the ticket-issuing hot path).
+pub fn wrap_pac_authorization_data(pac_bytes: Vec<u8>) -> Option<rasn_kerberos::AuthorizationData> {
+    let inner = vec![rasn_kerberos::AuthorizationDataValue { r#type: AD_WIN2K_PAC, data: pac_bytes.into() }];
+    let inner_encoded = rasn::der::encode(&inner).ok()?;
+    Some(vec![rasn_kerberos::AuthorizationDataValue {
+        r#type: rasn_kerberos::AuthorizationDataValue::IF_RELEVANT,
+        data: inner_encoded.into(),
+    }])
 }
 
 #[cfg(test)]
