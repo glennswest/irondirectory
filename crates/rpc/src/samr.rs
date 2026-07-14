@@ -71,6 +71,12 @@ pub async fn dispatch(state: &SamrState, domain_sid: &Sid, opnum: u16, stub: &[u
 fn connect5() -> Vec<u8> {
     let mut w = NdrWriter::new();
     w.u32(1); // OutVersion
+    // SAMPR_REVISION_INFO is an NDR union discriminated by a leading
+    // `tag` ULONG -- only arm 1 (V1) exists, so the tag must be 1, not
+    // OutVersion's own value (a prior version of this function
+    // conflated the two and omitted the tag/Revision fields entirely).
+    w.u32(1); // union tag = V1
+    w.u32(1); // SAMPR_REVISION_INFO_V1.Revision
     w.u32(3); // SAMPR_REVISION_INFO_V1.SupportedFeatures (permissive default)
     w.handle(&SERVER_HANDLE);
     w.u32(0); // STATUS_SUCCESS
@@ -246,8 +252,8 @@ mod tests {
     #[test]
     fn connect5_response_carries_server_handle() {
         let resp = connect5();
-        // OutVersion(4) + SupportedFeatures(4) + handle(20) + status(4)
-        assert_eq!(&resp[8..28], &SERVER_HANDLE);
-        assert_eq!(u32::from_le_bytes(resp[28..32].try_into().unwrap()), 0);
+        // OutVersion(4) + tag(4) + Revision(4) + SupportedFeatures(4) + handle(20) + status(4)
+        assert_eq!(&resp[16..36], &SERVER_HANDLE);
+        assert_eq!(u32::from_le_bytes(resp[36..40].try_into().unwrap()), 0);
     }
 }
