@@ -1651,6 +1651,24 @@ Remaining implementation work, in order:
 
 ### #20 live test environment (as of v0.23.0, 2026-07-15/16)
 
+**CRITICAL testing gotcha (macOS UDP negative cache):** do NOT restart
+the KDC repeatedly while testing from the Mac. Every window where nothing
+is bound to UDP 88 makes dev.g8.lo's kernel send an ICMP port-unreachable,
+and macOS *caches it per-destination* -- afterwards ALL UDP from the Mac
+to 192.168.8.150 (any port) fails instantly with `EHOSTUNREACH` (errno
+65), which silently breaks the Mac's Kerberos UDP path and produces
+bogus "intermittent" join failures that look like server bugs but aren't.
+Confirmed: from the Mac, UDP to .252 (DNS, never restarted) works, but
+UDP to .150 fails 100% after KDC restarts; from dev.g8.lo's own localhost
+the KDC always answers UDP fine. Symptoms it causes on the Mac side:
+`_krb5_extract_ticket failed`, and dsconfigad opening then instantly
+cancelling the LDAP connection. To clear the poisoned route (needs sudo,
+NOT covered by the dsconfigad NOPASSWD rule):
+`sudo route -n delete 192.168.8.150 && sudo arp -d 192.168.8.150`.
+Then keep the KDC up for the whole test session. (The netmask is fine --
+both ends are a correct /24 on 192.168.8.0/24; this is purely a cached-
+ICMP artifact, not a routing/mask problem.)
+
 State that exists to resume macOS `dsconfigad` live testing, none of
 it committed to git (runtime/environment state, not code):
 
