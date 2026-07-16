@@ -2,6 +2,7 @@
 //! bind/search/add/delete/modify/compare (the operations implemented so
 //! far -- see crate docs).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use iron_crypto::kerberos::Enctype;
@@ -89,7 +90,41 @@ enum SaslState {
     /// separately requires confidentiality specifically to write the new
     /// computer account's Kerberos key, failing integrity-only binds the
     /// same way once it gets past the bind itself.
-    SecurityLayerActive { session_key: Vec<u8>, enctype: Enctype, sealed: bool },
+    ///
+    /// `send_seq` is the acceptor's next outgoing Wrap-token sequence
+    /// number (RFC 4121 §4.2.6.2 SND_SEQ). The security-layer challenge
+    /// is the acceptor's *first* wrap token (seq 0, hardcoded in
+    /// `security_layer_challenge`), so this starts at 1 and increments on
+    /// every wrapped response -- a strict initiator (Heimdal / macOS
+    /// `dsconfigad`) drops a token whose sequence number doesn't advance
+    /// as a replay. `Cell` gives interior mutability so `send_response`
+    /// can bump it while holding only `&SaslState`.
+    SecurityLayerActive { session_key: Vec<u8>, enctype: Enctype, sealed: bool, send_seq: AtomicU64 },
+}
+
+// Manual `Clone` (rather than derived) because `AtomicU64` isn't `Clone`:
+// snapshots the current sequence value into a fresh atomic. Used only to
+// capture the pre-bind send state (see `handle_connection`'s bind arm);
+// the clone and the original never send concurrently, so the snapshot is
+// race-free in practice.
+impl Clone for SaslState {
+    fn clone(&self) -> Self {
+        match self {
+            SaslState::None => SaslState::None,
+            SaslState::AwaitingApRepAck { session_key, enctype, client_principal } => {
+                SaslState::AwaitingApRepAck { session_key: session_key.clone(), enctype: *enctype, client_principal: client_principal.clone() }
+            }
+            SaslState::AwaitingSecurityLayerAck { session_key, enctype, client_principal } => {
+                SaslState::AwaitingSecurityLayerAck { session_key: session_key.clone(), enctype: *enctype, client_principal: client_principal.clone() }
+            }
+            SaslState::SecurityLayerActive { session_key, enctype, sealed, send_seq } => SaslState::SecurityLayerActive {
+                session_key: session_key.clone(),
+                enctype: *enctype,
+                sealed: *sealed,
+                send_seq: AtomicU64::new(send_seq.load(Ordering::Relaxed)),
+            },
+        }
+    }
 }
 
 /// Reads the next `LdapMessage`, transparently unwrapping it first if
@@ -131,11 +166,15 @@ async fn send_response<S: AsyncRead + AsyncWrite + Unpin>(
     msg: &LdapMessage,
 ) -> Result<(), ()> {
     match sasl_state {
-        SaslState::SecurityLayerActive { session_key, enctype, sealed } => {
+        SaslState::SecurityLayerActive { session_key, enctype, sealed, send_seq } => {
             let fips = fips.ok_or(())?;
             let plain = rasn::ber::encode(msg).map_err(|_| ())?;
+            // Consume this token's SND_SEQ and advance the counter so the
+            // next wrapped response uses the following value (RFC 4121
+            // §4.2.6.2 -- see `SecurityLayerActive`'s doc comment).
+            let seq = send_seq.fetch_add(1, Ordering::Relaxed);
             // Key usage 22: KG-USAGE-ACCEPTOR-SEAL -- we're the GSS acceptor.
-            let wrapped = crate::gssapi::wrap::wrap(fips, *enctype, session_key, 22, *sealed, &plain).map_err(|_| ())?;
+            let wrapped = crate::gssapi::wrap::wrap(fips, *enctype, session_key, 22, *sealed, seq, &plain).map_err(|_| ())?;
             write_sized_buffer(conn, &wrapped).await.map_err(|_| ())
         }
         _ => write_message(conn, msg).await.map_err(|_| ()),
@@ -177,12 +216,25 @@ where
         match msg.protocol_op {
             ProtocolOp::UnbindRequest(_) => return,
             ProtocolOp::BindRequest(req) => {
+                // RFC 4752 §3.1: the negotiated security layer takes effect
+                // on the *first octet following* the last authentication
+                // response -- i.e. the bindResponse that completes the SASL
+                // handshake is itself sent in the clear, and only messages
+                // after it are Wrapped. `handle_bind` flips `sasl_state` to
+                // `SecurityLayerActive` on that terminal success, so we must
+                // send the response using the state as it was *before* this
+                // request (found live via packet capture, #20: sealing the
+                // success response made macOS's client report GSS_S_BAD_QOP).
+                // For a re-bind arriving *through* an already-active layer,
+                // this same pre-request state correctly keeps the response
+                // Wrapped.
+                let send_state = sasl_state.clone();
                 let (resp, identity) = handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req, &mut sasl_state).await;
                 if resp.result_code != ResultCode::SaslBindInProgress {
                     bound_identity = identity;
                 }
                 let resp = LdapMessage::new(message_id, ProtocolOp::BindResponse(resp));
-                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &send_state, &resp).await.is_err() {
                     return;
                 }
             }
@@ -564,7 +616,9 @@ async fn handle_sasl_bind(
                 // `SaslState::SecurityLayerActive`'s doc comment).
                 Ok(plain) if plain.first() == Some(&0x02) => {
                     tracing::info!(%client_principal, "GSSAPI bind succeeded (integrity security layer active)");
-                    *sasl_state = SaslState::SecurityLayerActive { session_key, enctype, sealed: false };
+                    // send_seq starts at 1: the challenge already consumed
+                    // the acceptor's seq 0 (see `security_layer_challenge`).
+                    *sasl_state = SaslState::SecurityLayerActive { session_key, enctype, sealed: false, send_seq: AtomicU64::new(1) };
                     return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")));
                 }
                 // Bit 2: confidentiality -- found live (#20) that macOS's
@@ -575,7 +629,9 @@ async fn handle_sasl_bind(
                 // that write.
                 Ok(plain) if plain.first() == Some(&0x04) => {
                     tracing::info!(%client_principal, "GSSAPI bind succeeded (confidentiality security layer active)");
-                    *sasl_state = SaslState::SecurityLayerActive { session_key, enctype, sealed: true };
+                    // send_seq starts at 1: the challenge already consumed
+                    // the acceptor's seq 0 (see `security_layer_challenge`).
+                    *sasl_state = SaslState::SecurityLayerActive { session_key, enctype, sealed: true, send_seq: AtomicU64::new(1) };
                     return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")));
                 }
                 Ok(_) => BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "client selected an unsupported security layer".into(), None, None),
@@ -608,13 +664,17 @@ async fn handle_sasl_bind(
 /// the same way the moment it tried to write the new computer account's
 /// Kerberos key over the connection -- that write specifically needs
 /// confidentiality, not just integrity, so bit 2 has to be offered too.
+///
+/// This is always the acceptor's *first* Wrap token on the connection, so
+/// it takes SND_SEQ 0 (integrity-only, never sealed); `SecurityLayerActive`
+/// then continues the acceptor's send sequence from 1.
 fn security_layer_challenge(fips: &iron_crypto::FipsContext, enctype: Enctype, session_key: &[u8]) -> Result<Vec<u8>, crate::gssapi::wrap::Error> {
     const OFFERED_LAYERS: u8 = 0x01 | 0x02 | 0x04;
     const MAX_BUFFER: u32 = 0x00FF_FFFF; // 3-octet field -- largest representable value
     let mut challenge = [0u8; 4];
     challenge[0] = OFFERED_LAYERS;
     challenge[1..4].copy_from_slice(&MAX_BUFFER.to_be_bytes()[1..4]);
-    crate::gssapi::wrap::wrap(fips, enctype, session_key, 22, false, &challenge)
+    crate::gssapi::wrap::wrap(fips, enctype, session_key, 22, false, 0, &challenge)
 }
 
 /// Verifies a non-empty simple bind against the target entry's

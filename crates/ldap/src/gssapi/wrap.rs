@@ -13,12 +13,15 @@
 //! EC/padding handling is needed for these enctypes (CTS mode handles
 //! arbitrary-length input), so EC is always 0.
 //!
-//! No replay protection: the sequence-number field is always zero.
-//! Real GSSAPI tracks a per-context sequence number across many Wrap/MIC
-//! calls; this implementation only ever sends/verifies one Wrap message
-//! per LDAP request/response on a connection with a security layer
-//! active, not a general multi-message replay-detecting channel -- same
-//! posture as `iron-kdc`'s documented no-replay-cache simplification.
+//! The sender's SND_SEQ (sequence number, RFC 4121 §4.2.6.2) is a
+//! caller-supplied, per-context-incrementing counter -- a strict
+//! initiator (Heimdal / macOS's `dsconfigad`) rejects a token whose
+//! sequence number doesn't advance as a replay and silently drops it, so
+//! it cannot be left at a constant (see the `seq` parameter on `wrap`).
+//! On the receive side this implementation is deliberately lenient: it
+//! does not enforce the initiator's incoming sequence numbers (no replay
+//! cache), matching `iron-kdc`'s documented no-replay-cache posture --
+//! the transport is already TLS-or-GSS-confidentiality protected.
 
 use iron_crypto::kerberos::{self, Enctype};
 use iron_crypto::FipsContext;
@@ -46,13 +49,21 @@ const SEALED: u8 = 0x02;
 /// initiates a GSS context, only accepts inbound LDAP binds, so
 /// `SentByAcceptor` is always set here. `sealed` selects confidentiality
 /// (RFC 4121 §4.2.4, `conf_flag=TRUE`) vs. integrity-only.
-pub fn wrap(ctx: &FipsContext, enctype: Enctype, session_key: &[u8], key_usage: u32, sealed: bool, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+///
+/// `seq` is the RFC 4121 §4.2.6.2 SND_SEQ (64-bit sequence number, offset
+/// 8): it MUST increase by one across successive tokens the acceptor
+/// sends on one context, or a strict initiator (Heimdal, hence macOS's
+/// `dsconfigad`) treats a repeated value as a replay and silently drops
+/// the token -- found live (#20): every token after the first was sent
+/// with SND_SEQ=0, so the client discarded our sealed search responses
+/// and timed out (LDAP `timeLimitExceeded`) instead of ever seeing them.
+pub fn wrap(ctx: &FipsContext, enctype: Enctype, session_key: &[u8], key_usage: u32, sealed: bool, seq: u64, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
     let mut header = [0u8; 16];
     header[0..2].copy_from_slice(&TOK_ID_WRAP);
     header[2] = SENT_BY_ACCEPTOR | if sealed { SEALED } else { 0 };
     header[3] = 0xFF;
     // header[6..8] RRC = 0 (no rotation needed for a freshly-built token)
-    // header[8..16] SND_SEQ = 0 (see module docs)
+    header[8..16].copy_from_slice(&seq.to_be_bytes()); // SND_SEQ
 
     if sealed {
         // header[4..6] EC = 0 -- no separate padding needed; the
@@ -179,7 +190,7 @@ mod tests {
             for sealed in [false, true] {
                 let key = krb::random_bytes(&ctx, enctype.key_len()).unwrap();
                 let plaintext = [0x01u8, 0x00, 0x00, 0x00]; // "no security layer", 0 max buffer
-                let wrapped = wrap(&ctx, enctype, &key, 22, sealed, &plaintext).unwrap();
+                let wrapped = wrap(&ctx, enctype, &key, 22, sealed, 0, &plaintext).unwrap();
                 let unwrapped = unwrap(&ctx, enctype, &key, 22, &wrapped).unwrap();
                 assert_eq!(unwrapped, plaintext, "roundtrip mismatch for {enctype:?} sealed={sealed}");
             }
@@ -192,7 +203,7 @@ mod tests {
         let enctype = Enctype::Aes256CtsHmacSha384_192;
         for sealed in [false, true] {
             let key = krb::random_bytes(&ctx, enctype.key_len()).unwrap();
-            let mut wrapped = wrap(&ctx, enctype, &key, 22, sealed, &[1, 0, 0, 0]).unwrap();
+            let mut wrapped = wrap(&ctx, enctype, &key, 22, sealed, 0, &[1, 0, 0, 0]).unwrap();
             *wrapped.last_mut().unwrap() ^= 0xFF;
             assert!(unwrap(&ctx, enctype, &key, 22, &wrapped).is_err(), "sealed={sealed}");
         }
@@ -205,7 +216,7 @@ mod tests {
         for sealed in [false, true] {
             let key = krb::random_bytes(&ctx, enctype.key_len()).unwrap();
             let plaintext = [1u8, 0, 0, 0];
-            let mut wrapped = wrap(&ctx, enctype, &key, 22, sealed, &plaintext).unwrap();
+            let mut wrapped = wrap(&ctx, enctype, &key, 22, sealed, 0, &plaintext).unwrap();
 
             // Manually right-rotate the post-header bytes by 3 and set RRC=3,
             // simulating a sender that rotates in place (RFC 4121 4.2.5).
