@@ -20,10 +20,19 @@ struct ObjectClass {
 
 const CLASSES: &[ObjectClass] = &[
     ObjectClass { name: "top", must: &[] },
-    // RFC 4519 / core LDAP
-    ObjectClass { name: "person", must: &["cn", "sn"] },
-    ObjectClass { name: "organizationalPerson", must: &["cn", "sn"] },
-    ObjectClass { name: "inetOrgPerson", must: &["cn", "sn"] },
+    // Active Directory schema (our compatibility bar), NOT RFC 2256/4519.
+    // Real AD deliberately makes `sn` OPTIONAL on `person` (its 2.5.6.6
+    // `systemMustContain` is just `cn`; `sn` is `mayContain`), so that
+    // `computer`/`user` objects -- which inherit through
+    // person->organizationalPerson->user->computer -- can be created
+    // without a surname. Found live (#20): macOS `dsconfigad`'s
+    // computer-account AddRequest declares objectClass `person` with no
+    // `sn`, and enforcing the RFC's `sn`-MUST rejected the join with
+    // `ObjectClassViolation` ("objectClass person requires attribute
+    // sn"). Only `cn` is genuinely required across this chain in AD.
+    ObjectClass { name: "person", must: &["cn"] },
+    ObjectClass { name: "organizationalPerson", must: &["cn"] },
+    ObjectClass { name: "inetOrgPerson", must: &["cn"] },
     ObjectClass { name: "organizationalUnit", must: &["ou"] },
     ObjectClass { name: "groupOfNames", must: &["cn", "member"] },
     // AD-shaped (Microsoft's real `user`/`computer`/`group` classes
@@ -86,12 +95,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_person_missing_sn() {
+    fn accepts_person_without_sn_like_ad() {
+        // AD makes `sn` optional on `person` (only `cn` is required), so a
+        // computer/user object with no surname must validate (#20).
         let mut e = Entry::new();
         e.set("objectclass", ["person"]);
-        e.set("cn", ["alice"]);
+        e.set("cn", ["testmac1"]);
+        assert!(validate(&e).is_ok());
+    }
+
+    #[test]
+    fn rejects_person_missing_cn() {
+        let mut e = Entry::new();
+        e.set("objectclass", ["person"]);
+        e.set("sn", ["Smith"]);
         let err = validate(&e).unwrap_err();
-        assert!(err.contains("sn"));
+        assert!(err.contains("cn"));
     }
 
     #[test]
