@@ -1580,8 +1580,127 @@ neither bug is fixed in this pass -- filed as #24 for the underlying
 - [x] Kerberos PAC generation (group SIDs) (#18, CLOSED — see Live infrastructure below)
 - [x] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake) (#19, CLOSED — see Live infrastructure below); SYSVOL via rocketsmbd is a separate, not-yet-filed cross-project follow-up
 - [x] Native Rust domain-join + login simulation harness for scale testing (#23, CLOSED — see Live infrastructure below); found real RPC/store concurrency bugs at scale, filed as #24
-- [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind
+- [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind -- see
+      "#20 next step" and "#20 live test environment" below for exactly
+      where this is paused and how to resume it.
 - [ ] `iron-rpc`/`iron-store` concurrency bugs found via #23 scale testing (#24): intermittent RPC `FAULT_UNK_IF` faults and a store read-after-write race under concurrent load (~40% failure rate at concurrency 25, 0% at concurrency <= 5)
+
+### #20 next step: Netlogon Secure Channel RPC auth (not NTLMSSP)
+
+Researched (not yet implemented) immediately after the v0.23.0 commit.
+The macOS side is live-tested and mostly protocol-correct now (see
+Version section above); the confirmed remaining blocker is entirely on
+the **Windows** side: `crates/rpc` only supports unauthenticated RPC
+binds (`pdu.rs`'s module doc says so explicitly), and `SamrSetInformationUser2`
+(the SAMR call that would set a computer account's password) needs an
+authenticated bind's session key to decrypt wire-encrypted password
+material -- it isn't even stubbed in (no `OPNUM_SET_INFORMATION_USER2`
+constant, no dispatch arm; compare `OPNUM_QUERY_INFORMATION_USER2 = 47`
+in `crates/rpc/src/samr.rs`).
+
+**Decision: implement Netlogon Secure Channel (Schannel, `auth_type`
+68) RPC auth, not NTLMSSP (`auth_type` 10), and target
+`NetrServerPasswordSet2` over that channel instead of
+`SamrSetInformationUser2`.** This is what real Windows `Add-Computer`/
+`netdom` actually uses to set the initial machine password. Reasons:
+- It reuses primitives `crates/rpc/src/netlogon.rs` already implements
+  and has tests for: `compute_session_key_aes` (HMAC-SHA256) and
+  `compute_credential` (AES-128-CFB8) -- both ordinary FIPS-approved
+  `iron_crypto` calls already validated in this crate.
+- Real NTLMSSP (NTLMv2 response) needs HMAC-MD5, and real SAMR
+  password-buffer encryption for `SamrSetInformationUser2` needs RC4 --
+  both forbidden outright by this project's D4 FIPS policy
+  (`iron_crypto` only exposes AES + SHA2-family digest/HMAC; `md4.rs`
+  is a single narrowly-scoped exception for NTOWF only). Schannel's
+  `NetrServerPasswordSet2` path needs neither: `NL_AUTH_SIGNATURE`
+  (MS-NRPC 2.2.1.3.1, the PDU-level signature/seal token) and the
+  `NL_TRUST_PASSWORD` buffer are both AES-128-CFB8-keyed when
+  `NETLOGON_NEG_SUPPORTS_AES` is negotiated, which this implementation
+  already does.
+
+Concrete gap found: `netlogon::Session` (in `netlogon.rs`) computes
+`session_key` inside `server_authenticate3` but never stores it on the
+`Session` struct (only `challenges` is kept) -- so it can't be reused
+by a later PDU on the same connection. The client side already
+anticipated this (`crates/simulate/src/netlogon_client.rs` returns its
+derived session key explicitly "for any further (out of scope here)
+authenticated NETLOGON calls").
+
+Remaining implementation work, in order:
+1. Add `session_key: Option<[u8; 16]>` to `netlogon::Session`; set it
+   at the end of `server_authenticate3`; thread it through
+   `server.rs`'s connection loop alongside `netlogon_session` so later
+   PDUs on the same connection can reach it.
+2. Generalize `pdu.rs`'s framing to carry an optional `sec_trailer`
+   (MS-RPCE 2.2.2.11: 8 bytes -- `auth_type`/`auth_level`/
+   `auth_pad_length`/`auth_reserved`(0)/`auth_context_id` -- immediately
+   after 4-byte-padded stub data, immediately before `auth_value`).
+   `parse_header` currently never reads the header's `auth_len` field
+   (bytes 10-11) at all; `write_common_header` hardcodes it to 0.
+3. Implement `NL_AUTH_SIGNATURE` build/verify (signing at auth_level 5
+   PACKET_INTEGRITY, sealing at auth_level 6 PACKET_PRIVACY) using the
+   session key and the same `hmac_sha256`/`aes128_cfb8_encrypt` calls
+   `netlogon.rs` already uses.
+4. Implement `NetrServerPasswordSet2` (new opnum in `netlogon.rs`):
+   decrypt/verify the `NL_TRUST_PASSWORD` buffer under the session key,
+   then call `principal::set_password` the same way `iron-kdc-ctl
+   set-password` does today.
+5. Leave `SamrSetInformationUser2`/NTLMSSP entirely alone -- only worth
+   picking up as a separate future issue if human-admin (non-machine-
+   account) authenticated SAMR operations are later required.
+
+### #20 live test environment (as of v0.23.0, 2026-07-15/16)
+
+State that exists to resume macOS `dsconfigad` live testing, none of
+it committed to git (runtime/environment state, not code):
+
+- **Test forest**: `ironwintest`, realm `IRON.G8.LO`, base DN
+  `dc=iron,dc=g8,dc=lo`, domain SID
+  `S-1-5-21-3499970507-624749083-2961806984`, config partition
+  `ironwintest-config` at `cn=configuration,dc=iron,dc=g8,dc=lo`.
+  Provisioned principals: `Administrator@IRON.G8.LO` (password
+  `TestPass123!`), `krbtgt/IRON.G8.LO@IRON.G8.LO`,
+  `ldap/192.168.8.150@IRON.G8.LO` (the literal-IP SPN macOS requests).
+- **dev.g8.lo** (192.168.8.150) runs `iron-kdcd` (port 88) and
+  `iron-ldapd` (port 389) from `/root/irondirectory` (a separate
+  checkout kept in sync via `rsync`/`scp` from this Mac, NOT a git
+  clone/pull -- resync with `rsync -az --exclude target crates/
+  root@dev.g8.lo:/root/irondirectory/crates/` before rebuilding there),
+  built/run with `OPENSSL_CONF=$(pwd)/crates/crypto/testdata/fips-dev.cnf`
+  (required for `FipsContext::new()` to succeed -- this Mac has no FIPS
+  provider at all, see the "why do we not have a FIPS provider"
+  exchange this session). Logs: `/tmp/ironwintest-kdcd.log`,
+  `/tmp/ironwintest-ldapd.log`. Restart after any rebuild -- the running
+  process keeps old code in memory even after the on-disk binary is
+  rebuilt.
+- **This Mac** (`glenns-mac-mini.g8.lo`, 192.168.8.100) is the real
+  Kerberos/LDAP *client* -- the Bash tool's own execution environment
+  IS this machine, no SSH needed to drive `dsconfigad` from here.
+  `/etc/sudoers.d/dsconfigad-nopasswd` is a **real, standing system
+  change**: passwordless `sudo` for `gwest` on `/usr/sbin/dsconfigad`
+  only. Test scripts (not in the repo): `~/dsconfigad-test2.sh` (the
+  main iterate-and-capture-logs script: remove existing binding, start
+  `log stream` capture to `~/dsconfigad-oddlog.txt`, `dsconfigad -add
+  iron.g8.lo ... -computer testmac1`, stop capture) and
+  `~/dsconfigad-control-test.sh` (the successful control test against
+  the real `dc1`/`ad.g8.lo` AD DC, VM 211 on `pve.g8.lo`, used earlier
+  to learn the target rootDSE/attribute shape).
+- **MicroDNS** (`http://192.168.8.252:8080/api/v1`, zone id
+  `2b236a01-62d8-487d-b8bd-c3d15a6a6e54`) has temporary `ad.g8.lo`
+  records (`_ldap._tcp`/`_kerberos._tcp`/`_kerberos._udp` SRV + a `dc1`
+  A record) added for the control test against the real AD DC --
+  **not yet cleaned up**; harmless to leave but should be removed once
+  #20 is fully closed.
+- Last live result (before pausing to research #20's Windows-side
+  blocker): macOS's AS-REQ/AS-REP and the GSSAPI-secured LDAP bind
+  (now with confidentiality) succeed; remaining flakiness is believed
+  to be `opendirectoryd` client-side timing/probing nondeterminism
+  around which optional SPNs (`host/<mac-fqdn>`, cross-realm
+  `krbtgt/G8.LO` referral probe) it tries before giving up, not a
+  server-side defect -- see the `fresh_ctx_repro.rs` finding in the
+  v0.23.0 changelog entry. Resume by re-running `~/dsconfigad-test2.sh`
+  and reading `~/dsconfigad-oddlog.txt` + `/tmp/ironwintest-*.log`
+  side by side.
 
 ### Deferred — exhaustive federation testing (D10), not capability
 - [ ] Many-partition / many-cluster scale matrices
