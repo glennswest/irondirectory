@@ -10,6 +10,7 @@ use iron_store::model::Entry;
 use iron_store::store::Store;
 use openssl::ssl::SslAcceptor;
 use rasn::types::{OctetString, SetOf};
+use rasn::Decoder as _;
 use rasn_kerberos::PrincipalName;
 use rasn_ldap::{
     AddRequest, AddResponse, Attribute, AuthenticationChoice, BindRequest, BindResponse,
@@ -21,7 +22,7 @@ use rasn_ldap::{
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::conn::Conn;
-use crate::framing::{read_message, write_message};
+use crate::framing::{read_message, read_sized_buffer, write_message, write_sized_buffer};
 use crate::{filter, rootdse, AppState};
 
 /// LDAP attribute holding the PBKDF2-hashed password (D4). Lowercase to
@@ -35,6 +36,31 @@ const STARTTLS_OID: &[u8] = b"1.3.6.1.4.1.1466.20037";
 /// RFC 4532 §1.1 -- the well-known OID for the "Who am I?" extended
 /// operation.
 const WHOAMI_OID: &[u8] = b"1.3.6.1.4.1.4203.1.11.3";
+
+/// RFC 3062 -- the well-known OID for the Password Modify extended
+/// operation. Found live testing a real macOS `dsconfigad` join (#20):
+/// with no SAMR/SMB reachable, the computer account's initial Kerberos
+/// key gets set entirely over LDAP via this extended op, not
+/// `SamrSetInformationUser2`/NETLOGON at all.
+const PASSWORD_MODIFY_OID: &[u8] = b"1.3.6.1.4.1.4203.1.11.1";
+
+/// RFC 3062 §4's request value:
+/// ```text
+/// PasswdModifyRequestValue ::= SEQUENCE {
+///    userIdentity    [0]  OCTET STRING OPTIONAL
+///    oldPasswd       [1]  OCTET STRING OPTIONAL
+///    newPasswd       [2]  OCTET STRING OPTIONAL }
+/// ```
+#[derive(rasn::AsnType, rasn::Decode, Default)]
+struct PasswdModifyRequestValue {
+    #[rasn(tag(context, 0))]
+    user_identity: Option<OctetString>,
+    #[allow(dead_code)] // part of RFC 3062's shape; no client here needs old-password verification yet
+    #[rasn(tag(context, 1))]
+    old_passwd: Option<OctetString>,
+    #[rasn(tag(context, 2))]
+    new_passwd: Option<OctetString>,
+}
 
 /// Per-connection SASL/GSSAPI negotiation state (RFC 4752), threaded
 /// through successive `BindRequest`s on the *same* connection -- unlike
@@ -51,6 +77,69 @@ enum SaslState {
     /// Sent the security-layer negotiation challenge; waiting for the
     /// client's chosen layer.
     AwaitingSecurityLayerAck { session_key: Vec<u8>, enctype: Enctype, client_principal: String },
+    /// Bind completed with the client selecting a security layer (RFC
+    /// 4752 §3.4, integrity or confidentiality) -- every subsequent LDAP
+    /// message on this connection is a GSS Wrap token inside a 4-octet
+    /// length prefix, not a bare BER `LdapMessage`. `sealed` records
+    /// which: `false` for integrity-only, `true` for confidentiality.
+    /// Found live testing a real macOS `dsconfigad` join (#20): it
+    /// rejects a bind that only ever offers "no security layer" with
+    /// `GSS_S_BAD_QOP`, unlike MIT krb5's `ldapsearch` (used for every
+    /// earlier SASL/GSSAPI verification), which accepts it -- and it
+    /// separately requires confidentiality specifically to write the new
+    /// computer account's Kerberos key, failing integrity-only binds the
+    /// same way once it gets past the bind itself.
+    SecurityLayerActive { session_key: Vec<u8>, enctype: Enctype, sealed: bool },
+}
+
+/// Reads the next `LdapMessage`, transparently unwrapping it first if
+/// `sasl_state` says the integrity security layer is active on this
+/// connection (see `SaslState::SecurityLayerActive`'s doc comment).
+/// `Err(())` on any framing/GSS-unwrap failure -- the caller just closes
+/// the connection either way, so the distinction isn't worth carrying.
+async fn read_next_message<S: AsyncRead + AsyncWrite + Unpin>(
+    conn: &mut Conn<S>,
+    buf: &mut Vec<u8>,
+    fips: Option<&iron_crypto::FipsContext>,
+    sasl_state: &SaslState,
+) -> Result<Option<LdapMessage>, ()> {
+    match sasl_state {
+        SaslState::SecurityLayerActive { session_key, enctype, .. } => {
+            let fips = fips.ok_or(())?;
+            let wrapped = match read_sized_buffer(conn, buf).await {
+                Ok(Some(w)) => w,
+                Ok(None) => return Ok(None),
+                Err(_) => return Err(()),
+            };
+            // Key usage 24: KG-USAGE-INITIATOR-SEAL -- unwrapping a
+            // token the client (the GSS initiator) sent. `unwrap`
+            // dispatches on the token's own Sealed bit, so it doesn't
+            // matter here which layer was negotiated.
+            let plain = crate::gssapi::wrap::unwrap(fips, *enctype, session_key, 24, &wrapped).map_err(|_| ())?;
+            rasn::ber::decode(&plain).map(Some).map_err(|_| ())
+        }
+        _ => read_message(conn, buf).await.map_err(|_| ()),
+    }
+}
+
+/// Writes an `LdapMessage`, transparently GSS-wrapping it first under
+/// the same condition `read_next_message` unwraps under.
+async fn send_response<S: AsyncRead + AsyncWrite + Unpin>(
+    conn: &mut Conn<S>,
+    fips: Option<&iron_crypto::FipsContext>,
+    sasl_state: &SaslState,
+    msg: &LdapMessage,
+) -> Result<(), ()> {
+    match sasl_state {
+        SaslState::SecurityLayerActive { session_key, enctype, sealed } => {
+            let fips = fips.ok_or(())?;
+            let plain = rasn::ber::encode(msg).map_err(|_| ())?;
+            // Key usage 22: KG-USAGE-ACCEPTOR-SEAL -- we're the GSS acceptor.
+            let wrapped = crate::gssapi::wrap::wrap(fips, *enctype, session_key, 22, *sealed, &plain).map_err(|_| ())?;
+            write_sized_buffer(conn, &wrapped).await.map_err(|_| ())
+        }
+        _ => write_message(conn, msg).await.map_err(|_| ()),
+    }
 }
 
 /// Handles one LDAP client connection until it unbinds, disconnects, or a
@@ -75,11 +164,11 @@ where
     // `None`) more than once per connection.
     let mut bound_identity: Option<String> = None;
     loop {
-        let msg = match read_message(&mut conn, &mut buf).await {
+        let msg = match read_next_message(&mut conn, &mut buf, app.fips.as_ref(), &sasl_state).await {
             Ok(Some(m)) => m,
             Ok(None) => return,
-            Err(e) => {
-                tracing::debug!("framing error, closing connection: {e}");
+            Err(()) => {
+                tracing::debug!("framing or GSS-unwrap error, closing connection");
                 return;
             }
         };
@@ -93,17 +182,17 @@ where
                     bound_identity = identity;
                 }
                 let resp = LdapMessage::new(message_id, ProtocolOp::BindResponse(resp));
-                if write_message(&mut conn, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::SearchRequest(req) => {
                 let mut store = app.store.lock().await;
-                let ops = handle_search(&mut store, &req, &app.referral_config()).await;
+                let ops = handle_search(&mut store, &req, &app.referral_config(), app.fips.is_some()).await;
                 drop(store);
                 for op in ops {
                     let resp = LdapMessage::new(message_id, op);
-                    if write_message(&mut conn, &resp).await.is_err() {
+                    if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                         return;
                     }
                 }
@@ -111,35 +200,35 @@ where
             ProtocolOp::AddRequest(req) => {
                 let resp = handle_add(&mut *app.store.lock().await, app.fips.as_ref(), &req, &app.index_spec, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::AddResponse(resp));
-                if write_message(&mut conn, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::DelRequest(req) => {
                 let resp = handle_delete(&mut *app.store.lock().await, &req, &app.index_spec, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::DelResponse(resp));
-                if write_message(&mut conn, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::ModifyRequest(req) => {
                 let resp = handle_modify(&mut *app.store.lock().await, app.fips.as_ref(), &req, &app.index_spec, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::ModifyResponse(resp));
-                if write_message(&mut conn, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::CompareRequest(req) => {
                 let resp = handle_compare(&mut *app.store.lock().await, &req, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::CompareResponse(resp));
-                if write_message(&mut conn, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
             }
             ProtocolOp::ModDnRequest(req) => {
                 let resp = handle_moddn(&mut *app.store.lock().await, &req, &app.index_spec, &app.referral_config()).await;
                 let resp = LdapMessage::new(message_id, ProtocolOp::ModDnResponse(resp));
-                if write_message(&mut conn, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
             }
@@ -160,7 +249,7 @@ where
                         response_value: None,
                     }),
                 );
-                if write_message(&mut conn, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
                 if code == ResultCode::Success {
@@ -195,7 +284,39 @@ where
                         response_value: Some(bound_identity.clone().unwrap_or_default().into_bytes().into()),
                     }),
                 );
-                if write_message(&mut conn, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
+                    return;
+                }
+            }
+            // RFC 3062 Password Modify -- see PASSWORD_MODIFY_OID's doc
+            // comment for why this exists (#20: a real macOS domain
+            // join, with no SAMR/SMB reachable, sets the new computer
+            // account's Kerberos key entirely this way).
+            ProtocolOp::ExtendedReq(req) if req.request_name.as_ref() == PASSWORD_MODIFY_OID => {
+                let resp_value = handle_password_modify(
+                    &mut *app.store.lock().await,
+                    app.fips.as_ref(),
+                    req.request_value.as_deref(),
+                    bound_identity.as_deref(),
+                    &app.index_spec,
+                )
+                .await;
+                let (code, diagnostic) = match &resp_value {
+                    Ok(_) => (ResultCode::Success, String::new()),
+                    Err(e) => (e.code, e.message.clone()),
+                };
+                let resp = LdapMessage::new(
+                    message_id,
+                    ProtocolOp::ExtendedResp(ExtendedResponse {
+                        result_code: code,
+                        matched_dn: String::new().into(),
+                        diagnostic_message: diagnostic.into(),
+                        referral: None,
+                        response_name: Some(PASSWORD_MODIFY_OID.to_vec().into()),
+                        response_value: resp_value.ok().flatten(),
+                    }),
+                );
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
             }
@@ -214,7 +335,7 @@ where
                         response_value: None,
                     }),
                 );
-                if write_message(&mut conn, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
             }
@@ -431,19 +552,44 @@ async fn handle_sasl_bind(
             // client is the GSS initiator, so its Wrap tokens use the
             // initiator-seal usage, not our own acceptor-seal (22).
             match crate::gssapi::wrap::unwrap(fips, enctype, &session_key, 24, response) {
+                // Bit 0: no security layer -- bind succeeds, connection
+                // stays plain BER framing (sasl_state already reset to
+                // `None` by the `mem::take` at the top of this function).
                 Ok(plain) if plain.first() == Some(&0x01) => {
-                    tracing::info!(%client_principal, "GSSAPI bind succeeded");
-                    // "u:<userid>" per RFC 4513 §3 -- there's no single
-                    // resolved DN available here (the earlier principal
-                    // lookup was only for the key material, and it may
-                    // have matched a non-unique or no entry at all), but
-                    // the authenticated Kerberos principal name is
-                    // exactly this identity's real-world meaning.
+                    tracing::info!(%client_principal, "GSSAPI bind succeeded (no security layer)");
+                    return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")));
+                }
+                // Bit 1: integrity -- bind succeeds, but every later
+                // message on this connection must be a Wrap token (see
+                // `SaslState::SecurityLayerActive`'s doc comment).
+                Ok(plain) if plain.first() == Some(&0x02) => {
+                    tracing::info!(%client_principal, "GSSAPI bind succeeded (integrity security layer active)");
+                    *sasl_state = SaslState::SecurityLayerActive { session_key, enctype, sealed: false };
+                    return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")));
+                }
+                // Bit 2: confidentiality -- found live (#20) that macOS's
+                // `dsconfigad` needs this specifically to write the new
+                // computer account's Kerberos key over LDAP; it accepts
+                // the bind with only integrity offered, then fails
+                // locally (`GSS_S_BAD_QOP`) the moment it tries to seal
+                // that write.
+                Ok(plain) if plain.first() == Some(&0x04) => {
+                    tracing::info!(%client_principal, "GSSAPI bind succeeded (confidentiality security layer active)");
+                    *sasl_state = SaslState::SecurityLayerActive { session_key, enctype, sealed: true };
                     return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")));
                 }
                 Ok(_) => BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "client selected an unsupported security layer".into(), None, None),
                 Err(e) => BindResponse::new(ResultCode::InvalidCredentials, String::new().into(), e.to_string().into(), None, None),
             }
+        }
+        // A `BindRequest` while a security layer is already active (a
+        // re-bind, RFC 4513 §3) -- not supported yet, and the request
+        // itself would need to have arrived *through* the active layer
+        // for this state to even be reachable correctly. Fail rather
+        // than silently drop back to an unprotected connection.
+        active @ SaslState::SecurityLayerActive { .. } => {
+            *sasl_state = active;
+            BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "re-bind on a connection with an active security layer is not supported".into(), None, None)
         }
     };
     (resp, None)
@@ -452,12 +598,23 @@ async fn handle_sasl_bind(
 /// Builds the RFC 4752 §3.2 security-layer negotiation challenge: 4
 /// octets (bitmask of offered layers + max buffer size), Wrapped without
 /// confidentiality using KG-USAGE-ACCEPTOR-SEAL (22) -- we're the GSS
-/// acceptor. Only bit 0 ("no security layer") is ever offered; the
-/// 3-octet buffer size is zero accordingly (RFC 4752: "which MUST be 0
-/// if the server does not support any security layer").
+/// acceptor. Offers all three layers: bit 0 ("no security layer"), bit 1
+/// ("integrity"), bit 2 ("confidentiality"/privacy). Originally only bit
+/// 0 was offered, on the theory that StartTLS/LDAPS already covers
+/// transport security -- found live (#20) that macOS's `dsconfigad`
+/// rejects a bind offering *only* "no security layer" outright
+/// (`GSS_S_BAD_QOP`), unlike MIT krb5's `ldapsearch`, which accepts it.
+/// Adding integrity fixed the bind itself, but `dsconfigad` then failed
+/// the same way the moment it tried to write the new computer account's
+/// Kerberos key over the connection -- that write specifically needs
+/// confidentiality, not just integrity, so bit 2 has to be offered too.
 fn security_layer_challenge(fips: &iron_crypto::FipsContext, enctype: Enctype, session_key: &[u8]) -> Result<Vec<u8>, crate::gssapi::wrap::Error> {
-    const NO_SECURITY_LAYER: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
-    crate::gssapi::wrap::wrap(fips, enctype, session_key, 22, &NO_SECURITY_LAYER)
+    const OFFERED_LAYERS: u8 = 0x01 | 0x02 | 0x04;
+    const MAX_BUFFER: u32 = 0x00FF_FFFF; // 3-octet field -- largest representable value
+    let mut challenge = [0u8; 4];
+    challenge[0] = OFFERED_LAYERS;
+    challenge[1..4].copy_from_slice(&MAX_BUFFER.to_be_bytes()[1..4]);
+    crate::gssapi::wrap::wrap(fips, enctype, session_key, 22, false, &challenge)
 }
 
 /// Verifies a non-empty simple bind against the target entry's
@@ -642,6 +799,96 @@ async fn handle_delete(
         Err(e) => store_error_result(&e, referrals, &dn),
     };
     DelResponse(result)
+}
+
+struct PasswordModifyError {
+    code: ResultCode,
+    message: String,
+}
+impl PasswordModifyError {
+    fn new(code: ResultCode, message: impl Into<String>) -> Self {
+        PasswordModifyError { code, message: message.into() }
+    }
+}
+
+/// Resolves an RFC 3062 `userIdentity` value to the target `Dn`. In
+/// practice this is either a bare DN string or an RFC 4513 `dn:`-prefixed
+/// authzId -- both accepted here since real clients (macOS's
+/// `dsconfigad`, found live in #20) aren't guaranteed to use the exact
+/// same form.
+fn resolve_password_target(identity: &str) -> Result<Dn, PasswordModifyError> {
+    let dn_str = identity.strip_prefix("dn:").unwrap_or(identity);
+    Dn::parse(dn_str).map_err(|_| PasswordModifyError::new(ResultCode::InvalidDnSyntax, "userIdentity is not a valid DN"))
+}
+
+/// The Kerberos principal name to derive keys under for an entry that
+/// doesn't have one yet -- `<sAMAccountName>@<REALM>` (matching real
+/// AD's convention for computer accounts, whose `sAMAccountName` already
+/// carries the trailing `$`) if `sAMAccountName` is set, else falling
+/// back to `<cn>@<REALM>`.
+fn principal_fqn_for(entry: &Entry, realm: &str) -> Option<String> {
+    if let Ok(existing) = iron_kdc::principal::principal_name(entry) {
+        return Some(existing.to_string());
+    }
+    let name = entry.get("samaccountname").and_then(|v| v.first()).or_else(|| entry.get("cn").and_then(|v| v.first()))?;
+    Some(format!("{name}@{realm}"))
+}
+
+/// RFC 3062 Password Modify -- see `PASSWORD_MODIFY_OID`'s doc comment.
+/// Sets the target entry's Kerberos keys (`iron_kdc::principal::set_password`)
+/// from `newPasswd`, deriving a `krbPrincipalName` from `sAMAccountName`/`cn`
+/// if the entry doesn't already have one (a fresh computer account created
+/// by an `AddRequest` won't). No fine-grained ACL check yet (D8/#4 scope) --
+/// any authenticated bind may reset any entry's password, matching this
+/// project's current single-tier trust model.
+async fn handle_password_modify(
+    store: &mut Store,
+    fips: Option<&iron_crypto::FipsContext>,
+    request_value: Option<&[u8]>,
+    bound_identity: Option<&str>,
+    spec: &iron_store::index::IndexSpec,
+) -> Result<Option<OctetString>, PasswordModifyError> {
+    let Some(fips) = fips else {
+        return Err(PasswordModifyError::new(ResultCode::UnwillingToPerform, "FIPS provider not active -- cannot set a Kerberos key"));
+    };
+    let Some(bytes) = request_value else {
+        return Err(PasswordModifyError::new(ResultCode::ProtocolError, "missing request value"));
+    };
+    let req: PasswdModifyRequestValue =
+        rasn::ber::decode(bytes).map_err(|e| PasswordModifyError::new(ResultCode::ProtocolError, format!("malformed PasswdModifyRequestValue: {e}")))?;
+    let Some(new_passwd) = req.new_passwd else {
+        // A server-generated random password (the no-newPasswd case) is
+        // real RFC 3062 behavior, but nothing in this project's client
+        // set needs it yet -- fail explicitly rather than silently
+        // picking a password the caller never sees.
+        return Err(PasswordModifyError::new(ResultCode::UnwillingToPerform, "server-generated passwords are not supported -- newPasswd is required"));
+    };
+    let identity = req
+        .user_identity
+        .map(|v| String::from_utf8_lossy(v.as_ref()).into_owned())
+        .or_else(|| bound_identity.map(str::to_string))
+        .ok_or_else(|| PasswordModifyError::new(ResultCode::ProtocolError, "no userIdentity and no bound identity to fall back to"))?;
+    let dn = resolve_password_target(&identity)?;
+
+    let Some(realm) = store.registry().iter().find_map(|p| p.realm.clone()) else {
+        return Err(PasswordModifyError::new(ResultCode::Other, "no realm configured for this partition"));
+    };
+    let mut entry = match store.get_entry(&dn).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return Err(PasswordModifyError::new(ResultCode::NoSuchObject, "")),
+        Err(e) => return Err(PasswordModifyError::new(ResultCode::OperationsError, e.to_string())),
+    };
+    let Some(principal_fqn) = principal_fqn_for(&entry, &realm) else {
+        return Err(PasswordModifyError::new(ResultCode::UnwillingToPerform, "entry has no sAMAccountName/cn to derive a principal name from"));
+    };
+    iron_kdc::principal::set_password(fips, &mut entry, &principal_fqn, &new_passwd)
+        .map_err(|e| PasswordModifyError::new(ResultCode::OperationsError, e.to_string()))?;
+    store.put_entry(&dn, &entry, spec).await.map_err(|e| PasswordModifyError::new(ResultCode::OperationsError, e.to_string()))?;
+
+    // RFC 3062 §4: genPasswd is only present when the server generated
+    // the password itself -- not the case here (newPasswd was supplied),
+    // so the response has no value at all.
+    Ok(None)
 }
 
 async fn handle_modify(
@@ -838,7 +1085,7 @@ async fn handle_moddn(
     ModifyDnResponse(success())
 }
 
-async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Referrals<'_>) -> Vec<ProtocolOp> {
+async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Referrals<'_>, fips_active: bool) -> Vec<ProtocolOp> {
     let base_dn = match Dn::parse(&req.base_object) {
         Ok(dn) => dn,
         Err(_) => return done(ResultCode::InvalidDnSyntax, "invalid base DN"),
@@ -858,7 +1105,7 @@ async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Refer
         // for a deployment with no configuration partition set up,
         // e.g. the standalone il1/il2/il3 replicas).
         let registry = referrals.topology.unwrap_or_else(|| store.registry());
-        let entry_op = ProtocolOp::SearchResEntry(rootdse::build(registry));
+        let entry_op = ProtocolOp::SearchResEntry(rootdse::build(registry, fips_active));
         let mut ops = vec![entry_op];
         ops.extend(done(ResultCode::Success, ""));
         return ops;

@@ -10,7 +10,41 @@ on `fastetcd`. The directory + KDC + DNS half of an AD-compatible DC; sister to
 
 ## Version
 
-`0.22.0` — Phase 2 underway: #23 native Rust domain-join + login
+`0.23.0` — Phase 2 underway: #20 (Windows Add-Computer join + login;
+macOS `dsconfigad` bind) still open, but substantial live-tested
+progress this pass, all found by driving a REAL macOS client
+(`glenns-mac-mini.g8.lo`, 192.168.8.100) against a fresh test forest
+(`ironwintest`, realm `IRON.G8.LO`) and reading `log stream`/KDC-log
+traces side by side with RFC 4120/4121/4752/3062: rootDSE was missing
+`supportedSASLMechanisms`/`supportedCapabilities`/several AD-shaped
+attributes (`dsconfigad` won't even attempt a bind without them); RFC
+3062 Password Modify extended op implemented (how `dsconfigad` sets a
+new computer account's Kerberos key over LDAP); TGS-REP wasn't
+honoring the client's Authenticator subkey (RFC 4120 §5.5.1/§7.5.1 --
+always used the TGT session key + usage 8, but the client always
+supplies a subkey requiring usage 9, so the reply was undecryptable);
+and the GSSAPI SASL security layer only ever offered integrity, never
+confidentiality (RFC 4121 §4.2.4) -- `dsconfigad` accepts an
+integrity-only bind, then fails with `GSS_S_BAD_QOP` the moment it
+tries to seal the write that sets the new computer's Kerberos key.
+Confidentiality is now implemented in `gssapi::wrap`, reusing
+`kerberos::encrypt`/`decrypt` as the AEAD primitive. A live KDC debug
+harness (two throwaway `eprintln!` instrumentation passes, both
+removed before this commit) also re-tested the long-suspected "client
+sometimes fails to decrypt an otherwise-valid AS-REP/TGS-REP"
+flakiness from #20/#23: every server-side self-test (encrypt then
+immediately re-decrypt the exact bytes sent) succeeded, and a new
+`fresh_ctx_repro.rs` (6000+ runs) found zero concurrency failures in
+`iron_crypto` -- current evidence points at client-side
+(`opendirectoryd`) timing/probing nondeterminism, not a server defect,
+so it's not being chased further right now. The bigger, confirmed
+blocker for #20's *Windows* half: `iron-rpc` only supports
+unauthenticated RPC binds, and `SamrSetInformationUser2` (setting a
+computer account's password/Kerberos keys) needs an authenticated
+(NTLMSSP/Schannel) bind's session key to decrypt the wire-encrypted
+password material -- next up.
+
+Previous: `0.22.0` — Phase 2 underway: #23 native Rust domain-join + login
 simulation harness CLOSED (filed mid-session, not part of the
 original #17-#22 backlog, after the user asked for "an accurate
 simulation of windows server joining domain, and normal pc's joining

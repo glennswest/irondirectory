@@ -100,6 +100,47 @@ pub async fn write_message<W: AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// RFC 4752 §3.4's SASL security-layer framing: each buffer (here, a GSS
+/// Wrap token wrapping one BER-encoded `LdapMessage`) is preceded by a
+/// 4-octet network-byte-order length. Crypto-agnostic on purpose -- the
+/// caller (session.rs, which has the negotiated session key/enctype)
+/// does the actual GSS wrap/unwrap; this only frames the resulting bytes.
+pub async fn read_sized_buffer<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+) -> Result<Option<Vec<u8>>, FramingError> {
+    loop {
+        if buf.len() >= 4 {
+            let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+            if buf.len() >= 4 + len {
+                let payload = buf[4..4 + len].to_vec();
+                buf.drain(..4 + len);
+                return Ok(Some(payload));
+            }
+        }
+        let mut chunk = [0u8; 4096];
+        let n = reader.read(&mut chunk).await?;
+        if n == 0 {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            return Err(FramingError::UnexpectedEof);
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+}
+
+/// Writes `payload` (an already-GSS-wrapped token) with its RFC 4752
+/// §3.4 4-octet length prefix.
+pub async fn write_sized_buffer<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    payload: &[u8],
+) -> Result<(), FramingError> {
+    writer.write_all(&(payload.len() as u32).to_be_bytes()).await?;
+    writer.write_all(payload).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

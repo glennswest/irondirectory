@@ -5,6 +5,57 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+## [v0.23.0] — 2026-07-15
+
+### 2026-07-15
+- **fix(ldap):** rootDSE was missing `supportedSASLMechanisms`,
+  `supportedCapabilities` (AD capability OID), and several standard
+  AD-shaped attributes (`domainFunctionality`, `dnsHostName`,
+  `serverName`, etc.) -- found live joining a real macOS client via
+  `dsconfigad` (#20), which refuses to even attempt a bind against a
+  server that doesn't advertise these.
+- **feat(ldap):** Implemented RFC 3062 Password Modify extended
+  operation (OID `1.3.6.1.4.1.4203.1.11.1`) -- this is how `dsconfigad`
+  sets a newly joined computer account's Kerberos key, entirely over
+  LDAP.
+- **fix(kdc):** TGS-REP enc-part wasn't honoring the client's
+  Authenticator subkey (RFC 4120 §5.5.1/§7.5.1): always encrypted with
+  the TGT session key (usage 8) even when the client supplied a subkey,
+  which macOS's Heimdal-based client always does -- produced a reply
+  the client could never decrypt. Fixed in both the same-realm and
+  cross-realm-referral code paths.
+- **feat(ldap):** Implemented the GSSAPI SASL confidentiality
+  (sealing) security layer (RFC 4121 §4.2.4) -- previously
+  `gssapi::wrap` only ever offered integrity-only Wrap tokens, and the
+  security-layer negotiation only advertised "no security layer" +
+  "integrity", never "confidentiality". Found live (#20): macOS's
+  `dsconfigad` accepts a bind offering only integrity, then fails the
+  same way (`GSS_S_BAD_QOP`) the moment it tries to write the new
+  computer account's Kerberos key, because that write specifically
+  requires a sealed channel. Confidentiality reuses
+  `kerberos::encrypt`/`decrypt` as the AEAD primitive per RFC 4121's
+  spec (plaintext + token header as one encrypted unit); `wrap`/`unwrap`
+  now take a `sealed` flag, and `unwrap` auto-detects sealed vs.
+  integrity-only from the token's own header bit.
+- **chore(crypto):** Added `fresh_ctx_repro.rs`, a companion to the
+  existing `concurrent_repro.rs`, testing concurrent `FipsContext::new()`
+  construction under load (as `as_exchange.rs`/`tgs_exchange.rs` now do
+  per-request) -- 6000+ runs, 0 failures. Rules out `iron_crypto`
+  concurrency as the cause of #20/#23's remaining intermittent
+  "client fails to decrypt an otherwise server-side-self-consistent
+  AS-REP/TGS-REP" flakiness; live KDC-log self-tests (encrypt then
+  immediately re-decrypt the exact bytes sent) also always succeed.
+  Current evidence points to client-side (`opendirectoryd`) timing/
+  probing nondeterminism around which optional SPNs it requests before
+  giving up, not a server-side defect -- not chased further this pass;
+  effort is redirected to the bigger, confirmed gap below.
+- **project:** #20's Windows half (a real `Add-Computer`/`netdom join`)
+  has been blocked this whole issue on `iron-rpc` only supporting
+  unauthenticated RPC binds -- `SamrSetInformationUser2`, which sets a
+  computer account's password/Kerberos keys, needs an authenticated
+  (NTLMSSP/Schannel) bind's session key to decrypt the wire-encrypted
+  password material. Next: implement NTLMSSP/Schannel RPC binds.
+
 ## [v0.22.0] — 2026-07-14
 
 ### 2026-07-14 (post-v0.21.0)

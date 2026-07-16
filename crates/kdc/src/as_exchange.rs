@@ -174,7 +174,23 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         Ok(b) => b,
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(e.to_string()), None).into(),
     };
-    let ticket_cipher = match kerberos::encrypt(&app.fips, krbtgt_key.enctype, &krbtgt_key.key, 2, &enc_ticket_bytes) {
+    // A fresh FipsContext for these two encrypts (the ticket, and the
+    // AS-REP enc-part below) rather than the long-lived `app.fips`:
+    // found live against a real client (#20, macOS's Heimdal-based
+    // `dsconfigad`) that a client can consistently fail to decrypt an
+    // AS-REP encrypted on a `FipsContext` that's already handled many
+    // prior, unrelated operations over the daemon's lifetime, while an
+    // otherwise-identical encrypt on a freshly-created context always
+    // succeeds. Root cause not isolated (extensive live bisection during
+    // #23 never reproduced it in a minimal, controlled repro outside a
+    // real long-running daemon) -- treated as an external ossl/OpenSSL-
+    // FIPS-provider state issue, mitigated here rather than by chasing
+    // it further given how conclusively "fresh context" resolves it.
+    let ticket_fips = match iron_crypto::FipsContext::new() {
+        Ok(f) => f,
+        Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(e.to_string()), None).into(),
+    };
+    let ticket_cipher = match kerberos::encrypt(&ticket_fips, krbtgt_key.enctype, &krbtgt_key.key, 2, &enc_ticket_bytes) {
         Ok(c) => c,
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(e.to_string()), None).into(),
     };
@@ -204,7 +220,7 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         Ok(b) => b,
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, krbtgt_principal_name(&realm_str), Some(e.to_string()), None).into(),
     };
-    let enc_part_cipher = match kerberos::encrypt(&app.fips, enctype, &client_key.key, 3, &enc_as_rep_bytes) {
+    let enc_part_cipher = match kerberos::encrypt(&ticket_fips, enctype, &client_key.key, 3, &enc_as_rep_bytes) {
         Ok(c) => c,
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, krbtgt_principal_name(&realm_str), Some(e.to_string()), None).into(),
     };

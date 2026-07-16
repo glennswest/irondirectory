@@ -100,7 +100,10 @@ fn handle_search(app: &AppState, req: &SearchRequest) -> Vec<ProtocolOp> {
     };
 
     if base_dn.is_empty() && req.scope == SearchRequestScope::BaseObject {
-        let entry_op = ProtocolOp::SearchResEntry(iron_ldap::rootdse::build(&app.registry));
+        // The Global Catalog listener has no FIPS/GSSAPI context of its
+        // own (anonymous-bind-only, see this handler's other comment) --
+        // never advertise supportedSASLMechanisms here.
+        let entry_op = ProtocolOp::SearchResEntry(iron_ldap::rootdse::build(&app.registry, false));
         let mut ops = vec![entry_op];
         ops.extend(done(ResultCode::Success, ""));
         return ops;

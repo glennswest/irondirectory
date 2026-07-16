@@ -121,14 +121,13 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     if crate::time::diff_seconds(&authenticator.ctime, &server_now).abs() > CLOCK_SKEW_SECS {
         return krberror::build(KRB_AP_ERR_SKEW, &realm_str, kdc_sname, Some("clock skew too great".into()), None).into();
     }
-
     // Cross-realm referral (#11, D8 -- one-hop only): the client wants a
     // service in a realm other than ours. See referral_tgs_rep for the
     // full RFC 4120 §3.3.3 logic; falls through to the ordinary local
     // lookup (and its ordinary S_PRINCIPAL_UNKNOWN failure) if no
     // one-hop trust or key is configured for that realm.
     if realm_str.to_ascii_uppercase() != app.realm.to_ascii_uppercase() {
-        if let Some(rep) = referral_tgs_rep(app, &mut store, &realm_str, &tgt, tkt_enctype, &session_key, &req.req_body).await {
+        if let Some(rep) = referral_tgs_rep(app, &mut store, &realm_str, &tgt, tkt_enctype, &session_key, authenticator.subkey.as_ref(), &req.req_body).await {
             return rep;
         }
     }
@@ -209,7 +208,13 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         Ok(b) => b,
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(e.to_string()), None).into(),
     };
-    let ticket_cipher = match kerberos::encrypt(&app.fips, service_key.enctype, &service_key.key, 2, &enc_ticket_bytes) {
+    // Fresh FipsContext for these two encrypts -- see as_exchange.rs's
+    // identical comment on the finding.
+    let ticket_fips = match iron_crypto::FipsContext::new() {
+        Ok(f) => f,
+        Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(e.to_string()), None).into(),
+    };
+    let ticket_cipher = match kerberos::encrypt(&ticket_fips, service_key.enctype, &service_key.key, 2, &enc_ticket_bytes) {
         Ok(c) => c,
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(e.to_string()), None).into(),
     };
@@ -239,10 +244,22 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         Ok(b) => b,
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname.clone(), Some(e.to_string()), None).into(),
     };
-    // Key usage 8: encrypted with the TGS session key (from the TGT),
-    // not usage 9 (which is for when the client supplied a subkey in
-    // the Authenticator -- not supported in this pass).
-    let enc_part_cipher = match kerberos::encrypt(&app.fips, tkt_enctype, &session_key, 8, &enc_tgs_rep_bytes) {
+    // RFC 4120 §5.5.1/§7.5.1: if the client's Authenticator carried a
+    // subkey, the reply's enc-part MUST be encrypted under that subkey
+    // with usage 9, not the TGT session key with usage 8 -- found live
+    // against a real client (#20, macOS's Heimdal-based `dsconfigad`):
+    // it always sends a subkey, so encrypting with usage 8 instead
+    // produced a reply the client could never decrypt (a real, silent
+    // protocol violation, not a crypto bug -- the ciphertext was
+    // internally consistent, just under the wrong key/usage pair).
+    let (reply_key, reply_enctype, reply_usage): (&[u8], Enctype, u32) = match &authenticator.subkey {
+        Some(sk) => match Enctype::try_from(sk.r#type) {
+            Ok(enctype) => (sk.value.as_ref(), enctype, 9),
+            Err(_) => (&session_key, tkt_enctype, 8),
+        },
+        None => (&session_key, tkt_enctype, 8),
+    };
+    let enc_part_cipher = match kerberos::encrypt(&ticket_fips, reply_enctype, reply_key, reply_usage, &enc_tgs_rep_bytes) {
         Ok(c) => c,
         Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(e.to_string()), None).into(),
     };
@@ -254,7 +271,7 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         crealm: tgt.crealm,
         cname: tgt.cname,
         ticket,
-        enc_part: EncryptedData { etype: tkt_enctype.etype_number(), kvno: None, cipher: enc_part_cipher.into() },
+        enc_part: EncryptedData { etype: reply_enctype.etype_number(), kvno: None, cipher: enc_part_cipher.into() },
     });
     KdcResponse::TgsRep(tgs_rep)
 }
@@ -282,6 +299,7 @@ async fn referral_tgs_rep(
     tgt: &EncTicketPart,
     tkt_enctype: Enctype,
     session_key: &[u8],
+    subkey: Option<&EncryptionKey>,
     req_body: &rasn_kerberos::KdcReqBody,
 ) -> Option<KdcResponse> {
     let topology = app.topology.as_ref()?;
@@ -324,7 +342,9 @@ async fn referral_tgs_rep(
         authorization_data: None,
     };
     let enc_ticket_bytes = rasn::der::encode(&enc_ticket_part).ok()?;
-    let ticket_cipher = kerberos::encrypt(&app.fips, referral_key.enctype, &referral_key.key, 2, &enc_ticket_bytes).ok()?;
+    // Fresh FipsContext -- see the main tgs_exchange path's identical comment.
+    let ticket_fips = iron_crypto::FipsContext::new().ok()?;
+    let ticket_cipher = kerberos::encrypt(&ticket_fips, referral_key.enctype, &referral_key.key, 2, &enc_ticket_bytes).ok()?;
     let ticket = Ticket {
         tkt_vno: 5.into(),
         realm: own_realm.clone(),
@@ -348,7 +368,17 @@ async fn referral_tgs_rep(
         encrypted_pa_data: None,
     };
     let enc_tgs_rep_bytes = rasn::der::encode(&EncTgsRepPart(enc_kdc_rep_part)).ok()?;
-    let enc_part_cipher = kerberos::encrypt(&app.fips, tkt_enctype, session_key, 8, &enc_tgs_rep_bytes).ok()?;
+    // See the main tgs_exchange path's identical comment: usage 9 +
+    // the client's subkey when present, else usage 8 + the TGT session
+    // key (RFC 4120 §5.5.1/§7.5.1).
+    let (reply_key, reply_enctype, reply_usage): (&[u8], Enctype, u32) = match subkey {
+        Some(sk) => match Enctype::try_from(sk.r#type) {
+            Ok(enctype) => (sk.value.as_ref(), enctype, 9),
+            Err(_) => (session_key, tkt_enctype, 8),
+        },
+        None => (session_key, tkt_enctype, 8),
+    };
+    let enc_part_cipher = kerberos::encrypt(&ticket_fips, reply_enctype, reply_key, reply_usage, &enc_tgs_rep_bytes).ok()?;
 
     let tgs_rep = TgsRep(KdcRep {
         pvno: 5.into(),
@@ -357,7 +387,7 @@ async fn referral_tgs_rep(
         crealm: tgt.crealm.clone(),
         cname: tgt.cname.clone(),
         ticket,
-        enc_part: EncryptedData { etype: tkt_enctype.etype_number(), kvno: None, cipher: enc_part_cipher.into() },
+        enc_part: EncryptedData { etype: reply_enctype.etype_number(), kvno: None, cipher: enc_part_cipher.into() },
     });
     Some(KdcResponse::TgsRep(tgs_rep))
 }
