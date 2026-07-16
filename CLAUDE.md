@@ -1691,16 +1691,54 @@ it committed to git (runtime/environment state, not code):
   A record) added for the control test against the real AD DC --
   **not yet cleaned up**; harmless to leave but should be removed once
   #20 is fully closed.
-- Last live result (before pausing to research #20's Windows-side
-  blocker): macOS's AS-REQ/AS-REP and the GSSAPI-secured LDAP bind
-  (now with confidentiality) succeed; remaining flakiness is believed
-  to be `opendirectoryd` client-side timing/probing nondeterminism
-  around which optional SPNs (`host/<mac-fqdn>`, cross-realm
-  `krbtgt/G8.LO` referral probe) it tries before giving up, not a
-  server-side defect -- see the `fresh_ctx_repro.rs` finding in the
-  v0.23.0 changelog entry. Resume by re-running `~/dsconfigad-test2.sh`
-  and reading `~/dsconfigad-oddlog.txt` + `/tmp/ironwintest-*.log`
-  side by side.
+- **The LDAP/GSSAPI security layer is now validated correct** (post
+  v0.23.0, 2026-07-16). Two real bugs were found by packet-capturing a
+  macOS join and fixed: the terminal SASL bindResponse was being sealed
+  instead of sent in the clear (RFC 4752 §3.1), and Wrap-token SND_SEQ
+  was hardcoded to 0 instead of incrementing (RFC 4121 §4.2.6.2, Heimdal
+  drops repeated-sequence tokens as replays). Both are proven with a
+  known-good client -- **the definitive reproducer, keep this**:
+  ```sh
+  # on dev.g8.lo, against the live ironwintest KDC+LDAP:
+  cat > /tmp/krb5-iron.conf <<'EOF'
+  [libdefaults]
+      default_realm = IRON.G8.LO
+      dns_lookup_kdc = false
+      dns_lookup_realm = false
+      rdns = false
+      dns_canonicalize_hostname = false
+      udp_preference_limit = 1
+  [realms]
+      IRON.G8.LO = { kdc = 127.0.0.1:88 }
+  EOF
+  export KRB5_CONFIG=/tmp/krb5-iron.conf KRB5CCNAME=/tmp/iron-cc
+  echo 'TestPass123!' | kinit Administrator@IRON.G8.LO
+  # confidentiality: prints "SASL SSF: 256" + a correct rootDSE
+  ldapsearch -Y GSSAPI -O minssf=56,maxssf=256 -H ldap://192.168.8.150:389 \
+    -b "" -s base vendorName
+  # multi-entry sealed search (exercises the sequence counter across PDUs):
+  ldapsearch -Y GSSAPI -O minssf=56,maxssf=256 -H ldap://192.168.8.150:389 \
+    -b "dc=iron,dc=g8,dc=lo" -s sub dn
+  ```
+  `rdns=false`/`dns_canonicalize_hostname=false` are REQUIRED or the
+  client requests `ldap/dev.g8.lo` (reverse-DNS) instead of the
+  provisioned `ldap/192.168.8.150` SPN.
+- **What's still NOT working is macOS `dsconfigad`-specific, not a
+  server defect.** Two client-side behaviors block the full join, and
+  neither reproduces with the `ldapsearch` client above: (1) an
+  intermittent `_krb5_extract_ticket failed` that occurs ONLY on UDP TGS
+  exchanges (TCP is reliable; `iron_crypto` is ruled out by
+  `cross_ctx_repro.rs`, and KDC store access is mutex-serialized so KDC
+  responses are deterministic -- so this is UDP transport / Heimdal, not
+  our logic); and (2) in the all-TCP regime, `dsconfigad` opens the LDAP
+  connection post-Kerberos and *cancels it within ~2ms without ever
+  binding*, then fails 10s later with `ODErrorNodeUnknownName`. Root-
+  causing (2) needs macOS/opendirectoryd-side insight (it never sends a
+  byte to our server), not more server changes. Resume by re-running
+  `~/dsconfigad-test2.sh` and reading `~/dsconfigad-oddlog.txt` +
+  `/tmp/ironwintest-*.log`; correlate AppleLDAP `error: N` as LDAP
+  result codes (14 = saslBindInProgress, 3 = timeLimitExceeded), NOT GSS
+  errors.
 
 ### Deferred — exhaustive federation testing (D10), not capability
 - [ ] Many-partition / many-cluster scale matrices

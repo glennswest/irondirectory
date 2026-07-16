@@ -5,6 +5,46 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-07-16
+- **fix(ldap):** Send the terminal SASL bind response in the clear
+  (RFC 4752 §3.1). The negotiated security layer takes effect only on
+  the *first octet following* the last authentication response, so the
+  bindResponse that completes the handshake must not itself be wrapped;
+  `handle_bind` flips state to `SecurityLayerActive` on that success, so
+  it was being sealed and the client couldn't parse it. Found by packet-
+  capturing a real macOS `dsconfigad` join (the sealed 74-byte response
+  vs. the correct 14-byte plain one).
+- **fix(ldap):** Increment the Wrap-token SND_SEQ (RFC 4121 §4.2.6.2)
+  across successive acceptor tokens instead of hardcoding 0. Heimdal
+  (macOS's GSS, and MIT krb5) treats a repeated sequence number as a
+  replay and silently drops the token, so sealed search responses never
+  reached the client (which timed out with LDAP `timeLimitExceeded`).
+  The security-layer challenge is the acceptor's first wrap token
+  (seq 0); `SecurityLayerActive` now carries an `AtomicU64` counter from
+  1 that `send_response` advances per wrapped PDU.
+- **test(ldap):** Validated both fixes end-to-end with a known-good
+  client (MIT krb5 `ldapsearch -Y GSSAPI`): integrity (`SASL SSF: 1`)
+  and confidentiality (`SASL SSF: 256`) security layers both install and
+  a multi-entry subtree search returns correctly over the sealed
+  channel (multiple sequential wrapped PDUs exercise the sequence
+  counter). The GSSAPI SASL security layer is now correct against a
+  standards-compliant client.
+- **test(crypto):** Added `cross_ctx_repro.rs` -- encrypt with a fresh
+  `FipsContext`, decrypt with a *different* shared one, under
+  concurrency (the boundary the KDC's own self-tests never cross since
+  they use one context). 6000+ operations, zero failures: definitively
+  rules out `iron_crypto` as the source of #20/#23's intermittent
+  Kerberos ticket-decrypt failures.
+- **project:** With crypto ruled out and KDC store access already
+  mutex-serialized (so KDC responses are deterministic per request), the
+  remaining intermittent `_krb5_extract_ticket failed` seen from macOS
+  `dsconfigad` is localized to UDP transport / Heimdal client behavior,
+  not our server logic: it occurs only on UDP TGS exchanges (TCP is
+  reliable), and a `dsconfigad`-specific behavior (opening then
+  immediately cancelling the LDAP connection without binding) blocks the
+  final join. Neither reproduces with the standards-compliant client
+  above. Not a defect in the LDAP/GSSAPI or crypto implementation.
+
 ## [v0.23.0] — 2026-07-15
 
 ### 2026-07-15
