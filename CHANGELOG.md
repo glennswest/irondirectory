@@ -6,6 +6,26 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-07-16
+- **fix(ldap):** Make `sn` optional (not a MUST) on the `person`
+  objectClass, matching Active Directory (only `cn` is required; AD makes
+  `sn` a `mayContain`). macOS `dsconfigad` creates the computer account
+  with objectClass `person` (via `computer`->`user`->
+  `organizationalPerson`->`person`) but no surname; the RFC-2256-strict
+  rule rejected the join's AddRequest with `ObjectClassViolation`. With
+  this fixed, the computer-account creation now succeeds end to end over
+  the confidential channel.
+- **project:** Fully mapped the macOS join flow live and localized the
+  final remaining blocker. With the UDP path clean and the schema fixed,
+  `dsconfigad` now: binds with GSSAPI confidentiality, creates the
+  computer object (LDAP Add, success), and requests a `kadmin/changepw`
+  service ticket to set the machine password. It then talks the kpasswd
+  protocol (RFC 3244 Set-Password) on **port 464**, which the KDC does
+  not yet serve -- so the machine-password set fails and `dsconfigad`
+  rolls back (deletes the account) and reports error 5103. Implementing
+  the kpasswd/464 service is the last piece for #20. Also confirmed the
+  earlier "intermittent" Kerberos failures were a macOS per-host UDP
+  ICMP-unreachable negative cache caused by KDC restarts, not a server
+  defect (see the testing gotcha in project CLAUDE.md).
 - **fix(ldap):** Send the terminal SASL bind response in the clear
   (RFC 4752 §3.1). The negotiated security layer takes effect only on
   the *first octet following* the last authentication response, so the
