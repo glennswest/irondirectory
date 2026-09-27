@@ -218,11 +218,13 @@ Version locations (keep in sync on every bump):
 
 ## Last session (2026-09-27)
 
-Issue triage done twice (all of #20/#21/#22/#24 still real; P1/P3/P3/P2). Docs
-refresh done (`cc5dec2`: new `docs/CONFIGURATION.md`, filed #26 fastetcd; second pass fixed ARCHITECTURE D4 MD4 claim
-mTLS). Nothing in progress. Next: #20 (kpasswd/464 for macOS; Schannel
-auth + `NetrServerPasswordSet2` for Windows) or #25 (operator golden +
-`iron-bootstrap`).
+Issue triage done (#20/#21/#22/#24 still real; P1/P3/P3/P2). Docs refreshed
+three times; the third pass filed #27 (substring/ordering filters match
+nothing) and #28 (ARCHITECTURE D2's USN/persistent search/leases aren't
+built). Earlier passes filed #26 (fastetcd mTLS) and added
+`docs/CONFIGURATION.md`. Nothing in progress. Next: #20 (kpasswd/464 for
+macOS; Schannel auth + `NetrServerPasswordSet2` for Windows) or #25
+(operator golden + `iron-bootstrap`).
 
 ## Locked decisions (see docs/ARCHITECTURE.md)
 
@@ -1786,6 +1788,8 @@ it committed to git (runtime/environment state, not code):
       operator runs as rustkube pods. This replaces the earlier
       Helm-chart/OpenShift-Operator idea. `iron-ldapd`'s `:8080` `/health`
       is the readiness probe.
+- [ ] LDAP substring/ordering/approx filter matching (#27); D2's USN/
+      persistent search/leases (#28, docs mark them unbuilt).
 - [ ] **fastetcd mTLS from the daemons (#26):** every binary builds a
       plaintext `ClusterRef`; add optional CA/cert/key settings.
 - Current settings, ports and packaging are in `docs/CONFIGURATION.md`;

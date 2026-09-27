@@ -10,8 +10,8 @@ provides the **SMB file-server** half (SYSVOL/NETLOGON shares, Kerberos service
 acceptor). Together they form a clean-room, FIPS-clean alternative to a Windows
 or Samba domain controller.
 
-> **Status:** `v0.23.0` — Phase 0 done, Phase 1 underway, Phase 2 started
-> (`iron-partition`'s `sid`/`security_descriptor` modules, a real
+> **Status:** `v0.23.0` — Phases 0, 1 and 1.5 done, Phase 2 underway
+> (Phase 2: `iron-partition`'s `sid`/`security_descriptor` modules, a real
 > etcd-CAS RID pool, `iron-ldap` auto-stamping `objectSid` +
 > a default `nTSecurityDescriptor` onto new `user`/`computer`/`group`
 > entries, `iron-kdc` embedding a signed **Kerberos PAC** with
@@ -31,7 +31,8 @@ or Samba domain controller.
 > mTLS connection harness), `iron-crypto` (FIPS crypto facade over `ossl`,
 > incl. PBKDF2 password hashing, Kerberos AES key derivation/encryption, and
 > **ES256 asymmetric signing**), `iron-ldap` (rootDSE, anonymous + authenticated
-> bind, **SASL/GSSAPI bind**, search, add/delete/modify/compare/modify-DN,
+> bind, **SASL/GSSAPI bind**, search (present/equality/and/or/not
+> filters; substring/ordering filters match nothing yet, #27), add/delete/modify/compare/modify-DN,
 > StartTLS/LDAPS, **RFC 4532 WhoAmI**, **registry-driven cross-NC referrals
 > chased one hop end-to-end**, AD/RFC 2307 schema validation), `iron-kdc`
 > (Kerberos 5 KDC: AS-REQ/AS-REP with pre-auth,

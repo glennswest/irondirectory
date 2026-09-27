@@ -6,6 +6,13 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-09-27
+- **docs:** Third refresh pass against the code (still no code commits
+  since 2026-09-20). `docs/ARCHITECTURE.md` D2 now shows partition-scoped
+  keys (`/iron/<pid>/tree`, `/iron/<pid>/idx`) and marks what isn't built:
+  substring/ordering/approx filters match nothing (#27), and there is no USN
+  from `mod_revision`, persistent search/RFC 4533, DNS dynamic update or
+  etcd leases (#28). README status now reads "Phases 0, 1 and 1.5 done,
+  Phase 2 underway" and names the filter gap.
 - **docs:** Second refresh pass against the code (no code commits since
   2026-09-20; `docs/CONFIGURATION.md` still matches every `IRON_*` setting,
   default and port in `crates/*/src/bin`). `docs/ARCHITECTURE.md` D4 said

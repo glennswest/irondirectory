@@ -50,17 +50,24 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
 ### D2 — DIT mapping: layer hierarchy above the flat keyspace
 - etcd v3 is a flat keyspace but supports **prefix range scans**. The LDAP DIT
   maps to hierarchical key paths and subtree search becomes a prefix scan:
-  - Object: `/iron/tree/dc=lo/dc=g10/ou=users/cn=alice` → serialized entry.
+  - Object: `/iron/<partition-id>/tree/dc=lo/dc=g10/ou=users/cn=alice` →
+    serialized entry (keys are partition-scoped, D8; `crates/partition/src/key.rs`).
   - Subtree search under an OU: range scan over the OU's key prefix.
 - **Secondary indexes** are companion keys maintained atomically with the object
   write inside a single etcd `Txn` (compare-and-set on revision):
-  - `/iron/idx/<attr>/<value>/<dn>` → presence/equality lookups.
-  - Substring/approx indexes layered as needed.
+  - `/iron/<partition-id>/idx/<attr>/<value>/<dn>` → presence/equality lookups.
+  - Substring/approx indexes layered as needed. *As built:* substring,
+    ordering, approx and extensible filters are not evaluated at all (they
+    match nothing, #27).
 - **USN equivalent:** etcd MVCC `mod_revision` is the natural change sequence
   number for syncrepl/persistent-search.
 - **Change notification:** etcd **Watch** drives LDAP persistent search /
   content-sync (RFC 4533) and DNS dynamic-update fan-out.
 - **Leases:** etcd leases back session/ticket lifetime where appropriate.
+- *As built (2026-09-27):* none of the three bullets above exist yet.
+  `highestCommittedUSN` is a fixed `1`, iron-ldap has no persistent-search or
+  RFC 4533 control, iron-dns only publishes SRV records, and no code uses etcd
+  leases (#28). Watch is used today by `iron-gc` (D8's aggregator).
 - Because we use the `/iron/...` prefix and Kubernetes uses `/registry/...`,
   there is no key collision even on a shared cluster — but D1 mandates a
   separate cluster anyway.
