@@ -6,6 +6,19 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-09-27
+- **feat(bootstrap):** New `iron-bootstrap` (#25): idempotent first-boot
+  provisioning for irondirectory-operator pods. Waits for fastetcd, then
+  creates the forest registry (config/schema/root-domain records with realm,
+  NetBIOS name and domain SID), the base entry, `krbtgt` (RID 502) and
+  `administrator` (RID 500, LDAP password + Kerberos keys from a mounted
+  Secret file) if missing, and stays resident. Settings in
+  `docs/CONFIGURATION.md`.
+- **feat(store):** `Store::create_entry`: create-only write in one etcd
+  transaction guarded on the key's version being 0, so concurrent creators
+  can't both win. `iron_config::create_partition` uses it.
+- **feat(partition):** `Partition::netbios_name` (optional, AD's crossRef
+  `nETBIOSName`). `generate_domain_sid` moved from `iron-config-ctl` into
+  `iron_config`.
 - **docs:** Third refresh pass against the code (still no code commits
   since 2026-09-20). `docs/ARCHITECTURE.md` D2 now shows partition-scoped
   keys (`/iron/<pid>/tree`, `/iron/<pid>/idx`) and marks what isn't built:

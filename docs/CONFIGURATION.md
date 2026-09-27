@@ -118,6 +118,39 @@ Unauthenticated binds only. There is no `SamrSetInformationUser2` or
 `NetrServerPasswordSet2`, so a real Windows client cannot set its machine
 password yet (#20).
 
+## iron-bootstrap (first-boot provisioning, #25)
+
+Creates whatever a new domain is missing, then stays resident (a pod
+container with `restartPolicy: Always`); exits non-zero only on failure,
+with the reason on stderr. Every write is create-only (an etcd transaction
+guarded on the key not existing), so a restart does nothing and several
+members of one directory can run it at once and agree on one domain SID.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `IRON_BOOTSTRAP_FASTETCD_ENDPOINT` | required | fastetcd endpoint; retried every 2 s until it answers |
+| `IRON_BOOTSTRAP_PARTITION_ID` | required | domain partition id, e.g. `corp` |
+| `IRON_BOOTSTRAP_BASE_DN` | required | e.g. `dc=corp,dc=example,dc=lo` |
+| `IRON_BOOTSTRAP_REALM` | required | e.g. `CORP.EXAMPLE.LO` (upper-cased) |
+| `IRON_BOOTSTRAP_NETBIOS_NAME` | required | e.g. `CORP`, stored on the domain's registry record |
+| `IRON_BOOTSTRAP_ADMIN_PASSWORD_FILE` | required | file holding the administrator password (trailing newlines dropped; at least 8 bytes, a FIPS PBKDF2 limit) |
+| `IRON_BOOTSTRAP_ONESHOT` | unset | `1` exits 0 after provisioning instead of staying resident |
+
+It needs `OPENSSL_CONF` (FIPS) like the daemons. What it creates, if absent:
+
+| What | Where |
+|---|---|
+| configuration partition `<pid>-config` | `cn=configuration,<base>` (the forest registry, as `iron-config-ctl init-forest` writes it) |
+| schema partition `<pid>-schema` | `cn=schema,cn=configuration,<base>` |
+| root domain record `<pid>` | realm, NetBIOS name, a fresh `S-1-5-21-…` domain SID |
+| base entry | `<base>`, `domainDNS`, `objectSid` = the domain SID |
+| `krbtgt/<REALM>@<REALM>` | `cn=krbtgt,<base>`, random key, RID 502 |
+| `administrator@<REALM>` | `cn=administrator,<base>`, RID 500, `userPassword` (LDAP bind) and Kerberos keys from the password file |
+
+A stored record with a different realm or base DN for the same partition id
+is reported as an error, never rewritten. Changing the password file later
+does not change the stored password.
+
 ## Operator CLIs
 
 | Binary | Settings | Commands |
@@ -153,6 +186,9 @@ config at `/usr/share/doc/<name>/<name>.conf.example`, and runs
 `iron-config-ctl` and `iron-simulate` are not packaged; run them from a
 `cargo build`.
 
-**Kubernetes:** nothing in this repo deploys to Kubernetes yet. The planned
-path is the `irondirectory` stormcos golden plus `iron-bootstrap`, run as
-rustkube pods by irondirectory-operator (#25), not a Helm chart.
+**Kubernetes:** the planned path is the `irondirectory` stormcos golden,
+run as rustkube pods by irondirectory-operator (#25), not a Helm chart.
+`iron-bootstrap` exists; the golden does not yet (it can't use
+stormcentral's static-musl recipe: the daemons link the OS libcrypto and
+load its FIPS provider). Until then `iron-bootstrap` is build-only, like
+`iron-config-ctl`.

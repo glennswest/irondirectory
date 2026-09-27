@@ -65,6 +65,20 @@ impl Store {
         crate::index::put_entry_indexed(client, &pid, dn, entry, spec).await
     }
 
+    /// Like [`Store::put_entry`], but only if nothing exists at `dn` yet;
+    /// returns whether this call created it (see
+    /// [`crate::index::create_entry_indexed`]).
+    pub async fn create_entry(
+        &mut self,
+        dn: &Dn,
+        entry: &Entry,
+        spec: &IndexSpec,
+    ) -> Result<bool, StoreError> {
+        let pid = self.resolve(dn)?.id.clone();
+        let client = self.client_mut(&pid)?;
+        crate::index::create_entry_indexed(client, &pid, dn, entry, spec).await
+    }
+
     /// Reads the entry at `dn`, if present.
     pub async fn get_entry(&mut self, dn: &Dn) -> Result<Option<Entry>, StoreError> {
         let pid = self.resolve(dn)?.id.clone();

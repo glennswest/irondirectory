@@ -2,7 +2,7 @@
 //! entries (D2) consistent with `/iron/<pid>/tree/<dn>` via a single etcd
 //! transaction per write, so a crash never leaves a stale index behind.
 
-use etcd_client::{Client, GetOptions, Txn, TxnOp};
+use etcd_client::{Client, Compare, CompareOp, GetOptions, Txn, TxnOp};
 use iron_partition::{key, Dn, PartitionId};
 
 use crate::model::Entry;
@@ -71,6 +71,28 @@ pub async fn put_entry_indexed(
 
     client.txn(Txn::new().and_then(ops)).await?;
     Ok(())
+}
+
+/// Writes `entry` at `dn` with its secondary indexes only if nothing exists
+/// at `dn` yet, in one etcd transaction guarded on the entry key's version
+/// being 0. Returns whether this call created it. Unlike a read-then-write,
+/// two writers racing to create the same DN can't both win -- which
+/// `iron-bootstrap` relies on when several members of one directory
+/// provision it at once (#25).
+pub async fn create_entry_indexed(
+    client: &mut Client,
+    pid: &PartitionId,
+    dn: &Dn,
+    entry: &Entry,
+    spec: &IndexSpec,
+) -> Result<bool, StoreError> {
+    let entry_key = key::entry_key(pid, dn);
+    let mut ops = vec![TxnOp::put(entry_key.clone(), entry.encode(), None)];
+    for k in index_keys_for(pid, dn, entry, spec) {
+        ops.push(TxnOp::put(k, dn.to_string(), None));
+    }
+    let txn = Txn::new().when([Compare::version(entry_key, CompareOp::Equal, 0)]).and_then(ops);
+    Ok(client.txn(txn).await?.succeeded())
 }
 
 /// Atomically deletes the entry at `dn` and every secondary index entry it

@@ -193,6 +193,12 @@ pub struct Partition {
     /// `iron-config-ctl`); a domain created before #17 has no SID yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain_sid: Option<String>,
+    /// The domain's NetBIOS (pre-Windows 2000) name, e.g. `CORP` -- AD
+    /// keeps it on the domain's crossRef as `nETBIOSName`. Set by
+    /// `iron-bootstrap` (#25); `None` for older records and non-domain
+    /// partitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub netbios_name: Option<String>,
 }
 
 impl Partition {
@@ -217,6 +223,7 @@ impl Partition {
             ldap_url: None,
             kdc_url: None,
             domain_sid: None,
+            netbios_name: None,
         })
     }
 
@@ -238,6 +245,7 @@ impl Partition {
             ldap_url: None,
             kdc_url: None,
             domain_sid: None,
+            netbios_name: None,
         })
     }
 
@@ -261,6 +269,7 @@ impl Partition {
             ldap_url: None,
             kdc_url: None,
             domain_sid: None,
+            netbios_name: None,
         })
     }
 
@@ -292,6 +301,12 @@ impl Partition {
     /// form, #17).
     pub fn with_domain_sid(mut self, sid: impl Into<String>) -> Self {
         self.domain_sid = Some(sid.into());
+        self
+    }
+
+    /// Builder: set the NetBIOS domain name (upper-cased).
+    pub fn with_netbios_name(mut self, name: impl Into<String>) -> Self {
+        self.netbios_name = Some(name.into().to_ascii_uppercase());
         self
     }
 }

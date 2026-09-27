@@ -1,0 +1,24 @@
+[package]
+name = "iron-bootstrap"
+description = "Idempotent first-boot provisioning of a new domain (forest registry, domain SID, krbtgt, administrator) for irondirectory-operator pods (#25)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+iron-partition = { path = "../partition" }
+iron-store = { path = "../store" }
+iron-crypto = { path = "../crypto" }
+iron-config = { path = "../config" }
+iron-kdc = { path = "../kdc" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+etcd-client = { workspace = true }

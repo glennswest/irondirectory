@@ -93,6 +93,26 @@ pub async fn put_partition(store: &mut Store, config_dn: &Dn, index_spec: &iron_
     Ok(())
 }
 
+/// Writes one partition's record only if it doesn't exist yet; returns
+/// whether this call created it. `iron-bootstrap` (#25) uses this so
+/// several members provisioning one directory at once agree on a single
+/// record (and so a single domain SID) instead of the last writer winning.
+pub async fn create_partition(store: &mut Store, config_dn: &Dn, index_spec: &iron_store::index::IndexSpec, p: &Partition) -> Result<bool, Error> {
+    let dn = record_dn(config_dn, &p.id)?;
+    let entry = partition_to_entry(p)?;
+    Ok(store.create_entry(&dn, &entry, index_spec).await?)
+}
+
+/// Generates a fresh domain SID (`S-1-5-21-a-b-c`) -- three random
+/// 32-bit sub-authorities via the FIPS DRBG, the same 96-bit-random
+/// shape real AD's DCPromo assigns per domain.
+pub fn generate_domain_sid() -> anyhow::Result<String> {
+    let fips = iron_crypto::FipsContext::new()?;
+    let bytes = iron_crypto::kerberos::random_bytes(&fips, 12)?;
+    let subs: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect();
+    Ok(iron_partition::Sid::new(iron_partition::Sid::NT_AUTHORITY, [21, subs[0], subs[1], subs[2]]).to_string())
+}
+
 /// Index spec for the configuration partition (just `cn`, matching every
 /// other partition's minimal indexing convention).
 pub fn index_spec() -> iron_store::index::IndexSpec {

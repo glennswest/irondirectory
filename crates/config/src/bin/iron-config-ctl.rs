@@ -70,17 +70,6 @@
 use iron_partition::{ClusterRef, Dn, ForestId, Partition, PartitionId, PartitionRegistry, Sid};
 use iron_store::store::Store;
 
-/// Generates a fresh domain SID (`S-1-5-21-a-b-c`) -- three random
-/// 32-bit sub-authorities via the FIPS DRBG, the same 96-bit-random
-/// shape real AD's DCPromo assigns per domain.
-fn generate_domain_sid() -> anyhow::Result<String> {
-    let fips = iron_crypto::FipsContext::new()?;
-    let bytes = iron_crypto::kerberos::random_bytes(&fips, 12)?;
-    let subs: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect();
-    let sid = Sid::new(Sid::NT_AUTHORITY, [21, subs[0], subs[1], subs[2]]);
-    Ok(sid.to_string())
-}
-
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
@@ -293,7 +282,7 @@ async fn init_forest(args: &[String]) -> anyhow::Result<()> {
         root.domain_sid = prior.domain_sid.clone();
     }
     if root.domain_sid.is_none() {
-        root = root.with_domain_sid(generate_domain_sid()?);
+        root = root.with_domain_sid(iron_config::generate_domain_sid()?);
     }
     iron_config::put_partition(&mut store, &config_dn, &index_spec, &root).await?;
 
@@ -326,7 +315,7 @@ async fn create_child(args: &[String]) -> anyhow::Result<()> {
     let new_dn = Dn::parse(new_base_dn)?;
     let mut child = Partition::domain(new_id.clone(), parent.forest.clone(), new_dn, child_cluster)?
         .with_superior(parent_pid.clone())
-        .with_domain_sid(generate_domain_sid()?);
+        .with_domain_sid(iron_config::generate_domain_sid()?);
     if let Some(realm) = realm_override {
         child = child.with_realm(realm.clone());
     }
