@@ -25,7 +25,7 @@ It is the **directory + KDC + DNS** half of an AD-compatible domain controller.
         │  • DNS SRV autodiscovery     │ krb5 │  • Kerberos AP-REQ acceptor  │
         │  • LDAPS (OpenSSL FIPS)      │tickets│   (roadmap #31–#37)          │
         └──────────────┬───────────────┘      └──────────────────────────────┘
-                       │ etcd v3 gRPC (mTLS)
+                       │ etcd v3 gRPC (mTLS planned; plaintext today, #26)
                        ▼
         ┌──────────────────────────────┐
         │  fastetcd — DEDICATED cluster │  (never the Kubernetes etcd)
@@ -105,9 +105,14 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
 ### D5 — Deployment: standalone or Kubernetes
 - **Standalone:** irondirectory + a co-located/embedded dedicated fastetcd as a
   domain-controller appliance.
-- **Kubernetes:** fastetcd as its own StatefulSet (it ships a Helm chart) +
-  irondirectory as a Deployment, communicating over mTLS. Same binary; only the
-  etcd connection string and topology differ.
+- **Kubernetes:** a dedicated fastetcd per directory next to the daemons,
+  same binaries, only the etcd connection string and topology differ.
+- **As built (2026-09-27):** standalone only: per-daemon RPMs + systemd
+  units on Fedora/RHEL VMs (`docs/CONFIGURATION.md`). The Kubernetes path is
+  planned as an `irondirectory` stormcos golden + `iron-bootstrap`, run as
+  rustkube pods by irondirectory-operator (#25), not a Helm chart. The
+  daemons reach fastetcd in plaintext only; the mTLS link drawn in §2 needs
+  per-binary TLS settings that don't exist yet (#26).
 
 ### D7 — SSO surfaces
 irondirectory is a self-contained IdP (no Keycloak dependency). It exposes

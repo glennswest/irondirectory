@@ -6,6 +6,15 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-09-27
+- **docs:** New `docs/CONFIGURATION.md`, taken from the code: every
+  binary's `IRON_*` settings with defaults (53 of 62 were undocumented),
+  the port map (including the three daemons that default to `:8080`),
+  FIPS start-up behaviour, and what ships as RPM/systemd versus
+  build-only (`iron-rpcd`, `iron-rpc-ctl`, `iron-config-ctl`,
+  `iron-simulate`). README, ARCHITECTURE and CLAUDE.md no longer promise
+  fastetcd mTLS or a Kubernetes/Helm deployment that the code doesn't
+  have. Both are now tracked: #26 (mTLS) and #25 (operator golden).
+  The README's "no MD4" note now names the NETLOGON NTOWF exception.
 - **docs:** Refresh pass against the code. No commits since 2026-09-20, so
   nothing new to document; fixed two older drifts instead. README's
   status line said `v0.22.0` (Cargo.toml is `0.23.0`), and CLAUDE.md's #20

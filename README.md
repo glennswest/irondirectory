@@ -55,6 +55,16 @@ or Samba domain controller.
 > health-checked LB) at `ldap.g8.lo`. Architecture and decisions are
 > recorded in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+## Documentation
+
+- [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md): every binary's settings and
+  defaults, ports, and how it ships (RPMs, systemd units)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): decision record (D1–D10)
+- [`docs/FIPS.md`](docs/FIPS.md): OpenSSL FIPS provider setup and findings
+- [`docs/OPENSHIFT-LDAP-IDP.md`](docs/OPENSHIFT-LDAP-IDP.md),
+  [`docs/OPENSHIFT-OIDC-IDP.md`](docs/OPENSHIFT-OIDC-IDP.md),
+  [`docs/OPENSHIFT-SPNEGO-SSO.md`](docs/OPENSHIFT-SPNEGO-SSO.md): OpenShift SSO
+
 ## What it is (and isn't)
 
 This is **not** a 100% Active Directory clone (Samba spent ~20 years on that and
@@ -84,14 +94,22 @@ first-class design constraint rather than a bolt-on.
   crate** (idiomatic OpenSSL 3 bindings with explicit provider/FIPS handling),
   matching `rocketsmbd` so the whole identity stack validates against one
   crypto boundary.
-- **Deployment:** runs **standalone** (DC appliance) or **in Kubernetes**
-  (fastetcd StatefulSet + irondirectory Deployment over mTLS).
+- **Deployment:** today, **standalone**: per-daemon RPMs + systemd units
+  on Fedora/RHEL VMs, talking to a dedicated fastetcd cluster in
+  **plaintext** (the daemons have no fastetcd mTLS settings yet, #26).
+  Kubernetes is planned as a stormcos golden run by irondirectory-operator
+  (#25); nothing in this repo deploys to Kubernetes yet. Ports, settings and
+  packaging: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 - **Partitioned from day one:** never a monolithic tree. The directory is many
   strongly-consistent partitions (one Raft cluster per naming context), federated
   by Kerberos trust + LDAP referrals + watch-fed aggregation. Scales from one
   domain to a multi-forest holding company (hundreds of autonomous forests
   sharing a federated GAL + OIDC brokering; forest = security boundary).
-- **No NTLM.** MD4/MD5/RC4 are non-FIPS; Kerberos + SASL/GSSAPI only.
+  The federated GAL is built (#13); cross-forest OIDC brokering is not yet.
+- **No NTLM.** MD5/RC4 are non-FIPS and absent; Kerberos + SASL/GSSAPI only.
+  One cited exception: `iron_crypto::md4` (pure Rust, outside the FIPS
+  context) computes the NTOWF that MS-NRPC's NETLOGON secure channel
+  requires; everything downstream of it is FIPS AES/HMAC-SHA256.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full rationale.
 
