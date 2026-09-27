@@ -1580,7 +1580,8 @@ neither bug is fixed in this pass -- filed as #24 for the underlying
 - [x] Kerberos PAC generation (group SIDs) (#18, CLOSED — see Live infrastructure below)
 - [x] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake) (#19, CLOSED — see Live infrastructure below); SYSVOL via rocketsmbd is a separate, not-yet-filed cross-project follow-up
 - [x] Native Rust domain-join + login simulation harness for scale testing (#23, CLOSED — see Live infrastructure below); found real RPC/store concurrency bugs at scale, filed as #24
-- [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind -- see
+- [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind (macOS:
+      only kpasswd/464 remains) -- see
       "#20 next step" and "#20 live test environment" below for exactly
       where this is paused and how to resume it.
 - [ ] `iron-rpc`/`iron-store` concurrency bugs found via #23 scale testing (#24): intermittent RPC `FAULT_UNK_IF` faults and a store read-after-write race under concurrent load (~40% failure rate at concurrency 25, 0% at concurrency <= 5)
@@ -1741,18 +1742,18 @@ it committed to git (runtime/environment state, not code):
   `rdns=false`/`dns_canonicalize_hostname=false` are REQUIRED or the
   client requests `ldap/dev.g8.lo` (reverse-DNS) instead of the
   provisioned `ldap/192.168.8.150` SPN.
-- **What's still NOT working is macOS `dsconfigad`-specific, not a
-  server defect.** Two client-side behaviors block the full join, and
-  neither reproduces with the `ldapsearch` client above: (1) an
-  intermittent `_krb5_extract_ticket failed` that occurs ONLY on UDP TGS
-  exchanges (TCP is reliable; `iron_crypto` is ruled out by
-  `cross_ctx_repro.rs`, and KDC store access is mutex-serialized so KDC
-  responses are deterministic -- so this is UDP transport / Heimdal, not
-  our logic); and (2) in the all-TCP regime, `dsconfigad` opens the LDAP
-  connection post-Kerberos and *cancels it within ~2ms without ever
-  binding*, then fails 10s later with `ODErrorNodeUnknownName`. Root-
-  causing (2) needs macOS/opendirectoryd-side insight (it never sends a
-  byte to our server), not more server changes. Resume by re-running
+- **What's still NOT working (as of 2026-07-16): the kpasswd service on
+  port 464.** The two earlier "client-side" blockers are resolved: the
+  intermittent UDP `_krb5_extract_ticket failed` was the macOS UDP
+  negative cache above (not a server or Heimdal defect), and the
+  post-Kerberos LDAP failure was `person` requiring `sn` (now optional,
+  matching AD, commit `acccaac`). `dsconfigad` now binds with GSSAPI
+  confidentiality and creates the computer object successfully, then
+  requests a `kadmin/changepw` ticket and speaks RFC 3244 Set-Password to
+  port 464 -- which nothing in this workspace serves (no kpasswd code in
+  `crates/`). The password set fails, `dsconfigad` deletes the account
+  and reports error 5103. Implementing kpasswd/464 in `iron-kdc` is the
+  last piece of #20's macOS half. Resume by re-running
   `~/dsconfigad-test2.sh` and reading `~/dsconfigad-oddlog.txt` +
   `/tmp/ironwintest-*.log`; correlate AppleLDAP `error: N` as LDAP
   result codes (14 = saslBindInProgress, 3 = timeLimitExceeded), NOT GSS

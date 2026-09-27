@@ -5,6 +5,13 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-09-27
+- **docs:** Refresh pass against the code. No commits since 2026-09-20, so
+  nothing new to document; fixed two older drifts instead. README's
+  status line said `v0.22.0` (Cargo.toml is `0.23.0`), and CLAUDE.md's #20
+  notes still blamed macOS client behaviour for the failing join. The
+  actual last blocker is the unimplemented kpasswd/464 service.
+
 ### 2026-07-16
 - **fix(ldap):** Make `sn` optional (not a MUST) on the `person`
   objectClass, matching Active Directory (only `cn` is required; AD makes
