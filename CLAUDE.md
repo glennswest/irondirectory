@@ -216,6 +216,14 @@ Version locations (keep in sync on every bump):
 - `README.md` status line
 - `CHANGELOG.md` release heading
 
+## Last session (2026-09-27)
+
+Issue triage done (all of #20/#21/#22/#24 still real; P1/P3/P3/P2). Docs
+refresh done (`cc5dec2`: new `docs/CONFIGURATION.md`, filed #26 fastetcd
+mTLS). Nothing in progress. Next: #20 (kpasswd/464 for macOS; Schannel
+auth + `NetrServerPasswordSet2` for Windows) or #25 (operator golden +
+`iron-bootstrap`).
+
 ## Locked decisions (see docs/ARCHITECTURE.md)
 
 - **D1** Dedicated fastetcd cluster — never the Kubernetes etcd.
