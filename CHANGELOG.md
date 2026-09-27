@@ -6,6 +6,13 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-09-27
+- **docs:** Second refresh pass against the code (no code commits since
+  2026-09-20; `docs/CONFIGURATION.md` still matches every `IRON_*` setting,
+  default and port in `crates/*/src/bin`). `docs/ARCHITECTURE.md` D4 said
+  MD4 was "simply absent"; it now names the `iron_crypto::md4` NETLOGON
+  NTOWF exception, matching the README. No new doc-vs-code gaps beyond the
+  ones #20 (kpasswd, Schannel), #25 (Kubernetes) and #26 (fastetcd mTLS)
+  already track.
 - **docs:** New `docs/CONFIGURATION.md`, taken from the code: every
   binary's `IRON_*` settings with defaults (53 of 62 were undocumented),
   the port map (including the three daemons that default to `:8080`),

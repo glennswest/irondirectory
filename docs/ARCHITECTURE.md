@@ -87,8 +87,12 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
 - **Kerberos enctypes:** AES only. Prefer RFC 8009
   (`aes256-cts-hmac-sha384-192`); `aes256-cts-hmac-sha1-96` acceptable
   (HMAC-SHA1 is FIPS-approved as an HMAC). **RC4-HMAC and DES disabled.**
-- **No NTLM.** MD4/MD5/RC4 are non-FIPS and simply absent. Kerberos +
+- **No NTLM.** MD5/RC4 are non-FIPS and absent. Kerberos +
   SASL/GSSAPI only. (Mirrors rocketsmbd #30 making MD4/RC4 build-optional.)
+  One cited exception (#19): `iron_crypto::md4`, pure Rust and outside the
+  `FipsContext`, computes the NTOWF that MS-NRPC's NETLOGON secure channel
+  requires even in its AES-negotiated form. Everything after that key
+  derivation (HMAC-SHA256, AES-CFB8) stays inside the FIPS boundary.
 - **Directory password storage:** FIPS-approved KDF (PBKDF2 via OpenSSL).
 - **Validated on target 2026-07-06** (roadmap #1): the `ossl` crate's own
   `fips` cargo feature is NOT what provides FIPS compliance here — it
