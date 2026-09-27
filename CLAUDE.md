@@ -226,6 +226,20 @@ built). Earlier passes filed #26 (fastetcd mTLS) and added
 macOS; Schannel auth + `NetrServerPasswordSet2` for Windows) or #25
 (operator golden + `iron-bootstrap`).
 
+## In progress (2026-09-27): #25 irondirectory golden + iron-bootstrap
+
+1. New `crates/bootstrap` (`iron-bootstrap`): waits for fastetcd, then
+   create-only (etcd txn, `version == 0`) writes of: forest registry
+   (`<pid>-config` at `cn=configuration,<base>`, `<pid>-schema`, root domain
+   `<pid>` with realm, NetBIOS name and a fresh domain SID), the base entry,
+   `krbtgt/<REALM>` (random key, RID 502) and `administrator` (userPassword +
+   Kerberos keys from the Secret file, RID 500). Stays resident after.
+   Create-only so concurrent members of one Directory can't race two SIDs.
+2. The golden itself: stormcentral's generic `service`/`binaries` recipes
+   build static musl and carry one repo; this golden needs fastetcd from
+   another repo plus the OS FIPS provider (D4, dynamic libcrypto). Needs a
+   stormcentral recipe + an owner decision on how FIPS ships -- see #25.
+
 ## Locked decisions (see docs/ARCHITECTURE.md)
 
 - **D1** Dedicated fastetcd cluster — never the Kubernetes etcd.
