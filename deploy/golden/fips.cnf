@@ -1,0 +1,21 @@
+# /etc/irondirectory/fips.cnf in the irondirectory golden (#25).
+# Activates the OpenSSL FIPS provider that Fedora's openssl-libs installs
+# (/usr/lib64/ossl-modules/fips.so) for any process started with
+# OPENSSL_CONF=/etc/irondirectory/fips.cnf. base supplies encoders/decoders
+# only; no default provider, so nothing falls back to non-FIPS algorithms.
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+fips = fips_sect
+base = base_sect
+
+[base_sect]
+activate = 1
+
+[fips_sect]
+module = /usr/lib64/ossl-modules/fips.so
+activate = 1
+tls1-prf-ems-check = 1
