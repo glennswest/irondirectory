@@ -42,15 +42,13 @@ die() { echo "build-root: $*" >&2; exit 1; }
 [ "${ID:-}" = fedora ] && [ "${VERSION_ID:-}" = "$FEDORA_RELEASE" ] ||
   die "host is ${ID:-?} ${VERSION_ID:-?}; the binaries must be built on Fedora $FEDORA_RELEASE to match the root's glibc and OpenSSL"
 [ ! -e "$OUT" ] || [ -z "$(ls -A "$OUT")" ] || die "$OUT is not empty"
-# rpm scriptlets write their temp files to the root's /var/tmp.
-mkdir -p "$OUT/var/tmp" "$OUT/tmp"
-chmod 1777 "$OUT/var/tmp" "$OUT/tmp"
-
 echo "== Fedora $FEDORA_RELEASE: $PACKAGES"
 # As fedora-base does it: the host's dnf and repo definitions, its state kept
-# on this build's drive.
+# on this build's drive. --map-auto maps the build user's subordinate ids too:
+# with root alone mapped, `filesystem` cannot give files their declared owners
+# and its failed unpack takes /var/tmp with it.
 # shellcheck disable=SC2086
-unshare -r dnf5 -y -q --installroot="$OUT" --releasever="$FEDORA_RELEASE" --use-host-config \
+unshare --map-root-user --map-auto dnf5 -y -q --installroot="$OUT" --releasever="$FEDORA_RELEASE" --use-host-config \
   --setopt=install_weak_deps=False --setopt=tsflags=nodocs --setopt=countme=0 \
   --setopt=cachedir="$WORK/dnf-cache" --setopt=persistdir="$WORK/dnf-persist" \
   install $PACKAGES > "$WORK/dnf.log" 2>&1 || { tail -20 "$WORK/dnf.log" >&2; die "dnf could not install $PACKAGES"; }
@@ -77,7 +75,8 @@ fi
 install -m 755 "$FASTETCD_BIN" "$OUT/usr/bin/fastetcd"
 
 install -D -m 644 "$HERE/fips.cnf" "$OUT/etc/irondirectory/fips.cnf"
-mkdir -p "$OUT/var/lib/irondirectory" "$OUT/run"
+mkdir -p "$OUT/var/lib/irondirectory" "$OUT/run" "$OUT/tmp"
+chmod 1777 "$OUT/tmp"
 
 # Every shared library the daemons (and fips.so) need must be in the root.
 for f in $BINS; do
