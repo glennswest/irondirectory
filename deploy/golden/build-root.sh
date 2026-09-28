@@ -39,8 +39,10 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/golden.XXXX")
 trap 'rm -rf "$WORK"' EXIT
 die() { echo "build-root: $*" >&2; exit 1; }
 # Root of the tree, as dnf was: Fedora's /usr/bin is mode 555, so every write
-# into it runs as root in the same user namespace.
-asroot() { unshare --map-root-user --map-auto "$@"; }
+# into it runs as root in the same user namespace. Already root (a recipe that
+# runs this in its own namespace, writing straight into a mounted golden):
+# run it as is.
+asroot() { if [ "$(id -u)" = 0 ]; then "$@"; else unshare --map-root-user --map-auto "$@"; fi; }
 
 . /etc/os-release
 [ "${ID:-}" = fedora ] && [ "${VERSION_ID:-}" = "$FEDORA_RELEASE" ] ||
