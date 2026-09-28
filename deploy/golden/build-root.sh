@@ -38,6 +38,9 @@ BINS="iron-ldapd iron-kdcd iron-kdc-ctl iron-bootstrap"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/golden.XXXX")
 trap 'rm -rf "$WORK"' EXIT
 die() { echo "build-root: $*" >&2; exit 1; }
+# Root of the tree, as dnf was: Fedora's /usr/bin is mode 555, so every write
+# into it runs as root in the same user namespace.
+asroot() { unshare --map-root-user --map-auto "$@"; }
 
 . /etc/os-release
 [ "${ID:-}" = fedora ] && [ "${VERSION_ID:-}" = "$FEDORA_RELEASE" ] ||
@@ -51,11 +54,11 @@ echo "== Fedora $FEDORA_RELEASE: $PACKAGES"
 # with root alone mapped, `filesystem` cannot give files their declared owners
 # and its failed unpack takes /var/tmp with it.
 # shellcheck disable=SC2086
-unshare --map-root-user --map-auto dnf5 -y -q --installroot="$OUT" --releasever="$FEDORA_RELEASE" --use-host-config \
+asroot dnf5 -y -q --installroot="$OUT" --releasever="$FEDORA_RELEASE" --use-host-config \
   --setopt=install_weak_deps=False --setopt=tsflags=nodocs --setopt=countme=0 \
   --setopt=cachedir="$WORK/dnf-cache" --setopt=persistdir="$WORK/dnf-persist" \
   install $PACKAGES > "$WORK/dnf.log" 2>&1 || { tail -20 "$WORK/dnf.log" >&2; die "dnf could not install $PACKAGES"; }
-rm -rf "$OUT/var/cache/dnf" "$OUT/var/cache/libdnf5" "$OUT"/var/log/dnf5.log* "$OUT/var/lib/dnf"
+asroot rm -rf "$OUT/var/cache/dnf" "$OUT/var/cache/libdnf5" "$OUT"/var/log/dnf5.log* "$OUT/var/lib/dnf"
 [ -f "$OUT/usr/lib64/ossl-modules/fips.so" ] || die "Fedora $FEDORA_RELEASE's $PACKAGES has no /usr/lib64/ossl-modules/fips.so"
 
 echo "== irondirectory $(git -C "$TOP" rev-parse --short HEAD): $BINS"
@@ -63,7 +66,7 @@ echo "== irondirectory $(git -C "$TOP" rev-parse --short HEAD): $BINS"
   -p iron-ldap --bin iron-ldapd -p iron-kdc --bin iron-kdcd --bin iron-kdc-ctl \
   -p iron-bootstrap --bin iron-bootstrap)
 R=${CARGO_TARGET_DIR:-$TOP/target}/release
-for b in $BINS; do install -m 755 "$R/$b" "$OUT/usr/bin/$b"; done
+for b in $BINS; do asroot install -m 755 "$R/$b" "$OUT/usr/bin/$b"; done
 
 if [ -n "${FASTETCD_BIN:-}" ]; then
   echo "== fastetcd: $FASTETCD_BIN"; fe_src="given: $(sha256sum < "$FASTETCD_BIN" | cut -c1-16)"
@@ -75,11 +78,11 @@ else
   FASTETCD_BIN=$WORK/fe-target/x86_64-unknown-linux-musl/release/fastetcd
   fe_src="$FASTETCD_REF $(git -C "$WORK/fastetcd" rev-parse HEAD)"
 fi
-install -m 755 "$FASTETCD_BIN" "$OUT/usr/bin/fastetcd"
+asroot install -m 755 "$FASTETCD_BIN" "$OUT/usr/bin/fastetcd"
 
-install -D -m 644 "$HERE/fips.cnf" "$OUT/etc/irondirectory/fips.cnf"
-mkdir -p "$OUT/var/lib/irondirectory" "$OUT/run" "$OUT/tmp"
-chmod 1777 "$OUT/tmp"
+asroot install -D -m 644 "$HERE/fips.cnf" "$OUT/etc/irondirectory/fips.cnf"
+asroot mkdir -p "$OUT/var/lib/irondirectory" "$OUT/run" "$OUT/tmp"
+asroot chmod 1777 "$OUT/tmp"
 
 # Every shared library the daemons (and fips.so) need must be in the root.
 for f in $BINS; do
@@ -94,6 +97,6 @@ done
   echo "irondirectory $(git -C "$TOP" rev-parse HEAD)"
   echo "fastetcd $fe_src"
   (cd "$OUT/usr/bin" && sha256sum fastetcd $BINS) | sed 's/^/sha256 /'
-} > "$OUT/etc/irondirectory/golden.txt"
+} | asroot tee "$OUT/etc/irondirectory/golden.txt" >/dev/null
 cat "$OUT/etc/irondirectory/golden.txt"
 echo "== root: $(du -sh "$OUT" | cut -f1) in $OUT"
