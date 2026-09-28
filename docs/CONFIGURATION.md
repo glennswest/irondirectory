@@ -186,9 +186,27 @@ config at `/usr/share/doc/<name>/<name>.conf.example`, and runs
 `iron-config-ctl` and `iron-simulate` are not packaged; run them from a
 `cargo build`.
 
-**Kubernetes:** the planned path is the `irondirectory` stormcos golden,
-run as rustkube pods by irondirectory-operator (#25), not a Helm chart.
-`iron-bootstrap` exists; the golden does not yet (it can't use
-stormcentral's static-musl recipe: the daemons link the OS libcrypto and
-load its FIPS provider). Until then `iron-bootstrap` is build-only, like
-`iron-config-ctl`.
+**Kubernetes: the `irondirectory` golden** (#25), run as rustkube pods by
+irondirectory-operator. It's a Fedora root, not a static-musl build, so the
+FIPS provider is Fedora's own validated `fips.so` (D4). `deploy/golden/build-root.sh <dir>`
+assembles it:
+
+| Path | What |
+|---|---|
+| `/usr/bin/fastetcd` | static musl, built from the tag in `deploy/golden/fastetcd.ref` (or `FASTETCD_BIN`) |
+| `/usr/bin/iron-ldapd`, `iron-kdcd`, `iron-kdc-ctl`, `iron-bootstrap` | glibc release builds |
+| `/usr/lib64/…`, `/usr/lib64/ossl-modules/fips.so` | Fedora `$FEDORA_RELEASE`'s `glibc` + `openssl-libs` and their dependencies, installed by `dnf --installroot` |
+| `/etc/irondirectory/fips.cnf` | `OPENSSL_CONF` for every daemon (FIPS + base providers only) |
+| `/etc/irondirectory/golden.txt` | Fedora release, rpm versions, both commits, sha256 of each binary |
+| `/var/lib/irondirectory`, `/tmp`, `/run` | empty |
+
+The golden has no entrypoint or environment; the operator names every
+command and setting. It is rebuilt when `FEDORA_RELEASE` (default 43)
+changes, and must be built on a host of that release, since the binaries
+link against its glibc and OpenSSL. The script needs dnf5, rustup (with the
+musl target), protoc, musl-gcc and a `/etc/subuid`/`/etc/subgid` range: dnf
+runs as root inside a user namespace, no real root. `test/golden-e2e.sh <dir>`
+is its acceptance test. It runs fastetcd, iron-ldapd, iron-kdcd and
+iron-bootstrap chrooted into the tree with an empty environment, checks
+`ldapwhoami` and `kinit` for the administrator, then restarts everything on the
+same data with a changed password file.

@@ -6,6 +6,15 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-09-28
+- **feat(golden):** `deploy/golden/build-root.sh` assembles the
+  `irondirectory` golden's root (#25). It is a Fedora root built with dnf
+  (glibc + openssl-libs, so the FIPS provider is Fedora's validated
+  `fips.so`), with fastetcd, iron-ldapd, iron-kdcd, iron-kdc-ctl,
+  iron-bootstrap and `/etc/irondirectory/fips.cnf`. It is rebuilt when the
+  Fedora release changes. `test/golden-e2e.sh` runs the daemons inside it
+  and checks ldapwhoami, kinit and a restart on the same data.
+- **fix(test):** `bootstrap-e2e.sh`'s krb5.conf realm stanza is now on
+  separate lines; MIT's parser did not find the KDC in the one-line form.
 - **fix(build):** A plain `cargo test` now passes on the build box (#29).
   `.cargo/config.toml` points `OPENSSL_CONF` at the checked-in FIPS config
   for everything cargo runs (an existing `OPENSSL_CONF` wins); without it

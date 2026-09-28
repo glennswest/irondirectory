@@ -248,14 +248,15 @@ waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
    stormcos's fedora-base: `dnf --installroot --releasever=$FEDORA_RELEASE`
    installs Fedora's own glibc + openssl-libs (fips.so) into the root,
    and the golden is rebuilt when the Fedora release changes.
-   - [ ] `deploy/golden/build-root.sh <dir>`: glibc release build of the
+   - [x] `deploy/golden/build-root.sh <dir>`: glibc release build of the
          four binaries on a host of the same Fedora release, dnf installroot,
          fastetcd (pinned tag, static musl; or `FASTETCD_BIN`),
          `/etc/irondirectory/fips.cnf`, a manifest. Repo-owned so the
          stormcos recipe is just "run it, `golden_from_dir`".
-   - [ ] `test/golden-e2e.sh`: runs fastetcd + ldapd + kdcd + bootstrap
+   - [x] `test/golden-e2e.sh`: runs fastetcd + ldapd + kdcd + bootstrap
          inside that root only (`unshare -r --root`, `env -i`), checks
-         ldapwhoami/kinit, restarts on the same data.
+         ldapwhoami/kinit, restarts on the same data. PASSED on dev via
+         sc-build at 41abdac (113 MB root, F43 glibc 2.42, openssl-libs 3.5.8).
    - [ ] File the stormcos recipe issue + comment stormcentral#78; propose
          #25 after them.
 
