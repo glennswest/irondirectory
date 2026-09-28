@@ -61,7 +61,9 @@ cat > "$W/krb5.conf" <<K
     dns_lookup_realm = false
     udp_preference_limit = 1
 [realms]
-    $REALM = { kdc = 127.0.0.1:13088 }
+    $REALM = {
+        kdc = 127.0.0.1:13088
+    }
 K
 export KRB5_CONFIG=$W/krb5.conf KRB5CCNAME=FILE:$W/cc
 
