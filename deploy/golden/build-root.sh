@@ -42,7 +42,9 @@ die() { echo "build-root: $*" >&2; exit 1; }
 [ "${ID:-}" = fedora ] && [ "${VERSION_ID:-}" = "$FEDORA_RELEASE" ] ||
   die "host is ${ID:-?} ${VERSION_ID:-?}; the binaries must be built on Fedora $FEDORA_RELEASE to match the root's glibc and OpenSSL"
 [ ! -e "$OUT" ] || [ -z "$(ls -A "$OUT")" ] || die "$OUT is not empty"
-mkdir -p "$OUT"
+# rpm scriptlets write their temp files to the root's /var/tmp.
+mkdir -p "$OUT/var/tmp" "$OUT/tmp"
+chmod 1777 "$OUT/var/tmp" "$OUT/tmp"
 
 echo "== Fedora $FEDORA_RELEASE: $PACKAGES"
 # As fedora-base does it: the host's dnf and repo definitions, its state kept
@@ -75,8 +77,7 @@ fi
 install -m 755 "$FASTETCD_BIN" "$OUT/usr/bin/fastetcd"
 
 install -D -m 644 "$HERE/fips.cnf" "$OUT/etc/irondirectory/fips.cnf"
-mkdir -p "$OUT/var/lib/irondirectory" "$OUT/run" "$OUT/tmp"
-chmod 1777 "$OUT/tmp"
+mkdir -p "$OUT/var/lib/irondirectory" "$OUT/run"
 
 # Every shared library the daemons (and fips.so) need must be in the root.
 for f in $BINS; do
