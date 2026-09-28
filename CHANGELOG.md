@@ -13,6 +13,8 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 - **fix(test):** `iron-bootstrap`'s live test gives fastetcd 30 s instead of
   waiting for ever, so an unreachable endpoint fails the test rather than
   holding a build slot (#29).
+- **docs(build):** `docs/build-timings/` holds dev's `--timings` reports:
+  a clean `cargo build && cargo test` takes 31 s (#29).
 ### 2026-09-27
 - **feat(bootstrap):** New `iron-bootstrap` (#25): idempotent first-boot
   provisioning for irondirectory-operator pods. Waits for fastetcd, then
