@@ -233,7 +233,7 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
-## In progress (2026-09-27): #25 irondirectory golden + iron-bootstrap irondirectory golden + iron-bootstrap
+## Waiting on stormcos#172 (2026-09-28): #25 irondirectory golden + iron-bootstrap irondirectory golden + iron-bootstrap
 
 1. New `crates/bootstrap` (`iron-bootstrap`): waits for fastetcd, then
    create-only (etcd txn, `version == 0`) writes of: forest registry
@@ -257,8 +257,13 @@ waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
          inside that root only (`unshare -r --root`, `env -i`), checks
          ldapwhoami/kinit, restarts on the same data. PASSED on dev via
          sc-build at 41abdac (113 MB root, F43 glibc 2.42, openssl-libs 3.5.8).
-   - [ ] File the stormcos recipe issue + comment stormcentral#78; propose
-         #25 after them.
+   - [x] Filed stormcos#172 (stage golden calling build-root.sh, FASTETCD_BIN
+         from its own fastetcd build, FEDORA_RELEASE in the key); commented
+         stormcentral#78 (register as `special` + stage source); proposed
+         #25 after stormcos#172.
+   - [ ] When the golden exists (`stormcentral component list` shows
+         `irondirectory`): run the issue's pod acceptance (operator#1's live
+         test), then close #25.
 
 ## Locked decisions (see docs/ARCHITECTURE.md)
 
