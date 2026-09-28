@@ -226,7 +226,15 @@ built). Earlier passes filed #26 (fastetcd mTLS) and added
 macOS; Schannel auth + `NetrServerPasswordSet2` for Windows) or #25
 (operator golden + `iron-bootstrap`).
 
-## In progress (2026-09-27): #25 irondirectory golden + iron-bootstrap
+## In progress (2026-09-28): #29 P0 build time on dev
+
+A full build held a dev slot 1h37m. No `[profile.*]` overrides, no build.rs,
+few duplicate crates (Cargo.lock), so the cause needs a real profile:
+`cargo build --timings` + `cargo test --no-run --timings` via sc-build, the
+report committed under `docs/build-timings/`. Then fix what it shows and
+re-measure. Done when `cargo build && cargo test` is well under an hour.
+
+## Paused (2026-09-27): #25 irondirectory golden + iron-bootstrap
 
 1. New `crates/bootstrap` (`iron-bootstrap`): waits for fastetcd, then
    create-only (etcd txn, `version == 0`) writes of: forest registry
