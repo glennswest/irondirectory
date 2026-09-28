@@ -77,7 +77,8 @@ check() { # <password that must work> <one that must not>
 
 echo "== golden: $(grep -E '^(fedora|rpm|irondirectory|fastetcd) ' "$ROOT/etc/irondirectory/golden.txt" | tr '\n' ';')"
 start_all 1
-grep -o 'created=.*' "$W/bootstrap1.log" | head -1
+# tracing colours its field names; strip that before reading the log.
+sed 's/\x1b\[[0-9;]*m//g' "$W/bootstrap1.log" | grep -o 'created=.*' | head -1 || true
 check "$PW" 'WrongPass999!'
 kill -0 "${pids[1]}" || fail "iron-bootstrap did not stay resident"
 echo "== iron-bootstrap resident after provisioning"
