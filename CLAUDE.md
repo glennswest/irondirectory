@@ -242,16 +242,22 @@ waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
    `krbtgt/<REALM>` (random key, RID 502) and `administrator` (userPassword +
    Kerberos keys from the Secret file, RID 500). Stays resident after.
    Create-only so concurrent members of one Directory can't race two SIDs.
-2. The golden itself -- **blocked on an owner decision (2026-09-28)**.
-   stormcentral's `service`/`binaries` recipes (`src/goldens.rs`
-   COMPONENT_BUILD) build the whole workspace for x86_64-unknown-linux-musl
-   and ship one binary named after the component, from one repo, with no
-   repo files and no shared libraries. This golden needs five binaries,
-   fastetcd from a second repo, `/etc/irondirectory/fips.cnf`, and
-   glibc + libcrypto + the OS `fips.so` (D4). Only a new stormcentral
-   recipe or a stormcos `special` stage recipe (like stormpump's ldd copy
-   or the fedora dnf --installroot golden) can build it. Registration is
-   stormcentral#78. Owner decides how FIPS ships and which recipe.
+2. The golden itself. **Owner decision (2026-09-28): FIPS from Fedora** --
+   "use fips from fedora, you can make a golden bin, and update it when
+   fedora version changes. We already do that for other things." So, like
+   stormcos's fedora-base: `dnf --installroot --releasever=$FEDORA_RELEASE`
+   installs Fedora's own glibc + openssl-libs (fips.so) into the root,
+   and the golden is rebuilt when the Fedora release changes.
+   - [ ] `deploy/golden/build-root.sh <dir>`: glibc release build of the
+         four binaries on a host of the same Fedora release, dnf installroot,
+         fastetcd (pinned tag, static musl; or `FASTETCD_BIN`),
+         `/etc/irondirectory/fips.cnf`, a manifest. Repo-owned so the
+         stormcos recipe is just "run it, `golden_from_dir`".
+   - [ ] `test/golden-e2e.sh`: runs fastetcd + ldapd + kdcd + bootstrap
+         inside that root only (`unshare -r --root`, `env -i`), checks
+         ldapwhoami/kinit, restarts on the same data.
+   - [ ] File the stormcos recipe issue + comment stormcentral#78; propose
+         #25 after them.
 
 ## Locked decisions (see docs/ARCHITECTURE.md)
 
