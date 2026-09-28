@@ -20,7 +20,8 @@
 #
 # Run from a checkout on a Fedora $FEDORA_RELEASE host (the binaries link
 # against that release's glibc/OpenSSL ABI) with rustup, protoc, musl-gcc and
-# dnf5; no root: dnf runs as root inside a user namespace (`unshare -r`).
+# dnf5; no root: dnf runs as root inside a user namespace (`unshare
+# --map-auto`, which needs the user's /etc/subuid and /etc/subgid ranges).
 #
 #   FEDORA_RELEASE   Fedora release of the root (default 43, stormcos's)
 #   FASTETCD_BIN     use this fastetcd binary instead of building FASTETCD_REF
@@ -42,6 +43,8 @@ die() { echo "build-root: $*" >&2; exit 1; }
 [ "${ID:-}" = fedora ] && [ "${VERSION_ID:-}" = "$FEDORA_RELEASE" ] ||
   die "host is ${ID:-?} ${VERSION_ID:-?}; the binaries must be built on Fedora $FEDORA_RELEASE to match the root's glibc and OpenSSL"
 [ ! -e "$OUT" ] || [ -z "$(ls -A "$OUT")" ] || die "$OUT is not empty"
+mkdir -p "$OUT"
+
 echo "== Fedora $FEDORA_RELEASE: $PACKAGES"
 # As fedora-base does it: the host's dnf and repo definitions, its state kept
 # on this build's drive. --map-auto maps the build user's subordinate ids too:
