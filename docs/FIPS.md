@@ -159,8 +159,17 @@ Needs `openssl-devel` (Fedora/RHEL) or `libssl-dev` (Debian), plus `clang`
 above) lives at `crates/crypto/testdata/fips-dev.cnf`:
 
 ```sh
-OPENSSL_CONF=$(pwd)/crates/crypto/testdata/fips-dev.cnf cargo test -p iron-crypto
+cargo test            # whole workspace
+cargo test -p iron-crypto
 ```
+
+`.cargo/config.toml` sets `OPENSSL_CONF` to that file for everything cargo
+runs (tests, `cargo run`), unless `OPENSSL_CONF` is already set (#29). So a
+plain `cargo test` — which is what `sc-build` runs on dev — uses the FIPS
+provider without any setup. Without it, `FipsContext::new()` fails closed
+in every test; when those failures happen on many test threads at once
+the `iron-crypto` test binary has crashed with SIGSEGV rather than
+reporting them, so a crash there means "no FIPS config", not a crypto bug.
 
 ## What's deliberately out of scope here
 

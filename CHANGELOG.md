@@ -5,6 +5,14 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-09-28
+- **fix(build):** A plain `cargo test` now passes on the build box (#29).
+  `.cargo/config.toml` points `OPENSSL_CONF` at the checked-in FIPS config
+  for everything cargo runs (an existing `OPENSSL_CONF` wins); without it
+  the `iron-crypto` tests crashed with SIGSEGV.
+- **fix(test):** `iron-bootstrap`'s live test gives fastetcd 30 s instead of
+  waiting for ever, so an unreachable endpoint fails the test rather than
+  holding a build slot (#29).
 ### 2026-09-27
 - **feat(bootstrap):** New `iron-bootstrap` (#25): idempotent first-boot
   provisioning for irondirectory-operator pods. Waits for fastetcd, then

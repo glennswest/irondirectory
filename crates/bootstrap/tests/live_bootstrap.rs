@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use iron_bootstrap::{provision, wait_for_store, Settings};
+use iron_store::store::Store;
 use iron_partition::Dn;
 
 fn settings(endpoint: &str, pid: &str) -> Settings {
@@ -26,6 +27,16 @@ async fn cleanup(endpoint: &str, pid: &str) {
     }
 }
 
+/// `wait_for_store` retries for ever (a member waits for fastetcd); a test
+/// must not. An unreachable endpoint fails the test instead of holding a
+/// build slot (#29: a run of this crate's tests sat for 56 minutes).
+async fn store(s: &Settings) -> Store {
+    tokio::time::timeout(Duration::from_secs(30), wait_for_store(s, Duration::from_millis(200)))
+        .await
+        .unwrap_or_else(|_| panic!("fastetcd at {} not reachable within 30s", s.endpoint))
+        .unwrap()
+}
+
 #[tokio::test]
 #[ignore]
 async fn concurrent_members_agree_and_a_rerun_does_nothing() {
@@ -41,7 +52,7 @@ async fn concurrent_members_agree_and_a_rerun_does_nothing() {
     for _ in 0..3 {
         let s = s.clone();
         tasks.push(tokio::spawn(async move {
-            let mut store = wait_for_store(&s, Duration::from_millis(200)).await.unwrap();
+            let mut store = store(&s).await;
             provision(&mut store, &s).await.unwrap()
         }));
     }
@@ -57,7 +68,7 @@ async fn concurrent_members_agree_and_a_rerun_does_nothing() {
     assert_eq!(admins, 1, "administrator created {admins} times: {reports:?}");
 
     // The administrator binds by password and has Kerberos keys.
-    let mut store = wait_for_store(&s, Duration::from_millis(200)).await.unwrap();
+    let mut store = store(&s).await;
     let entry = store.get_entry(&s.admin_dn().unwrap()).await.unwrap().expect("administrator entry");
     let fips = iron_crypto::FipsContext::new().unwrap();
     let stored = &entry.get("userpassword").unwrap()[0];

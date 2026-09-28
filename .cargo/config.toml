@@ -1,0 +1,8 @@
+# Processes cargo runs (tests, `cargo run`) get the checked-in FIPS provider
+# config, so a plain `cargo test` works on any Fedora/RHEL host with the OS's
+# fips.so (#29). Without it every FipsContext::new() fails closed, and the
+# parallel iron-crypto tests crashed (SIGSEGV) instead of just failing.
+# An OPENSSL_CONF already in the environment wins (force = false). Installed
+# daemons never see this; they set OPENSSL_CONF in their own config.
+[env]
+OPENSSL_CONF = { value = "crates/crypto/testdata/fips-dev.cnf", relative = true, force = false }
