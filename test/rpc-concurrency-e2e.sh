@@ -24,7 +24,7 @@ REALM="$(echo "$PID_ID" | tr a-z A-Z).EXAMPLE.LO"
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
-fail() { echo "FAIL: $*"; for f in "$W"/*.log; do echo "--- $f"; tail -20 "$f"; done; exit 1; }
+fail() { echo "FAIL: $*"; for f in "$W"/*.log; do echo "--- $f"; grep -v "error_code=25 " "$f" | tail -20; done; exit 1; }
 
 curl -fsSL "https://github.com/glennswest/fastetcd/releases/download/v$FV/fastetcd-v$FV-x86_64-linux-musl.tar.gz" | tar -xz -C "$W"
 FE=$W/fastetcd-v$FV-x86_64-linux/fastetcd
@@ -75,6 +75,12 @@ rc=$?
 set -e
 grep -E '^FAIL' "$W/simulate.out" | sed 's/SIMPC[0-9]*\$/SIMPC*/' | sort | uniq -c || true
 tail -1 "$W/simulate.out"
-if [ -s "$W/rpcd.log" ]; then echo "-- iron-rpcd warnings:"; sed 's/\x1b\[[0-9;]*m//g' "$W/rpcd.log" | grep -oE '(WARN|ERROR).*' | sed 's/SIMPC[0-9]*\$/SIMPC*/g' | sort | uniq -c | head -20; fi
+# What the daemons said about it (iron-kdcd logs every KRB-ERROR; 25,
+# PREAUTH_REQUIRED, is the normal first round of every AS exchange).
+for d in rpcd kdcd; do
+  echo "-- iron-$d warnings and errors:"
+  sed 's/\x1b\[[0-9;]*m//g' "$W/$d.log" | grep -E 'WARN|ERROR|KRB-ERROR' | grep -v 'error_code=25 ' |
+    sed -E 's/^[^ ]+ +//; s/SIMPC[0-9]*\$/SIMPC*/g' | sort | uniq -c | head -20 || true
+done
 [ "$rc" -eq 0 ] || fail "iron-simulate join $COUNT on fastetcd $FV: not every join succeeded"
 echo "PASS: $COUNT/$COUNT concurrent joins on fastetcd $FV"
