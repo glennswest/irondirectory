@@ -6,6 +6,24 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-10-06
+- **feat(kdc):** kpasswd, RFC 3244 change/set password, on 464 UDP and TCP
+  (`IRON_KDC_KPASSWD_LISTEN`, `off` disables it) (#20). This is what macOS
+  `dsconfigad` uses to set the password of the computer account it created
+  over LDAP, and what MIT `kpasswd` uses. Version 1 (change own) and 0xff80
+  (set, with an optional target). A `kadmin/changepw` ticket is read with
+  the krbtgt key, as in AD. Changing your own password needs an INITIAL
+  ticket; setting another's needs RID 500 or Domain Admins (RID 512). A
+  target with no Kerberos name yet is found by `sAMAccountName`. AS-REQ
+  now honours `sname = kadmin/changepw` with a 5-minute ticket, and TGS-REQ
+  issues one too.
+- **fix(kdc):** AS tickets carry the real INITIAL and PRE-AUTHENT flag bits
+  (9 and 10 of 32). `rasn-kerberos`'s `TicketFlags::initial()` set bit 0.
+- **fix(ldap):** `iron-ldapd` indexes with the KDC's spec (now including
+  `samaccountname`). A Kerberos key set over LDAP (RFC 3062) was never
+  findable by the KDC, since `krbprincipalname` wasn't indexed.
+- **test:** `test/kpasswd-e2e.sh`: real MIT `kpasswd` over UDP and TCP,
+  plus impacket's set-password (0xff80) on a computer created with
+  `ldapadd`. Every e2e script gives iron-kdcd a high kpasswd port.
 - **fix(rpc):** A failed call said why (#24). Every handler failure used
   to come back as an unlogged `nca_unk_if`. Now an unknown opnum is
   `nca_op_rng_error` and an undecodable stub is `nca_s_fault_ndr`. A
