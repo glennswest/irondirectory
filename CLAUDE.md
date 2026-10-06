@@ -233,19 +233,12 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
-## In progress (2026-10-06): #27 LDAP filters
+## Done (2026-10-06): #27 LDAP filters
 
-- [ ] `filter.rs`: RFC 4511 §4.5.1.7 three-valued evaluation (TRUE/FALSE/
-      Undefined; NOT of Undefined stays Undefined). Substrings (initial/any/
-      final), `>=`/`<=` (numeric when both sides are integers, else
-      case-ignore string order), approx (= case-ignore equality after
-      whitespace folding), extensible: AD bitwise AND/OR (…4.803/…4.804,
-      what SSSD's AD provider sends), caseIgnore/caseExact/integer/OID
-      match, no rule = the attribute's equality; an unknown rule is
-      Undefined, as the RFC says (so `!(x:9.9:=y)` no longer matches all).
-- [ ] search: the size limit counts matches, not candidates, and says
-      `sizeLimitExceeded` (it used to drop matches past the first N entries).
-- [ ] Verify with real `ldapsearch` against iron-ldapd + iron-gcd on dev.
+Every RFC 4511 filter kind is evaluated by `crates/ldap/src/filter.rs`
+(three-valued; AD bitwise rules; unknown rules Undefined), shared with
+iron-gc; the size limit counts returned entries. `test/ldap-filters-e2e.sh`
+checks each kind with real `ldapsearch` on iron-ldapd and iron-gcd.
 
 ## Waiting on the owner (2026-10-06): #20
 
