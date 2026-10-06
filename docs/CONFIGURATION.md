@@ -68,7 +68,7 @@ TLS is pinned to groups P-256/P-384/P-521.
 | `IRON_KDC_BASE_DN` | required | base DN |
 | `IRON_KDC_REALM` | required | realm, e.g. `G10.LO` |
 | `IRON_KDC_LISTEN` | `0.0.0.0:88` | bound for both UDP and TCP |
-| `IRON_KDC_CONFIG_FASTETCD_ENDPOINT`, `_CONFIG_PARTITION_ID`, `_CONFIG_BASE_DN` | unset | forest registry for one-hop cross-realm referral tickets |
+| `IRON_KDC_CONFIG_FASTETCD_ENDPOINT`, `_CONFIG_PARTITION_ID`, `_CONFIG_BASE_DN` | unset | forest registry: one-hop cross-realm referral tickets, and the domain SID a PAC needs (unset: tickets carry no PAC) |
 
 Enctypes: AES only (RFC 3962, RFC 8009).
 
