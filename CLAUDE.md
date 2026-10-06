@@ -407,8 +407,7 @@ BER — only the outer message tag+length framing is hand-written
 small and avoids depending on a third-party decoder's incomplete-vs-
 malformed error semantics). Implemented: rootDSE (`namingContexts` from
 `PartitionRegistry`), anonymous simple bind, search (base/one/subtree
-scope; filter kinds present/equality/and/or/not — substrings/ordering/
-approx/extensible conservatively evaluate false, not an error), add,
+scope; every RFC 4511 filter kind since #27, see `filter.rs`), add,
 delete. Every op without an implementation still sends back a defined
 error response (`UnwillingToPerform`/`ProtocolError`) rather than
 dropping the request — found via `ldapwhoami` (sends an Extended WhoAmI
@@ -1856,8 +1855,8 @@ it committed to git (runtime/environment state, not code):
       operator runs as rustkube pods. This replaces the earlier
       Helm-chart/OpenShift-Operator idea. `iron-ldapd`'s `:8080` `/health`
       is the readiness probe.
-- [ ] LDAP substring/ordering/approx filter matching (#27); D2's USN/
-      persistent search/leases (#28, docs mark them unbuilt).
+- [x] LDAP substring/ordering/approx/extensible filter matching (#27).
+- [ ] D2's USN/persistent search/leases (#28, docs mark them unbuilt).
 - [ ] **fastetcd mTLS from the daemons (#26):** every binary builds a
       plaintext `ClusterRef`; add optional CA/cert/key settings.
 - Current settings, ports and packaging are in `docs/CONFIGURATION.md`;

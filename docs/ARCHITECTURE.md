@@ -56,9 +56,10 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
 - **Secondary indexes** are companion keys maintained atomically with the object
   write inside a single etcd `Txn` (compare-and-set on revision):
   - `/iron/<partition-id>/idx/<attr>/<value>/<dn>` → presence/equality lookups.
-  - Substring/approx indexes layered as needed. *As built:* substring,
-    ordering, approx and extensible filters are not evaluated at all (they
-    match nothing, #27).
+  - Substring/approx indexes layered as needed. *As built:* every filter
+    kind is evaluated by scanning the search scope (RFC 4511 three-valued
+    logic, `crates/ldap/src/filter.rs`, #27). No index is used, not even
+    for equality; one is added when scale needs it.
 - **USN equivalent:** etcd MVCC `mod_revision` is the natural change sequence
   number for syncrepl/persistent-search.
 - **Change notification:** etcd **Watch** drives LDAP persistent search /

@@ -31,8 +31,9 @@ or Samba domain controller.
 > mTLS connection harness), `iron-crypto` (FIPS crypto facade over `ossl`,
 > incl. PBKDF2 password hashing, Kerberos AES key derivation/encryption, and
 > **ES256 asymmetric signing**), `iron-ldap` (rootDSE, anonymous + authenticated
-> bind, **SASL/GSSAPI bind**, search (present/equality/and/or/not
-> filters; substring/ordering filters match nothing yet, #27), add/delete/modify/compare/modify-DN,
+> bind, **SASL/GSSAPI bind**, search (every RFC 4511 filter kind:
+> present/equality/substrings/ordering/approx/and/or/not, and extensible matches
+> including AD's bitwise rules, by scanning; #27), add/delete/modify/compare/modify-DN,
 > StartTLS/LDAPS, **RFC 4532 WhoAmI**, **registry-driven cross-NC referrals
 > chased one hop end-to-end**, AD/RFC 2307 schema validation), `iron-kdc`
 > (Kerberos 5 KDC: AS-REQ/AS-REP with pre-auth,

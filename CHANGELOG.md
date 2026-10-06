@@ -6,6 +6,24 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-10-06
+- **feat(ldap):** Substring, ordering (`>=`/`<=`), approx and extensible
+  filters are evaluated (#27); all four used to be a silent false.
+  - Evaluation follows RFC 4511's three-valued logic, so a NOT over an
+    unknown matching rule matches nothing, not everything.
+  - Ordering is numeric when both sides are integers (`uidNumber>=1000`
+    no longer matches 900), else case-ignore string order. Approx is
+    case-ignore equality.
+  - Extensible matches support AD's bitwise AND/OR
+    (`1.2.840.113556.1.4.803`/`.804`, what SSSD's AD provider sends) and
+    caseIgnore/caseExact/integer/OID match. Any other rule is Undefined.
+  - Equality now also ignores insignificant spaces. iron-gc shares the
+    same code.
+- **fix(ldap,gc):** The search size limit counts returned entries, and
+  ends with `sizeLimitExceeded` when more match. It used to cut the
+  candidate list before filtering, so matches past the first N entries
+  were dropped and the search still said success.
+- **test:** `test/ldap-filters-e2e.sh` runs each filter kind through real
+  `ldapsearch` against iron-ldapd and iron-gcd.
 - **feat(kdc):** kpasswd, RFC 3244 change/set password, on 464 UDP and TCP
   (`IRON_KDC_KPASSWD_LISTEN`, `off` disables it) (#20). This is what macOS
   `dsconfigad` uses to set the password of the computer account it created
