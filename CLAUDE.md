@@ -233,6 +233,22 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
+## In progress (2026-10-06): #24 concurrency failures under `iron-simulate join 25`
+
+Hypothesis: both failure modes are fastetcd < v1.0.0 serving default
+(linearizable) reads from a follower's local state (fastetcd#10, fixed in
+v1.0.0, 2026-07-19; #24 was found on v0.8.x on 2026-07-15). The harness and
+iron-rpcd reach `etcd.g8.lo` (3 A records) on different members, so the
+harness misses SAMR's write ("no such account") and NETLOGON misses the
+harness's NTOWF write; iron-rpc turns that `None` into `FAULT_UNK_IF`, unlogged.
+- [ ] iron-rpc: log why a call failed; unknown opnum → `nca_op_rng_error`,
+      NETLOGON auth failure → `STATUS_ACCESS_DENIED`, not `nca_unk_if`.
+- [ ] iron-simulate exits non-zero when any join fails.
+- [ ] `test/rpc-concurrency-e2e.sh`: a throwaway 3-member fastetcd (release
+      tarball, `FASTETCD_VERSION`), daemons on member 1, harness on member 2.
+      Run on v0.8.1 (expect failures) and v1.2.0 (expect 25/25) via sc-build.
+      (The shared dm1/dm2/dm3 cluster doesn't answer from dev today.)
+
 ## Waiting on stormcentral#78 (2026-10-06): #25 irondirectory golden + iron-bootstrap
 
 1. `crates/bootstrap` (`iron-bootstrap`): done (create-only forest registry,
