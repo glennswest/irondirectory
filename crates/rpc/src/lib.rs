@@ -39,3 +39,24 @@ pub mod pdu;
 pub mod samr;
 pub mod server;
 pub mod uuid;
+
+/// Why a call produced no response stub. [`server`] turns it into a
+/// `fault` PDU: an opnum the bound interface doesn't implement is
+/// `nca_op_rng_error`, a stub that doesn't decode is `nca_s_fault_ndr`.
+/// A call that decodes but fails (no such account, a wrong credential, a
+/// store error) is not a `CallError`: it answers with an NTSTATUS in the
+/// response stub, as Windows does, and is logged (#24 -- every failure
+/// used to come back as an unlogged `nca_unk_if`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallError {
+    UnknownOpnum,
+    Malformed,
+}
+
+/// NTSTATUS values the handlers answer with.
+pub mod ntstatus {
+    pub const SUCCESS: u32 = 0;
+    pub const ACCESS_DENIED: u32 = 0xC000_0022;
+    pub const USER_EXISTS: u32 = 0xC000_0063;
+    pub const INTERNAL_DB_ERROR: u32 = 0xC000_0158;
+}

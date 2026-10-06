@@ -31,7 +31,7 @@ pub async fn req_challenge(client: &mut RpcClient, computer_name: &str, client_c
     let server_challenge: [u8; 8] = r.bytes(8).map_err(|_| m())?.try_into().map_err(|_| m())?;
     let status = r.u32().map_err(|_| m())?;
     if status != 0 {
-        return Err(RpcClientError::Fault(status));
+        return Err(RpcClientError::Status(status));
     }
     Ok(server_challenge)
 }
@@ -70,7 +70,7 @@ pub async fn authenticate3(
     let _account_rid = r.u32().map_err(|_| m())?;
     let status = r.u32().map_err(|_| m())?;
     if status != 0 {
-        return Err(RpcClientError::Fault(status));
+        return Err(RpcClientError::Status(status));
     }
 
     let expected_server_credential = netlogon::compute_credential(fips, &session_key, server_challenge).map_err(|_| m())?;

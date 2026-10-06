@@ -25,8 +25,12 @@ pub const PFC_LAST_FRAG: u8 = 0x02;
 /// stub data" fault; a more precise per-opnum fault code isn't worth
 /// modeling for a happy-path server.
 pub const FAULT_NDR: u32 = 0x0000_06F7;
-/// `nca_unk_if` (0x1C010003) -- unknown interface/opnum.
+/// `nca_unk_if` (0x1C010003) -- a request on a presentation context no
+/// `bind` accepted.
 pub const FAULT_UNK_IF: u32 = 0x1C01_0003;
+/// `nca_op_rng_error` (0x1C010002) -- an opnum the bound interface
+/// doesn't implement.
+pub const FAULT_OP_RNG_ERROR: u32 = 0x1C01_0002;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PduError {

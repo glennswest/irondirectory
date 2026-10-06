@@ -16,6 +16,8 @@ pub enum RpcClientError {
     Malformed,
     #[error("RPC fault: NCA status 0x{0:08x}")]
     Fault(u32),
+    #[error("call failed: NTSTATUS 0x{0:08x}")]
+    Status(u32),
     #[error("connection closed unexpectedly")]
     ConnectionClosed,
 }

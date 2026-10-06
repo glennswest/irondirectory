@@ -22,6 +22,7 @@ use iron_store::store::Store;
 use tokio::sync::Mutex;
 
 use crate::ndr::{NdrReader, NdrWriter};
+use crate::{ntstatus, CallError};
 
 pub const OPNUM_CLOSE_HANDLE: u16 = 1;
 pub const OPNUM_LOOKUP_DOMAIN: u16 = 5;
@@ -54,18 +55,21 @@ pub struct SamrState {
     pub index_spec: IndexSpec,
 }
 
-pub async fn dispatch(state: &SamrState, domain_sid: &Sid, opnum: u16, stub: &[u8]) -> Option<Vec<u8>> {
-    match opnum {
+/// `Ok` is the response stub; a handler's `None` means its stub didn't
+/// decode.
+pub async fn dispatch(state: &SamrState, domain_sid: &Sid, opnum: u16, stub: &[u8]) -> Result<Vec<u8>, CallError> {
+    let response = match opnum {
         OPNUM_CONNECT5 => Some(connect5()),
         OPNUM_LOOKUP_DOMAIN => Some(lookup_domain_in_sam_server(domain_sid)),
         OPNUM_OPEN_DOMAIN => Some(open_domain()),
         OPNUM_LOOKUP_NAMES => lookup_names_in_domain(state, stub).await,
         OPNUM_CREATE_USER2_IN_DOMAIN => create_user2_in_domain(state, domain_sid, stub).await,
-        OPNUM_OPEN_USER => Some(open_user(stub)?),
+        OPNUM_OPEN_USER => open_user(stub),
         OPNUM_QUERY_INFORMATION_USER2 => query_information_user2(state, domain_sid, stub).await,
         OPNUM_CLOSE_HANDLE => Some(close_handle()),
-        _ => None,
-    }
+        _ => return Err(CallError::UnknownOpnum),
+    };
+    response.ok_or(CallError::Malformed)
 }
 
 fn connect5() -> Vec<u8> {
@@ -145,14 +149,21 @@ async fn lookup_names_in_domain(state: &SamrState, stub: &[u8]) -> Option<Vec<u8
     let mut rids = Vec::with_capacity(names.len());
     let mut uses = Vec::with_capacity(names.len());
     for name in &names {
-        let dns = store.lookup_by_index(&state.base_dn, "cn", name).await.unwrap_or_default();
+        let dns = store.lookup_by_index(&state.base_dn, "cn", name).await.unwrap_or_else(|e| {
+            tracing::warn!(name, "SamrLookupNamesInDomain: index lookup failed: {e}");
+            Vec::new()
+        });
         let mut found = None;
         for dn in dns {
-            if let Ok(Some(entry)) = store.get_entry(&dn).await {
-                if let Some(rid) = object_rid(&entry) {
-                    found = Some(rid);
-                    break;
+            match store.get_entry(&dn).await {
+                Ok(Some(entry)) => {
+                    if let Some(rid) = object_rid(&entry) {
+                        found = Some(rid);
+                        break;
+                    }
                 }
+                Ok(None) => {}
+                Err(e) => tracing::warn!(%dn, "SamrLookupNamesInDomain: read failed: {e}"),
             }
         }
         match found {
@@ -205,7 +216,13 @@ async fn create_user2_in_domain(state: &SamrState, domain_sid: &Sid, stub: &[u8]
 
     let dn = Dn::parse(&format!("cn={name},{}", state.base_dn)).ok()?;
     let mut store = state.store.lock().await;
-    let rid = store.allocate_rid(&dn).await.ok()?;
+    let rid = match store.allocate_rid(&dn).await {
+        Ok(rid) => rid,
+        Err(e) => {
+            tracing::warn!(%dn, "SamrCreateUser2InDomain: RID allocation failed: {e}");
+            return Some(create_user2_response(0, ntstatus::INTERNAL_DB_ERROR));
+        }
+    };
     let object_sid = domain_sid.with_sub_authority(rid);
 
     let mut entry = Entry::new();
@@ -215,15 +232,31 @@ async fn create_user2_in_domain(state: &SamrState, domain_sid: &Sid, stub: &[u8]
     let descriptor = iron_partition::security_descriptor::default_descriptor(domain_sid);
     entry.set(iron_store::binary_attrs::NT_SECURITY_DESCRIPTOR_ATTR, [encode_binary_attr(&descriptor)]);
 
-    store.put_entry(&dn, &entry, &state.index_spec).await.ok()?;
+    // Create-only: an existing account is STATUS_USER_EXISTS, as on
+    // Windows, not overwritten with a new SID (the RID just allocated is
+    // burnt, as AD burns one on a failed create).
+    let status = match store.create_entry(&dn, &entry, &state.index_spec).await {
+        Ok(true) => ntstatus::SUCCESS,
+        Ok(false) => {
+            tracing::warn!(%dn, "SamrCreateUser2InDomain: account already exists");
+            ntstatus::USER_EXISTS
+        }
+        Err(e) => {
+            tracing::warn!(%dn, "SamrCreateUser2InDomain: write failed: {e}");
+            ntstatus::INTERNAL_DB_ERROR
+        }
+    };
     drop(store);
+    Some(create_user2_response(if status == ntstatus::SUCCESS { rid } else { 0 }, status))
+}
 
+fn create_user2_response(rid: u32, status: u32) -> Vec<u8> {
     let mut w = NdrWriter::new();
-    w.handle(&user_handle(rid));
-    w.u32(0x0200_0000); // GrantedAccess: a permissive default (USER_ALL_ACCESS-shaped)
+    w.handle(&if status == ntstatus::SUCCESS { user_handle(rid) } else { [0u8; 20] });
+    w.u32(if status == ntstatus::SUCCESS { 0x0200_0000 } else { 0 }); // GrantedAccess: a permissive default (USER_ALL_ACCESS-shaped)
     w.u32(rid);
-    w.u32(0); // STATUS_SUCCESS
-    Some(w.buf)
+    w.u32(status);
+    w.buf
 }
 
 /// `UserPrimaryGroupInformation` (level 9) -- the simplest real

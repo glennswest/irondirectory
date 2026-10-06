@@ -99,6 +99,10 @@ pub async fn create_user2_in_domain(client: &mut RpcClient, domain_handle: &[u8;
     let handle = r.handle().map_err(|_| m())?;
     let _granted_access = r.u32().map_err(|_| m())?;
     let rid = r.u32().map_err(|_| m())?;
+    let status = r.u32().map_err(|_| m())?;
+    if status != 0 {
+        return Err(RpcClientError::Status(status));
+    }
     Ok((handle, rid))
 }
 

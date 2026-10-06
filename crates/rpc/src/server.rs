@@ -17,7 +17,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::pdu::{self, CtxResult, PduError};
 use crate::uuid::{LSARPC_SYNTAX, NETLOGON_SYNTAX, SAMR_SYNTAX};
-use crate::{lsarpc, netlogon, samr};
+use crate::{lsarpc, netlogon, samr, CallError};
 
 /// What this server tells clients about the domain it's serving.
 pub struct DomainInfo {
@@ -33,7 +33,7 @@ pub struct AppState {
     pub netlogon: netlogon::NetlogonState,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BoundInterface {
     Lsarpc,
     Samr,
@@ -46,7 +46,7 @@ pub async fn serve(listener: TcpListener, app: Arc<AppState>) -> std::io::Result
         tracing::info!(%peer, "accepted RPC connection");
         let app = app.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, app).await {
+            if let Err(e) = handle_connection(stream, peer, app).await {
                 tracing::debug!(%peer, "RPC connection ended: {e}");
             }
             tracing::info!(%peer, "RPC connection closed");
@@ -70,7 +70,7 @@ async fn read_pdu(stream: &mut TcpStream) -> std::io::Result<Option<Vec<u8>>> {
     Ok(Some(pdu))
 }
 
-async fn handle_connection(mut stream: TcpStream, app: Arc<AppState>) -> std::io::Result<()> {
+async fn handle_connection(mut stream: TcpStream, peer: std::net::SocketAddr, app: Arc<AppState>) -> std::io::Result<()> {
     let mut bound: Option<(u16, BoundInterface)> = None;
     let mut netlogon_session = netlogon::Session::default();
 
@@ -109,13 +109,25 @@ async fn handle_connection(mut stream: TcpStream, app: Arc<AppState>) -> std::io
             }
             pdu::PTYPE_REQUEST => {
                 let Some(req) = pdu::parse_request_body(body) else { break };
-                let response = match bound {
-                    Some((ctx_id, iface)) if ctx_id == req.ctx_id => dispatch(&app, &mut netlogon_session, iface, req.opnum, req.stub_data).await,
-                    _ => None,
+                let status = match bound {
+                    Some((ctx_id, iface)) if ctx_id == req.ctx_id => match dispatch(&app, &mut netlogon_session, iface, req.opnum, req.stub_data).await {
+                        Ok(stub) => Ok(stub),
+                        Err(e) => {
+                            tracing::warn!(%peer, ?iface, opnum = req.opnum, "RPC call faulted: {e:?}");
+                            Err(match e {
+                                CallError::UnknownOpnum => pdu::FAULT_OP_RNG_ERROR,
+                                CallError::Malformed => pdu::FAULT_NDR,
+                            })
+                        }
+                    },
+                    _ => {
+                        tracing::warn!(%peer, ctx_id = req.ctx_id, "RPC request on a presentation context no bind accepted");
+                        Err(pdu::FAULT_UNK_IF)
+                    }
                 };
-                let pdu_out = match response {
-                    Some(stub) => pdu::build_response(header.call_id, req.ctx_id, &stub),
-                    None => pdu::build_fault(header.call_id, req.ctx_id, pdu::FAULT_UNK_IF),
+                let pdu_out = match status {
+                    Ok(stub) => pdu::build_response(header.call_id, req.ctx_id, &stub),
+                    Err(fault) => pdu::build_fault(header.call_id, req.ctx_id, fault),
                 };
                 stream.write_all(&pdu_out).await?;
             }
@@ -125,11 +137,11 @@ async fn handle_connection(mut stream: TcpStream, app: Arc<AppState>) -> std::io
     Ok(())
 }
 
-async fn dispatch(app: &AppState, netlogon_session: &mut netlogon::Session, iface: BoundInterface, opnum: u16, stub: &[u8]) -> Option<Vec<u8>> {
+async fn dispatch(app: &AppState, netlogon_session: &mut netlogon::Session, iface: BoundInterface, opnum: u16, stub: &[u8]) -> Result<Vec<u8>, CallError> {
     match iface {
         BoundInterface::Lsarpc => match opnum {
-            lsarpc::OPNUM_OPEN_POLICY2 => Some(lsarpc::open_policy2()),
-            lsarpc::OPNUM_CLOSE => Some(lsarpc::close()),
+            lsarpc::OPNUM_OPEN_POLICY2 => Ok(lsarpc::open_policy2()),
+            lsarpc::OPNUM_CLOSE => Ok(lsarpc::close()),
             lsarpc::OPNUM_QUERY_INFORMATION_POLICY2 => {
                 let info = lsarpc::DomainInfo {
                     netbios_name: &app.domain_info.netbios_name,
@@ -137,9 +149,9 @@ async fn dispatch(app: &AppState, netlogon_session: &mut netlogon::Session, ifac
                     dns_forest_name: &app.domain_info.dns_forest_name,
                     domain_sid: &app.domain_info.domain_sid,
                 };
-                lsarpc::query_information_policy2(stub, &info)
+                lsarpc::query_information_policy2(stub, &info).ok_or(CallError::Malformed)
             }
-            _ => None,
+            _ => Err(CallError::UnknownOpnum),
         },
         BoundInterface::Samr => samr::dispatch(&app.samr, &app.domain_info.domain_sid, opnum, stub).await,
         BoundInterface::Netlogon => netlogon::dispatch(&app.netlogon, netlogon_session, opnum, stub).await,

@@ -31,6 +31,7 @@ use iron_store::store::Store;
 use tokio::sync::Mutex;
 
 use crate::ndr::{NdrReader, NdrWriter};
+use crate::{ntstatus, CallError};
 
 pub const OPNUM_SERVER_REQ_CHALLENGE: u16 = 4;
 pub const OPNUM_SERVER_AUTHENTICATE3: u16 = 26;
@@ -78,12 +79,15 @@ pub fn compute_credential(fips: &FipsContext, session_key: &[u8; 16], challenge:
     Ok(out[..8].try_into().unwrap())
 }
 
-pub async fn dispatch(state: &NetlogonState, session: &mut Session, opnum: u16, stub: &[u8]) -> Option<Vec<u8>> {
-    match opnum {
+/// `Ok` is the response stub; a handler's `None` means its stub didn't
+/// decode.
+pub async fn dispatch(state: &NetlogonState, session: &mut Session, opnum: u16, stub: &[u8]) -> Result<Vec<u8>, CallError> {
+    let response = match opnum {
         OPNUM_SERVER_REQ_CHALLENGE => server_req_challenge(session, stub),
         OPNUM_SERVER_AUTHENTICATE3 => server_authenticate3(state, session, stub).await,
-        _ => None,
-    }
+        _ => return Err(CallError::UnknownOpnum),
+    };
+    response.ok_or(CallError::Malformed)
 }
 
 fn server_req_challenge(session: &mut Session, stub: &[u8]) -> Option<Vec<u8>> {
@@ -129,9 +133,9 @@ fn server_req_challenge(session: &mut Session, stub: &[u8]) -> Option<Vec<u8>> {
     Some(w.buf)
 }
 
+/// `None` only when the request doesn't decode; a failed authentication
+/// answers `STATUS_ACCESS_DENIED` (as Windows does) and logs why.
 async fn server_authenticate3(state: &NetlogonState, session: &Session, stub: &[u8]) -> Option<Vec<u8>> {
-    let (client_challenge, server_challenge) = session.challenges?;
-
     // NetrServerAuthenticate3(PrimaryName: PLOGONSRV_HANDLE (pointer),
     // AccountName: WSTR (embedded), SecureChannelType:
     // NETLOGON_SECURE_CHANNEL_TYPE (NDRENUM -> 2-byte USHORT on the
@@ -161,36 +165,56 @@ async fn server_authenticate3(state: &NetlogonState, session: &Session, stub: &[
     let client_credential: [u8; 8] = r.bytes(8).ok()?.try_into().ok()?;
     let negotiate_flags = r.u32().ok()?;
 
-    if negotiate_flags & NETLOGON_NEG_SUPPORTS_AES == 0 {
-        return None; // only the AES path is implemented -- see module docs
-    }
-
     // WSTR fields are conventionally NUL-terminated on the wire (unlike
     // RPC_UNICODE_STRING, which carries an explicit Length instead) --
     // strip it before using this as a DIT lookup key.
     let account_name = account_name.trim_end_matches('\0');
-    let mut store = state.store.lock().await;
-    let dns = store.lookup_by_index(&state.base_dn, "cn", account_name).await.ok()?;
-    let [dn] = dns.as_slice() else { return None };
-    let entry = store.get_entry(dn).await.ok()??;
-    drop(store);
-    let ntowf_hex = entry.get(NTOWF_ATTR)?.first()?;
-    let ntowf: [u8; 16] = hex_decode(ntowf_hex)?.try_into().ok()?;
-
-    let session_key = compute_session_key_aes(&state.fips, &ntowf, &client_challenge, &server_challenge).ok()?;
-
-    let expected_client_credential = compute_credential(&state.fips, &session_key, &client_challenge).ok()?;
-    if expected_client_credential != client_credential {
-        return None; // credential mismatch -- wrong/no shared secret
-    }
-    let server_credential = compute_credential(&state.fips, &session_key, &server_challenge).ok()?;
-
     let mut w = NdrWriter::new();
-    w.bytes(&server_credential);
-    w.u32(negotiate_flags); // echo back what we support (AES only)
-    w.u32(0); // AccountRid -- not tracked distinctly from the account entry here
-    w.u32(0); // STATUS_SUCCESS
+    match authenticate(state, session, account_name, &client_credential, negotiate_flags).await {
+        Ok(server_credential) => {
+            w.bytes(&server_credential);
+            w.u32(negotiate_flags); // echo back what we support (AES only)
+            w.u32(0); // AccountRid -- not tracked distinctly from the account entry here
+            w.u32(ntstatus::SUCCESS);
+        }
+        Err(reason) => {
+            tracing::warn!(account = account_name, "NetrServerAuthenticate3 denied: {reason}");
+            w.bytes(&[0u8; 8]);
+            w.u32(0);
+            w.u32(0);
+            w.u32(ntstatus::ACCESS_DENIED);
+        }
+    }
     Some(w.buf)
+}
+
+/// Checks the client credential against the account's NTOWF; returns the
+/// server credential, or why the account is refused.
+async fn authenticate(state: &NetlogonState, session: &Session, account_name: &str, client_credential: &[u8; 8], negotiate_flags: u32) -> Result<[u8; 8], String> {
+    let (client_challenge, server_challenge) = session.challenges.ok_or("no NetrServerReqChallenge on this connection")?;
+    if negotiate_flags & NETLOGON_NEG_SUPPORTS_AES == 0 {
+        return Err(format!("client did not offer AES (flags 0x{negotiate_flags:08x}); only the AES path is implemented"));
+    }
+
+    let mut store = state.store.lock().await;
+    let dns = store.lookup_by_index(&state.base_dn, "cn", account_name).await.map_err(|e| format!("index lookup failed: {e}"))?;
+    let dn = match dns.as_slice() {
+        [dn] => dn.clone(),
+        [] => return Err("no such account".into()),
+        many => return Err(format!("{} entries share the name", many.len())),
+    };
+    let entry = store.get_entry(&dn).await.map_err(|e| format!("read of {dn} failed: {e}"))?.ok_or_else(|| format!("{dn} is indexed but missing"))?;
+    drop(store);
+    let ntowf_hex = entry.get(NTOWF_ATTR).and_then(|v| v.first()).ok_or_else(|| format!("{dn} has no {NTOWF_ATTR}"))?;
+    let ntowf: [u8; 16] = hex_decode(ntowf_hex).and_then(|b| b.try_into().ok()).ok_or_else(|| format!("{dn}'s {NTOWF_ATTR} is not 16 hex bytes"))?;
+
+    let crypto = |e: iron_crypto::Error| format!("crypto: {e}");
+    let session_key = compute_session_key_aes(&state.fips, &ntowf, &client_challenge, &server_challenge).map_err(crypto)?;
+    let expected_client_credential = compute_credential(&state.fips, &session_key, &client_challenge).map_err(crypto)?;
+    if &expected_client_credential != client_credential {
+        return Err("client credential does not match the account's secret".into());
+    }
+    compute_credential(&state.fips, &session_key, &server_challenge).map_err(crypto)
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
