@@ -15,8 +15,14 @@ pub const NONCE_LEN: usize = 12;
 /// the *key derivation* feeding into this (NTOWF, `crate::md4`) is the
 /// cited D4 exception, not this function.
 pub fn aes128_cfb8_encrypt(ctx: &FipsContext, key: &[u8; 16], data: &[u8]) -> Result<Vec<u8>, Error> {
-    let iv = vec![0u8; 16];
-    let mut cipher = OsslCipher::new(ctx.inner(), EncAlg::AesCfb8(AesSize::Aes128), true, OsslSecret::from_slice(key), Some(iv), None)?;
+    aes128_cfb8(ctx, key, &[0u8; 16], data, true)
+}
+
+/// AES-128-CFB8 with an explicit IV, encrypting or decrypting. MS-NRPC's
+/// Netlogon secure channel seals RPC stubs with it (#20, 3.3.4.2.1: the IV
+/// is the 8-byte sequence number twice).
+pub fn aes128_cfb8(ctx: &FipsContext, key: &[u8; 16], iv: &[u8; 16], data: &[u8], encrypt: bool) -> Result<Vec<u8>, Error> {
+    let mut cipher = OsslCipher::new(ctx.inner(), EncAlg::AesCfb8(AesSize::Aes128), encrypt, OsslSecret::from_slice(key), Some(iv.to_vec()), None)?;
     let mut out = vec![0u8; data.len() + 16];
     let mut n = cipher.update(data, &mut out)?;
     n += cipher.finalize(&mut out[n..])?;
@@ -94,6 +100,22 @@ pub fn aes256_gcm_decrypt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    // NIST SP 800-38A, F.3.7/F.3.8 (CFB8-AES128).
+    #[test]
+    fn aes128_cfb8_matches_sp800_38a() {
+        let ctx = FipsContext::new().unwrap();
+        let key: [u8; 16] = hex("2b7e151628aed2a6abf7158809cf4f3c").try_into().unwrap();
+        let iv: [u8; 16] = hex("000102030405060708090a0b0c0d0e0f").try_into().unwrap();
+        let pt = hex("6bc1bee22e409f96e93d7e117393172aae2d");
+        let ct = hex("3b79424c9c0dd436bace9e0ed4586a4f32b9");
+        assert_eq!(aes128_cfb8(&ctx, &key, &iv, &pt, true).unwrap(), ct);
+        assert_eq!(aes128_cfb8(&ctx, &key, &iv, &ct, false).unwrap(), pt);
+    }
 
     // Cross-checked against Python's `cryptography` (OpenSSL-backed)
     // AESGCM(key=32 zero bytes).encrypt(nonce=12 zero bytes, pt, aad).
