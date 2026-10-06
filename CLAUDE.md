@@ -240,6 +240,34 @@ Every RFC 4511 filter kind is evaluated by `crates/ldap/src/filter.rs`
 iron-gc; the size limit counts returned entries. `test/ldap-filters-e2e.sh`
 checks each kind with real `ldapsearch` on iron-ldapd and iron-gcd.
 
+## In progress (2026-10-06): #20 -- owner decided (issue comment)
+
+macOS: wait for the golden + operator (#25); the owner runs dsconfigad from
+the Mac against that. kpasswd/464 is already done and verified.
+Windows: build the real path; test against a networked Windows VM
+(stormrdp#18). This pass, buildable and verifiable here with impacket:
+- [ ] Zerologon (CVE-2020-1472) fixes: random server challenge; reject a
+      ClientCredential whose first 5 bytes are equal; NetrServerPasswordSet2
+      only over a sealed/signed channel.
+- [ ] `iron_crypto::aead`: AES-128-CFB8 encrypt/decrypt with an IV.
+- [ ] `pdu.rs`: sec_trailer + auth_value on bind/bind_ack/request/response.
+- [ ] Netlogon Schannel (auth_type 68): NL_AUTH_MESSAGE bind, AES
+      NL_AUTH_SHA2_SIGNATURE sign/verify and seal/unseal (MS-NRPC 3.3.4.2);
+      secure channels kept per computer name across connections.
+- [ ] NetrServerPasswordSet2 (opnum 30): authenticator chain, NL_TRUST_PASSWORD
+      decrypt, NTOWF + Kerberos keys.
+- [ ] `test/netlogon-schannel-e2e.sh`: impacket at PKT_PRIVACY and
+      PKT_INTEGRITY; kinit with the new password.
+Filed for the rest: CLDAP LDAP ping; iron-rpcd side of ncacn_np (session
+key preamble, SAMR AES password set); rocketsmbd IPC$/pipe forwarding.
+
+## Done (2026-10-06): #27 LDAP filters
+
+Every RFC 4511 filter kind is evaluated by `crates/ldap/src/filter.rs`
+(three-valued; AD bitwise rules; unknown rules Undefined), shared with
+iron-gc; the size limit counts returned entries. `test/ldap-filters-e2e.sh`
+checks each kind with real `ldapsearch` on iron-ldapd and iron-gcd.
+
 ## Waiting on the owner (2026-10-06): #20
 
 macOS half, server side done and verified on dev (`test/kpasswd-e2e.sh`):
