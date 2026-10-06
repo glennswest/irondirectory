@@ -30,7 +30,7 @@ fail() { echo "FAIL: $*"; for f in "$W"/*.log; do echo "--- $f"; tail -20 "$f"; 
 for t in ldapwhoami kinit; do command -v "$t" >/dev/null || fail "$t is not installed"; done
 
 cargo build --locked --release -p iron-ldap --bin iron-ldapd -p iron-kdc --bin iron-kdcd -p iron-bootstrap --bin iron-bootstrap 2>&1 | tail -2
-B=target/release
+B=${CARGO_TARGET_DIR:-target}/release
 
 printf '%s\n' "$PW" > "$W/password"
 export IRON_BOOTSTRAP_FASTETCD_ENDPOINT=$ENDPOINT IRON_BOOTSTRAP_PARTITION_ID=$PID_ID IRON_BOOTSTRAP_BASE_DN=$BASE \
