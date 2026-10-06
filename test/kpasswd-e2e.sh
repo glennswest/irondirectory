@@ -10,15 +10,21 @@
 #     from the AS) changes alice's password, over UDP and then over TCP;
 #     kinit works with the new password and not the old one;
 #  2. a too-short new password is refused (soft error) and changes nothing;
-#  3. a wrong current password never gets a kadmin/changepw ticket.
-# Needs curl, kinit and kpasswd (krb5-workstation) and a FIPS OPENSSL_CONF.
+#  3. a wrong current password never gets a kadmin/changepw ticket;
+#  4. impacket (set password, version 0xff80, the shape of dsconfigad's
+#     request): administrator sets the password of a computer account
+#     created over LDAP (sAMAccountName TESTMAC1$, no Kerberos name yet),
+#     and kinit TESTMAC1$ then works with it; alice (not an admin) may not;
+#     alice may change her own.
+# Needs curl, kinit, kpasswd, ldapadd, python3 (impacket is pip-installed
+# into a venv) and a FIPS OPENSSL_CONF.
 set -euo pipefail
 
 FV=${FASTETCD_VERSION:-1.2.0}
 export OPENSSL_CONF=${OPENSSL_CONF:-$PWD/crates/crypto/testdata/fips-dev.cnf}
 mkdir -p "$PWD/tmp"
 W=$(mktemp -d "$PWD/tmp/kpwe2e.XXXX")
-P=$((20000 + RANDOM % 12000 / 10 * 10)) # below the ephemeral range: etcd P+1/P+2, KDC P+3, kpasswd P+4
+P=$((20000 + RANDOM % 12000 / 10 * 10)) # below the ephemeral range: etcd P+1/P+2, KDC P+3, kpasswd P+4, LDAP P+6, health P+7
 PID_ID="kpw$(date +%s)"
 BASE="dc=${PID_ID},dc=example,dc=lo"
 REALM="$(echo "$PID_ID" | tr a-z A-Z).EXAMPLE.LO"
@@ -26,7 +32,7 @@ pids=()
 cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
 fail() { echo "FAIL: $*"; [ -s "$W/kpasswd.out" ] && cat "$W/kpasswd.out"; for f in "$W"/*.log; do echo "--- $f"; grep -v "error_code=25 " "$f" | tail -30; done; exit 1; }
-for t in curl kinit kpasswd; do command -v "$t" >/dev/null || fail "$t is not installed"; done
+for t in curl kinit kpasswd ldapadd python3; do command -v "$t" >/dev/null || fail "$t is not installed"; done
 
 curl -fsSL "https://github.com/glennswest/fastetcd/releases/download/v$FV/fastetcd-v$FV-x86_64-linux-musl.tar.gz" | tar -xz -C "$W"
 "$W/fastetcd-v$FV-x86_64-linux/fastetcd" --data-dir "$W/data" --listen-client-urls "http://127.0.0.1:$((P + 1))" \
@@ -35,7 +41,7 @@ curl -fsSL "https://github.com/glennswest/fastetcd/releases/download/v$FV/fastet
 for _ in $(seq 100); do curl -sf "http://127.0.0.1:$((P + 1))/health" >/dev/null && break; sleep 0.2; done
 E=http://127.0.0.1:$((P + 1))
 
-cargo build --locked --release -p iron-bootstrap --bin iron-bootstrap -p iron-kdc --bin iron-kdcd --bin iron-kdc-ctl 2>&1 | tail -1
+cargo build --locked --release -p iron-bootstrap --bin iron-bootstrap -p iron-kdc --bin iron-kdcd --bin iron-kdc-ctl -p iron-ldap --bin iron-ldapd 2>&1 | tail -1
 B=${CARGO_TARGET_DIR:-target}/release
 
 printf 'AdminPass123!\n' > "$W/password"
@@ -108,6 +114,38 @@ echo "== a too-short password is refused with the server's reason: $(grep -i 'at
 if change alice 'NotThePassword1' 'Whatever123!'; then fail "a wrong current password changed it"; fi
 can_kinit alice 'Third789!xyz' || fail "a failed change altered the password"
 echo "== a wrong current password is refused"
+
+# 4. impacket set password (0xff80), as dsconfigad does it.
+IRON_LDAP_FASTETCD_ENDPOINT=$E IRON_LDAP_PARTITION_ID=$PID_ID IRON_LDAP_BASE_DN=$BASE \
+  IRON_LDAP_LISTEN=127.0.0.1:$((P + 6)) IRON_LDAP_HEALTH_LISTEN=127.0.0.1:$((P + 7)) $B/iron-ldapd > "$W/ldapd.log" 2>&1 & pids+=($!)
+for _ in $(seq 30); do curl -sf "http://127.0.0.1:$((P + 7))/health" >/dev/null && break; sleep 0.5; done
+cat > "$W/computer.ldif" <<LDIF
+dn: cn=TESTMAC1,$BASE
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: user
+objectClass: computer
+cn: TESTMAC1
+sAMAccountName: TESTMAC1\$
+LDIF
+ldapadd -x -H "ldap://127.0.0.1:$((P + 6))" -D "cn=administrator,$BASE" -w 'AdminPass123!' -f "$W/computer.ldif" > "$W/ldapadd.out" 2>&1 ||
+  { cat "$W/ldapadd.out"; fail "ldapadd of the computer account"; }
+python3 -m venv "$W/venv" && "$W/venv/bin/pip" install -q impacket==0.13.1 > "$W/pip.out" 2>&1 || { tail -5 "$W/pip.out"; fail "pip install impacket"; }
+imp() { "$W/venv/bin/python" -I "$PWD/test/kpasswd_impacket.py" $((P + 3)) $((P + 4)) "$REALM" "$@"; }
+
+out=$(imp administrator 'AdminPass123!' 'MachinePass123!' 'TESTMAC1$' 2>&1) || fail "impacket: administrator setting TESTMAC1\$: $out"
+can_kinit 'TESTMAC1$' 'MachinePass123!' || fail "kinit TESTMAC1\$ with the password administrator set"
+echo "== impacket (0xff80): administrator set TESTMAC1\$'s password; kinit TESTMAC1\$ works with it"
+
+if out=$(imp alice 'Third789!xyz' 'Hijack123!xyz' 'TESTMAC1$' 2>&1); then fail "alice set TESTMAC1\$'s password"; fi
+echo "$out" | grep -qi "denied" || fail "alice's refusal was not access denied: $out"
+can_kinit 'TESTMAC1$' 'MachinePass123!' || fail "a refused set changed TESTMAC1\$'s password"
+echo "== impacket: alice may not set it: $out"
+
+out=$(imp alice 'Third789!xyz' 'Fourth012!xyz' 2>&1) || fail "impacket: alice changing her own: $out"
+can_kinit alice 'Fourth012!xyz' || fail "kinit alice after impacket's change"
+echo "== impacket: alice changed her own (0xff80, no target)"
 
 echo "-- iron-kdcd kpasswd log:"; sed 's/\x1b\[[0-9;]*m//g' "$W/kdcd.log" | grep -i kpasswd | sed -E 's/^[^ ]+ +//' | head -10
 echo "PASS: kpasswd (fastetcd $FV)"
