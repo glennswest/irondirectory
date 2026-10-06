@@ -16,6 +16,8 @@
 //! this harness provisions itself so it can decrypt resulting service
 //! tickets to inspect their PAC).
 //!
+//! Exits 1 if any join/login failed, so a script can gate on it.
+//!
 //! Needs OPENSSL_CONF pointing at a FIPS-activating config (see
 //! docs/FIPS.md), same as every other Kerberos-touching binary here.
 
@@ -90,6 +92,9 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             println!("--- {ok} succeeded, {failed} failed, total wall time {:?} ---", start.elapsed());
+            if failed > 0 {
+                std::process::exit(1);
+            }
         }
         "login" => {
             let count: usize = args.get(2).map(|s| s.parse()).transpose()?.unwrap_or(1);
@@ -119,6 +124,9 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             println!("--- {ok} succeeded, {failed} failed, total wall time {:?} ---", start.elapsed());
+            if failed > 0 {
+                std::process::exit(1);
+            }
         }
         other => anyhow::bail!("unknown mode {other:?}; expected join or login"),
     }
