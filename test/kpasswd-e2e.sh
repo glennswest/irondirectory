@@ -25,7 +25,7 @@ REALM="$(echo "$PID_ID" | tr a-z A-Z).EXAMPLE.LO"
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
-fail() { echo "FAIL: $*"; for f in "$W"/*.log; do echo "--- $f"; grep -v "error_code=25 " "$f" | tail -20; done; exit 1; }
+fail() { echo "FAIL: $*"; [ -s "$W/kpasswd.out" ] && cat "$W/kpasswd.out"; for f in "$W"/*.log; do echo "--- $f"; grep -v "error_code=25 " "$f" | tail -30; done; exit 1; }
 for t in curl kinit kpasswd; do command -v "$t" >/dev/null || fail "$t is not installed"; done
 
 curl -fsSL "https://github.com/glennswest/fastetcd/releases/download/v$FV/fastetcd-v$FV-x86_64-linux-musl.tar.gz" | tar -xz -C "$W"
@@ -74,11 +74,18 @@ krb5conf() { # $1 = udp_preference_limit (1 forces TCP)
 EOF
 }
 export KRB5_CONFIG=$W/krb5.conf KRB5CCNAME=FILE:$W/cc
-can_kinit() { echo "$2" | kinit "$1@$REALM" >/dev/null 2>&1; }
-change() { printf '%s\n%s\n%s\n' "$2" "$3" "$3" | kpasswd "$1@$REALM" > "$W/kpasswd.out" 2>&1; }
+# The MIT clients run without our FIPS OPENSSL_CONF (that is for the
+# daemons), and trace to a file a failure prints.
+client() { env -u OPENSSL_CONF KRB5_TRACE="$W/trace.log" "$@"; }
+can_kinit() { echo "$2" | client kinit "$1@$REALM" >/dev/null 2>&1; }
+change() { : > "$W/trace.log"; printf '%s\n%s\n%s\n' "$2" "$3" "$3" | client kpasswd "$1@$REALM" > "$W/kpasswd.out" 2>&1; }
+
+# 0. alice can log in at all.
+krb5conf 1465
+can_kinit alice 'OldPass123!' || fail "kinit alice before any change"
+echo "== kinit alice works"
 
 # 1. A real change, over UDP then over TCP.
-krb5conf 1465
 change alice 'OldPass123!' 'NewPass456!' || { cat "$W/kpasswd.out"; fail "kpasswd over UDP"; }
 grep -q "Password changed" "$W/kpasswd.out" || { cat "$W/kpasswd.out"; fail "kpasswd over UDP did not say 'Password changed'"; }
 can_kinit alice 'NewPass456!' || fail "kinit with the new password (after UDP change)"
