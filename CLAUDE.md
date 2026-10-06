@@ -314,6 +314,15 @@ didn't answer from dev on 2026-10-06.)
    - [ ] When `stormcentral component list` shows `irondirectory`: run the
          in-pod acceptance (operator#1's live test), then close #25.
 
+## Waiting on the owner (2026-10-06): #21 federation test matrix
+
+Only two of its items can be tested today: many-partition scale and
+many-forest GAL convergence. The rest isn't built: transitive trust (iron-kdc
+refers only to a direct neighbour realm), partition teardown/re-parenting (no
+iron-config-ctl command), cross-forest OIDC brokering. Windows AD interop needs
+a Windows DC. Asked on #21: build the two suites here and split the rest into
+issues (recommended), or build the capabilities under #21?
+
 ## Locked decisions (see docs/ARCHITECTURE.md)
 
 - **D1** Dedicated fastetcd cluster — never the Kubernetes etcd.
