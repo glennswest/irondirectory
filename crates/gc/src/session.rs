@@ -128,10 +128,19 @@ fn handle_search(app: &AppState, req: &SearchRequest) -> Vec<ProtocolOp> {
 
     let mut ops = Vec::new();
     let limit = if req.size_limit == 0 { usize::MAX } else { req.size_limit as usize };
-    for (dn, entry) in candidates.into_iter().take(limit) {
+    // The size limit counts entries returned, not candidates scanned
+    // (#27: it used to cut the candidate list first, so a match past the
+    // first N entries was dropped and the search still said Success).
+    let mut sent = 0usize;
+    for (dn, entry) in candidates {
         if !filter::matches(&entry, &req.filter) {
             continue;
         }
+        if sent == limit {
+            ops.extend(done(ResultCode::SizeLimitExceeded, ""));
+            return ops;
+        }
+        sent += 1;
         ops.push(ProtocolOp::SearchResEntry(SearchResultEntry::new(
             dn.to_string().into(),
             project_attributes(&entry, &req.attributes, req.types_only),
