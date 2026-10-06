@@ -6,6 +6,25 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-10-06
+- **fix(rpc):** A failed call said why (#24). Every handler failure used
+  to come back as an unlogged `nca_unk_if`. Now an unknown opnum is
+  `nca_op_rng_error` and an undecodable stub is `nca_s_fault_ndr`. A
+  refused `NetrServerAuthenticate3` answers `STATUS_ACCESS_DENIED`, and a
+  `SamrCreateUser2InDomain` store failure `STATUS_INTERNAL_DB_ERROR`; both
+  log the reason. `SamrCreateUser2InDomain` is create-only: an existing
+  account is `STATUS_USER_EXISTS`, not overwritten with a new SID.
+- **fix(store):** Reads that fastetcd answers `UNAVAILABLE` (a linearizable
+  read barrier that couldn't confirm quorum in time) are retried, up to 6
+  times over about 1.5 s, as Go's clientv3 does (#24). Writes are not.
+- **fix(simulate):** `iron-simulate` exits 1 when any join or login fails,
+  checks `SamrCreateUser2InDomain`'s status, and reports an NTSTATUS
+  failure as such, not as an RPC fault.
+- **test:** `test/rpc-concurrency-e2e.sh` runs `iron-simulate join $COUNT`
+  against a throwaway three-member fastetcd (`FASTETCD_VERSION`), with the
+  daemons on one member and the harness on another (#24).
+  `test/bootstrap-e2e.sh` finds its binaries under `CARGO_TARGET_DIR` (#33).
+- **docs:** `IRON_KDC_CONFIG_*` is also what gives a ticket its PAC (the
+  domain SID comes from the forest registry), not only referral tickets.
 - **refactor(golden):** Removed `deploy/golden/build-root.sh` and
   `fastetcd.ref` (#25). Following the owner's decision, stormcos builds the
   golden as a clone of its `fips-base` golden plus the daemons, fastetcd from
