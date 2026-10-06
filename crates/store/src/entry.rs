@@ -2,7 +2,7 @@
 //! encoding (D2: `/iron/<pid>/tree/<reversed-rdn-path>`).
 
 use crate::StoreError;
-use etcd_client::{Client, EventType, GetOptions, WatchOptions};
+use etcd_client::{Client, EventType, WatchOptions};
 use iron_partition::{key, Dn, PartitionError, PartitionId};
 
 /// Reconstructs a [`Dn`] from a raw fastetcd key under a partition's tree
@@ -42,7 +42,7 @@ pub async fn get_entry(
     pid: &PartitionId,
     dn: &Dn,
 ) -> Result<Option<Vec<u8>>, StoreError> {
-    let resp = client.get(key::entry_key(pid, dn), None).await?;
+    let resp = crate::get(client, &key::entry_key(pid, dn), false).await?;
     Ok(resp.kvs().first().map(|kv| kv.value().to_vec()))
 }
 
@@ -56,9 +56,7 @@ pub async fn scan_subtree(
 ) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
     let base = key::entry_key(pid, dn);
     let prefix = key::subtree_prefix(pid, dn);
-    let resp = client
-        .get(prefix.clone(), Some(GetOptions::new().with_prefix()))
-        .await?;
+    let resp = crate::get(client, &prefix, true).await?;
     let mut out: Vec<(String, Vec<u8>)> = resp
         .kvs()
         .iter()

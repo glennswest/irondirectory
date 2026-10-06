@@ -26,7 +26,7 @@ pub mod model;
 pub mod ridpool;
 pub mod store;
 
-use etcd_client::{Certificate, Client, ConnectOptions, Error as EtcdError, Identity, TlsOptions};
+use etcd_client::{Certificate, Client, ConnectOptions, Error as EtcdError, GetOptions, GetResponse, Identity, TlsOptions};
 use iron_partition::{ClusterRef, PartitionError, TlsRef};
 use std::path::Path;
 
@@ -79,4 +79,29 @@ fn read(path: &str) -> Result<Vec<u8>, StoreError> {
         path: path.to_string(),
         source,
     })
+}
+
+/// gRPC `UNAVAILABLE`.
+const GRPC_UNAVAILABLE: i32 = 14;
+
+/// Reads `key` (every key under it if `prefix`), retrying while fastetcd
+/// answers `UNAVAILABLE`. A linearizable read's barrier gives up when the
+/// leader can't confirm quorum in time (a leader change, a loaded member:
+/// "linearizable read barrier: not enough for a quorum", seen under
+/// `iron-simulate join 25`, #24). Go's clientv3 retries such reads;
+/// `etcd-client` doesn't, so every read here does: up to 6 attempts over
+/// about 1.5 s. Reads only -- a write that failed may still have committed.
+pub(crate) async fn get(client: &mut Client, key: &str, prefix: bool) -> Result<GetResponse, EtcdError> {
+    let mut delay = std::time::Duration::from_millis(50);
+    for _ in 0..5 {
+        let options = prefix.then(|| GetOptions::new().with_prefix());
+        match client.get(key, options).await {
+            Err(EtcdError::GRpcStatus(status)) if status.code() as i32 == GRPC_UNAVAILABLE => {
+                tokio::time::sleep(delay).await;
+                delay *= 2;
+            }
+            other => return other,
+        }
+    }
+    client.get(key, prefix.then(|| GetOptions::new().with_prefix())).await
 }

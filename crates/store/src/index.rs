@@ -2,7 +2,7 @@
 //! entries (D2) consistent with `/iron/<pid>/tree/<dn>` via a single etcd
 //! transaction per write, so a crash never leaves a stale index behind.
 
-use etcd_client::{Client, Compare, CompareOp, GetOptions, Txn, TxnOp};
+use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp};
 use iron_partition::{key, Dn, PartitionId};
 
 use crate::model::Entry;
@@ -35,7 +35,7 @@ async fn read_entry(
     pid: &PartitionId,
     dn: &Dn,
 ) -> Result<Option<Entry>, StoreError> {
-    let resp = client.get(key::entry_key(pid, dn), None).await?;
+    let resp = crate::get(client, &key::entry_key(pid, dn), false).await?;
     resp.kvs()
         .first()
         .map(|kv| Entry::decode(kv.value()))
@@ -124,9 +124,7 @@ pub async fn lookup_by_index(
     value: &str,
 ) -> Result<Vec<Dn>, StoreError> {
     let prefix = key::index_prefix(pid, attr, value);
-    let resp = client
-        .get(prefix, Some(GetOptions::new().with_prefix()))
-        .await?;
+    let resp = crate::get(client, &prefix, true).await?;
     resp.kvs()
         .iter()
         .map(|kv| {

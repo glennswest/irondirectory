@@ -36,7 +36,7 @@ fn pool_key(pid: &PartitionId) -> String {
 pub async fn allocate_rid(client: &mut Client, pid: &PartitionId) -> Result<u32, StoreError> {
     let key = pool_key(pid);
     loop {
-        let resp = client.get(key.clone(), None).await?;
+        let resp = crate::get(client, &key, false).await?;
         let (current, compare) = match resp.kvs().first() {
             Some(kv) => {
                 let s = kv.value_str().map_err(StoreError::Etcd)?;
