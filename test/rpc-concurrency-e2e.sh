@@ -45,7 +45,7 @@ echo "== fastetcd $("$FE" --version 2>&1 | head -1), 3 members on 127.0.0.1:$((P
 
 cargo build --locked --release -p iron-bootstrap --bin iron-bootstrap -p iron-kdc --bin iron-kdcd \
   -p iron-rpc --bin iron-rpcd -p iron-simulate --bin iron-simulate 2>&1 | tail -2
-B=target/release
+B=${CARGO_TARGET_DIR:-target}/release
 E1=http://127.0.0.1:$((P + 1))
 E2=http://127.0.0.1:$((P + 2))
 
