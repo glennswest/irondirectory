@@ -48,7 +48,7 @@ start_all() { # <round>
   in_golden "ldapd$1.log" /usr/bin/iron-ldapd IRON_LDAP_FASTETCD_ENDPOINT=$EP IRON_LDAP_PARTITION_ID=$PID_ID \
     IRON_LDAP_BASE_DN=$BASE IRON_LDAP_LISTEN=127.0.0.1:13389 IRON_LDAP_HEALTH_LISTEN=127.0.0.1:18080
   in_golden "kdcd$1.log" /usr/bin/iron-kdcd IRON_KDC_FASTETCD_ENDPOINT=$EP IRON_KDC_PARTITION_ID=$PID_ID \
-    IRON_KDC_BASE_DN=$BASE IRON_KDC_REALM=$REALM IRON_KDC_LISTEN=127.0.0.1:13088
+    IRON_KDC_BASE_DN=$BASE IRON_KDC_REALM=$REALM IRON_KDC_LISTEN=127.0.0.1:13088 IRON_KDC_KPASSWD_LISTEN=127.0.0.1:13464
   for i in $(seq 60); do
     grep -qE 'provisioned' "$W/bootstrap$1.log" && curl -sf http://127.0.0.1:18080/health >/dev/null && return 0
     for p in "${pids[@]}"; do kill -0 "$p" 2>/dev/null || fail "a daemon exited (round $1)"; done

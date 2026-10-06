@@ -339,7 +339,7 @@ pub async fn gather_context(store: &mut Store, base_dn: &Dn, topology: Option<&P
 /// A group missing/malformed `objectSid` is silently skipped rather than
 /// aborting the whole lookup -- one bad group entry shouldn't block a
 /// client's PAC entirely.
-async fn group_rids(store: &mut Store, base_dn: &Dn, client_dn: &Dn) -> Vec<u32> {
+pub(crate) async fn group_rids(store: &mut Store, base_dn: &Dn, client_dn: &Dn) -> Vec<u32> {
     let Ok(group_dns) = store.lookup_by_index(base_dn, "member", &client_dn.to_string()).await else {
         return Vec::new();
     };

@@ -10,6 +10,8 @@
 //!   IRON_KDC_REALM               e.g. IRON.LO
 //! Optional (defaults shown):
 //!   IRON_KDC_LISTEN=0.0.0.0:88   (both UDP and TCP bind here)
+//!   IRON_KDC_KPASSWD_LISTEN=0.0.0.0:464  (kpasswd, RFC 3244, UDP and
+//!                                TCP; "off" disables it)
 //!
 //! Needs OPENSSL_CONF pointing at a config that activates fips.so (see
 //! docs/FIPS.md) -- unlike iron-ldapd, this daemon refuses to start at
@@ -76,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let base_dn = require_env("IRON_KDC_BASE_DN")?;
     let realm = require_env("IRON_KDC_REALM")?;
     let listen_addr = env("IRON_KDC_LISTEN").unwrap_or_else(|| "0.0.0.0:88".to_string());
+    let kpasswd_addr = env("IRON_KDC_KPASSWD_LISTEN").unwrap_or_else(|| "0.0.0.0:464".to_string());
 
     let cluster = ClusterRef::plaintext([endpoint]);
     let forest = ForestId::new(pid.clone())?;
@@ -93,9 +96,21 @@ async fn main() -> anyhow::Result<()> {
     let tcp = TcpListener::bind(&listen_addr).await?;
     tracing::info!(%listen_addr, %realm, "iron-kdcd listening (UDP+TCP)");
 
+    let kpasswd = async {
+        if kpasswd_addr.eq_ignore_ascii_case("off") {
+            return std::future::pending::<std::io::Result<()>>().await;
+        }
+        let udp = UdpSocket::bind(&kpasswd_addr).await?;
+        let tcp = TcpListener::bind(&kpasswd_addr).await?;
+        tracing::info!(%kpasswd_addr, "kpasswd listening (UDP+TCP)");
+        tokio::try_join!(iron_kdc::kpasswd::serve_udp(udp, app.clone()), iron_kdc::kpasswd::serve_tcp(tcp, app.clone()))?;
+        Ok(())
+    };
+
     tokio::try_join!(
         iron_kdc::server::serve_udp(udp, app.clone()),
         iron_kdc::server::serve_tcp(tcp, app.clone()),
+        kpasswd,
     )?;
     Ok(())
 }

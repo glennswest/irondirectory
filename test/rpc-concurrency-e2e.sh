@@ -70,7 +70,7 @@ echo "== provisioned $PID_ID ($SID)"
 # The forest registry gives the KDC the domain SID; without it tickets carry no PAC.
 IRON_KDC_FASTETCD_ENDPOINT=$E1 IRON_KDC_PARTITION_ID=$PID_ID IRON_KDC_BASE_DN=$BASE IRON_KDC_REALM=$REALM \
   IRON_KDC_CONFIG_FASTETCD_ENDPOINT=$E1 IRON_KDC_CONFIG_PARTITION_ID=${PID_ID}-config IRON_KDC_CONFIG_BASE_DN=cn=configuration,$BASE \
-  IRON_KDC_LISTEN=127.0.0.1:$((P + 10)) $B/iron-kdcd > "$W/kdcd.log" 2>&1 & pids+=($!)
+  IRON_KDC_LISTEN=127.0.0.1:$((P + 10)) IRON_KDC_KPASSWD_LISTEN=127.0.0.1:$((P + 12)) $B/iron-kdcd > "$W/kdcd.log" 2>&1 & pids+=($!)
 IRON_RPC_FASTETCD_ENDPOINT=$E1 IRON_RPC_PARTITION_ID=$PID_ID IRON_RPC_BASE_DN=$BASE \
   IRON_RPC_DOMAIN_SID=$SID IRON_RPC_NETBIOS_NAME=$(echo "$PID_ID" | tr a-z A-Z) IRON_RPC_DNS_DOMAIN=${PID_ID}.example.lo \
   IRON_RPC_LISTEN=127.0.0.1:$((P + 11)) $B/iron-rpcd > "$W/rpcd.log" 2>&1 & pids+=($!)

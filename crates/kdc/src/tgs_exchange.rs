@@ -137,7 +137,9 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         return krberror::build(KDC_ERR_S_PRINCIPAL_UNKNOWN, &realm_str, kdc_sname, Some("no server name in request".into()), None).into();
     };
     let service_principal = format!("{}@{}", principal_name_to_string(sname), crate::realm_to_string(realm));
-    let service_dn = match store.lookup_by_index(&app.base_dn, crate::principal::ATTR_PRINCIPAL_NAME, &service_principal).await {
+    // `kadmin/changepw` is sealed with the krbtgt key (see `is_changepw`).
+    let key_principal = if crate::is_changepw(sname) { format!("krbtgt/{0}@{0}", crate::realm_to_string(realm)) } else { service_principal.clone() };
+    let service_dn = match store.lookup_by_index(&app.base_dn, crate::principal::ATTR_PRINCIPAL_NAME, &key_principal).await {
         Ok(dns) if dns.len() == 1 => dns.into_iter().next().unwrap(),
         _ => return krberror::build(KDC_ERR_S_PRINCIPAL_UNKNOWN, &realm_str, kdc_sname, Some(format!("no such principal {service_principal}")), None).into(),
     };

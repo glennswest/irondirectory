@@ -10,6 +10,7 @@ IRON_KDC_BASE_DN=dc=g10,dc=lo
 IRON_KDC_REALM=G10.LO
 
 #IRON_KDC_LISTEN=0.0.0.0:88
+#IRON_KDC_KPASSWD_LISTEN=0.0.0.0:464   # kpasswd (RFC 3244); "off" disables it
 
 # Required: point OPENSSL_CONF at a config that activates the OS-shipped
 # fips.so provider (see docs/FIPS.md and crates/crypto/testdata/fips-dev.cnf

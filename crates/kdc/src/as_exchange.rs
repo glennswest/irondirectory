@@ -6,7 +6,7 @@ use iron_crypto::kerberos::{self, Enctype};
 use rasn::types::{GeneralString, OctetString};
 use rasn_kerberos::{
     AsRep, EncAsRepPart, EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2Entry, KdcReq, KdcRep,
-    PaData, PaEncTsEnc, Ticket, TicketFlags, TransitedEncoding,
+    PaData, PaEncTsEnc, Ticket, TransitedEncoding,
 };
 
 use crate::krberror::{self, KDC_ERR_C_PRINCIPAL_UNKNOWN, KDC_ERR_ETYPE_NOSUPP, KDC_ERR_PREAUTH_FAILED, KDC_ERR_PREAUTH_REQUIRED, KRB_AP_ERR_SKEW};
@@ -20,6 +20,15 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     let realm = &req.req_body.realm;
     let realm_str = crate::realm_to_string(realm);
     let kdc_sname = krbtgt_principal_name(&realm_str);
+    // A TGT, unless the client asks for `kadmin/changepw` (MIT `kpasswd`
+    // does: RFC 3244 wants an INITIAL ticket for a password change). That
+    // ticket is also sealed with the krbtgt key (see `is_changepw`), and
+    // lives five minutes, as on MIT and AD.
+    let ticket_sname = match &req.req_body.sname {
+        Some(s) if crate::is_changepw(s) => s.clone(),
+        _ => kdc_sname.clone(),
+    };
+    let changepw = crate::is_changepw(&ticket_sname);
 
     let Some(cname) = &req.req_body.cname else {
         return krberror::build(KDC_ERR_C_PRINCIPAL_UNKNOWN, &realm_str, kdc_sname, Some("no client name in request".into()), None).into();
@@ -144,8 +153,8 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     let session_key = EncryptionKey { r#type: enctype.etype_number(), value: session_key_bytes.clone().into() };
 
     let (auth_time, _) = crate::time::now();
-    let end_time = crate::time::plus_seconds(TICKET_LIFETIME_SECS);
-    let flags = TicketFlags::initial();
+    let end_time = crate::time::plus_seconds(if changepw { 300 } else { TICKET_LIFETIME_SECS });
+    let flags = crate::ticket_flags(&[crate::flag::INITIAL, crate::flag::PRE_AUTHENT]);
 
     // #18: for a TGT, krbtgt is both the ticket's "server" (its own key
     // encrypts this ticket, right below) and the "KDC" vouching for the
@@ -197,7 +206,7 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     let ticket = Ticket {
         tkt_vno: 5.into(),
         realm: realm.clone(),
-        sname: kdc_sname.clone(),
+        sname: ticket_sname.clone(),
         enc_part: EncryptedData { etype: krbtgt_key.enctype.etype_number(), kvno: Some(krbtgt_key.kvno), cipher: ticket_cipher.into() },
     };
 
@@ -212,7 +221,7 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         end_time,
         renew_till: None,
         srealm: realm.clone(),
-        sname: kdc_sname,
+        sname: ticket_sname,
         caddr: None,
         encrypted_pa_data: None,
     };

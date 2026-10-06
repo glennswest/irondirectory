@@ -40,7 +40,7 @@ export IRON_BOOTSTRAP_FASTETCD_ENDPOINT=$ENDPOINT IRON_BOOTSTRAP_PARTITION_ID=$P
 IRON_LDAP_FASTETCD_ENDPOINT=$ENDPOINT IRON_LDAP_PARTITION_ID=$PID_ID IRON_LDAP_BASE_DN=$BASE \
   IRON_LDAP_LISTEN=127.0.0.1:13389 IRON_LDAP_HEALTH_LISTEN=127.0.0.1:18080 $B/iron-ldapd > "$W/ldapd.log" 2>&1 & pids+=($!)
 IRON_KDC_FASTETCD_ENDPOINT=$ENDPOINT IRON_KDC_PARTITION_ID=$PID_ID IRON_KDC_BASE_DN=$BASE IRON_KDC_REALM=$REALM \
-  IRON_KDC_LISTEN=127.0.0.1:13088 $B/iron-kdcd > "$W/kdcd.log" 2>&1 & pids+=($!)
+  IRON_KDC_LISTEN=127.0.0.1:13088 IRON_KDC_KPASSWD_LISTEN=127.0.0.1:13464 $B/iron-kdcd > "$W/kdcd.log" 2>&1 & pids+=($!)
 $B/iron-bootstrap > "$W/bootstrap1.log" 2>&1 & BS=$!; pids+=($BS)
 
 for i in $(seq 60); do grep -q "provisioned" "$W/bootstrap1.log" && break; kill -0 $BS 2>/dev/null || fail "iron-bootstrap exited"; sleep 1; done

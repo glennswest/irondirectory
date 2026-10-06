@@ -33,13 +33,14 @@ settings are environment variables. An empty value counts as unset.
 | `iron-ldapd` | off (e.g. `:636`) | LDAPS (implicit TLS) | `IRON_LDAP_LDAPS_LISTEN` |
 | `iron-ldapd` | `0.0.0.0:8080` | HTTP `/health` (live fastetcd `Status` check) | `IRON_LDAP_HEALTH_LISTEN` |
 | `iron-kdcd` | `0.0.0.0:88` | Kerberos, UDP and TCP | `IRON_KDC_LISTEN` |
+| `iron-kdcd` | `0.0.0.0:464` | kpasswd (RFC 3244 change/set password), UDP and TCP | `IRON_KDC_KPASSWD_LISTEN` |
 | `iron-gcd` | `0.0.0.0:3268` | Global Catalog LDAP, read-only | `IRON_GC_LISTEN` |
 | `iron-gcd` | off (e.g. `:3269`) | Global Catalog LDAPS | `IRON_GC_LDAPS_LISTEN` |
 | `iron-gcd` | `0.0.0.0:8080` | HTTP `/health` | `IRON_GC_HEALTH_LISTEN` |
 | `iron-oidcd` | `0.0.0.0:8080` | HTTP (OIDC endpoints, no TLS, no `/health`) | `IRON_OIDC_LISTEN` |
 | `iron-rpcd` | `0.0.0.0:445` | DCE/RPC `ncacn_ip_tcp`, unauthenticated binds | `IRON_RPC_LISTEN` |
 
-Not served: kpasswd (464, RFC 3244; #20), `ncacn_np` over SMB, and a DNS
+Not served: `ncacn_np` over SMB, and a DNS
 server (SRV records are published into MicroDNS by `iron-dns-ctl`).
 
 **Three daemons default to 8080** (`iron-ldapd` health, `iron-gcd` health and
@@ -75,6 +76,7 @@ TLS is pinned to groups P-256/P-384/P-521.
 | `IRON_KDC_BASE_DN` | required | base DN |
 | `IRON_KDC_REALM` | required | realm, e.g. `G10.LO` |
 | `IRON_KDC_LISTEN` | `0.0.0.0:88` | bound for both UDP and TCP |
+| `IRON_KDC_KPASSWD_LISTEN` | `0.0.0.0:464` | kpasswd, UDP and TCP; `off` disables it. A failed bind stops the daemon, so an unprivileged test run sets a high port |
 | `IRON_KDC_CONFIG_FASTETCD_ENDPOINT`, `_CONFIG_PARTITION_ID`, `_CONFIG_BASE_DN` | unset | forest registry: one-hop cross-realm referral tickets, and the domain SID a PAC needs (unset: tickets carry no PAC) |
 
 Enctypes: AES only (RFC 3962, RFC 8009).

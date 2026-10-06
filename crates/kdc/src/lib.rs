@@ -16,6 +16,7 @@
 
 pub mod as_exchange;
 pub mod keytab;
+pub mod kpasswd;
 pub mod krberror;
 pub mod pac;
 pub mod principal;
@@ -49,9 +50,12 @@ pub const CLOCK_SKEW_SECS: i64 = 300;
 /// efficient reverse lookup from a user DN to the `groupOfNames` entries
 /// that list it -- must match `iron-ldap`'s own index spec, since
 /// whichever tool actually writes a group entry is the one whose spec
-/// determines what gets indexed for it.
+/// determines what gets indexed for it. `"samaccountname"` (#20) lets
+/// kpasswd find a computer account created over LDAP (by `dsconfigad`),
+/// which has no `krbprincipalname` until its first password is set.
+/// `iron-ldapd` uses this same spec.
 pub fn index_spec() -> IndexSpec {
-    IndexSpec::new(["cn", "mail", "uid", "member", principal::ATTR_PRINCIPAL_NAME])
+    IndexSpec::new(["cn", "mail", "uid", "member", "samaccountname", principal::ATTR_PRINCIPAL_NAME])
 }
 
 /// Shared server state handed to every request.
@@ -143,6 +147,36 @@ pub fn krbtgt_principal_name(realm: &str) -> PrincipalName {
     string_to_principal_name(&format!("krbtgt/{realm}"))
 }
 
+/// `kadmin/changepw`, the service a kpasswd ticket names (RFC 3244). As
+/// in AD, where it is an SPN on the krbtgt account, it has no entry of
+/// its own: tickets for it are issued and read with the krbtgt key.
+pub fn is_changepw(pn: &PrincipalName) -> bool {
+    principal_name_to_string(pn).eq_ignore_ascii_case("kadmin/changepw")
+}
+
+/// RFC 4120 §5.3 ticket flag bit numbers.
+pub mod flag {
+    pub const INITIAL: usize = 9;
+    pub const PRE_AUTHENT: usize = 10;
+}
+
+/// A 32-bit `TicketFlags` with exactly `bits` set. `rasn-kerberos`'s own
+/// constructors (`TicketFlags::initial()` and friends) build an 8-bit
+/// string from a byte value, which puts "initial" on bit 0 (reserved),
+/// not bit 9.
+pub fn ticket_flags(bits: &[usize]) -> rasn_kerberos::TicketFlags {
+    let mut b = rasn::types::BitString::repeat(false, 32);
+    for &i in bits {
+        b.set(i, true);
+    }
+    rasn_kerberos::TicketFlags(b)
+}
+
+/// Whether bit `bit` of `flags` is set.
+pub fn has_flag(flags: &rasn_kerberos::TicketFlags, bit: usize) -> bool {
+    flags.0.get(bit).map(|b| *b).unwrap_or(false)
+}
+
 /// The well-known `AD-WIN2K-PAC` authorization-data type (MS-KILE).
 const AD_WIN2K_PAC: i32 = 128;
 
@@ -178,5 +212,21 @@ mod tests {
         let pn = string_to_principal_name("krbtgt/IRON.LO");
         assert_eq!(pn.r#type, 2);
         assert_eq!(principal_name_to_string(&pn), "krbtgt/IRON.LO");
+    }
+
+    #[test]
+    fn initial_flag_is_bit_9_of_32() {
+        let f = ticket_flags(&[flag::INITIAL]);
+        assert_eq!(f.0.len(), 32);
+        assert!(has_flag(&f, flag::INITIAL));
+        assert!(!has_flag(&f, 0));
+        assert_eq!(rasn::der::encode(&f).unwrap(), vec![0x03, 0x05, 0x00, 0x00, 0x40, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn changepw_is_recognised_case_insensitively() {
+        assert!(is_changepw(&string_to_principal_name("kadmin/changepw")));
+        assert!(is_changepw(&string_to_principal_name("KADMIN/CHANGEPW")));
+        assert!(!is_changepw(&string_to_principal_name("krbtgt/IRON.LO")));
     }
 }

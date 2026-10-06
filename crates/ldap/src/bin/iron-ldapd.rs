@@ -62,7 +62,6 @@ use std::sync::Arc;
 
 use iron_ldap::AppState;
 use iron_partition::{ClusterRef, ForestId, Partition, PartitionRegistry};
-use iron_store::index::IndexSpec;
 use iron_store::store::Store;
 use tokio::net::TcpListener;
 
@@ -141,7 +140,10 @@ async fn main() -> anyhow::Result<()> {
     // a user's group memberships (groupOfNames entries whose "member" list
     // contains that user's DN) -- must match iron-kdc's own index_spec()
     // since indexing happens at write time, by whichever tool wrote the entry.
-    let index_spec = IndexSpec::new(["cn", "mail", "uid", "member"]);
+    // The KDC's spec: an entry iron-ldap writes (a computer account and
+    // the key RFC 3062 sets on it, #20) must be findable by iron-kdcd's
+    // `krbprincipalname`/`samaccountname` lookups.
+    let index_spec = iron_kdc::index_spec();
 
     let topology = load_topology().await?;
 
