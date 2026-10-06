@@ -5,6 +5,17 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-10-06
+- **refactor(golden):** Removed `deploy/golden/build-root.sh` and
+  `fastetcd.ref` (#25). Following the owner's decision, stormcos builds the
+  golden as a clone of its `fips-base` golden plus the daemons, fastetcd from
+  the fastetcd golden and `deploy/golden/fips.cnf` (stormcos#172). The script
+  built its own root and fastetcd, so it had drifted from that model.
+  `test/golden-e2e.sh` stays as the golden's acceptance test and is run by
+  stormcos's stage build.
+- **docs:** README, ARCHITECTURE and CONFIGURATION describe the
+  fips-base clone and no longer call Fedora's `fips.so` validated (#30).
+
 ### 2026-09-28
 - **feat(golden):** `deploy/golden/build-root.sh` assembles the
   `irondirectory` golden's root (#25). It is a Fedora root built with dnf

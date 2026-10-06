@@ -233,37 +233,23 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
-## Waiting on stormcos#172 (2026-09-28): #25 irondirectory golden + iron-bootstrap irondirectory golden + iron-bootstrap
+## Waiting on stormcentral#78 (2026-10-06): #25 irondirectory golden + iron-bootstrap
 
-1. New `crates/bootstrap` (`iron-bootstrap`): waits for fastetcd, then
-   create-only (etcd txn, `version == 0`) writes of: forest registry
-   (`<pid>-config` at `cn=configuration,<base>`, `<pid>-schema`, root domain
-   `<pid>` with realm, NetBIOS name and a fresh domain SID), the base entry,
-   `krbtgt/<REALM>` (random key, RID 502) and `administrator` (userPassword +
-   Kerberos keys from the Secret file, RID 500). Stays resident after.
-   Create-only so concurrent members of one Directory can't race two SIDs.
-2. The golden itself. **Owner decision (2026-09-28): FIPS from Fedora** --
-   "use fips from fedora, you can make a golden bin, and update it when
-   fedora version changes. We already do that for other things." So, like
-   stormcos's fedora-base: `dnf --installroot --releasever=$FEDORA_RELEASE`
-   installs Fedora's own glibc + openssl-libs (fips.so) into the root,
-   and the golden is rebuilt when the Fedora release changes.
-   - [x] `deploy/golden/build-root.sh <dir>`: glibc release build of the
-         four binaries on a host of the same Fedora release, dnf installroot,
-         fastetcd (pinned tag, static musl; or `FASTETCD_BIN`),
-         `/etc/irondirectory/fips.cnf`, a manifest. Repo-owned so the
-         stormcos recipe is just "run it, `golden_from_dir`".
-   - [x] `test/golden-e2e.sh`: runs fastetcd + ldapd + kdcd + bootstrap
-         inside that root only (`unshare -r --root`, `env -i`), checks
-         ldapwhoami/kinit, restarts on the same data. PASSED on dev via
-         sc-build at 41abdac (113 MB root, F43 glibc 2.42, openssl-libs 3.5.8).
-   - [x] Filed stormcos#172 (stage golden calling build-root.sh, FASTETCD_BIN
-         from its own fastetcd build, FEDORA_RELEASE in the key); commented
-         stormcentral#78 (register as `special` + stage source); proposed
-         #25 after stormcos#172.
-   - [ ] When the golden exists (`stormcentral component list` shows
-         `irondirectory`): run the issue's pod acceptance (operator#1's live
-         test), then close #25.
+1. `crates/bootstrap` (`iron-bootstrap`): done (create-only forest registry,
+   base entry, krbtgt, administrator; stays resident). `test/bootstrap-e2e.sh`.
+2. The golden. **Owner decision (2026-09-28): `fips-base` golden + an
+   `irondirectory` copy-on-write clone of it** (the four daemons, gnu/ossl
+   dynamic; `/usr/bin/fastetcd` copied from the fastetcd golden; `fips.cnf`).
+   Fedora's fips.so is not CMVP-certified (#30); UBI later.
+   - [x] stormcos#172 implements both in `deploy/build-goldens.sh` (reads only
+         `deploy/golden/fips.cnf` from here) and runs `test/golden-e2e.sh`
+         in its stage harness: PASS on irondirectory@d4f7128.
+   - [x] Removed `deploy/golden/build-root.sh` + `fastetcd.ref` (they built
+         their own root and fastetcd, diverging from the decision).
+   - [ ] stormcentral#78 registers `fips-base` + `irondirectory` as stage
+         goldens (a first `component stage fips-base` failed 2026-10-05).
+   - [ ] When `stormcentral component list` shows `irondirectory`: run the
+         in-pod acceptance (operator#1's live test), then close #25.
 
 ## Locked decisions (see docs/ARCHITECTURE.md)
 

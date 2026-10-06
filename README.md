@@ -98,10 +98,10 @@ first-class design constraint rather than a bolt-on.
 - **Deployment:** today, **standalone**: per-daemon RPMs + systemd units
   on Fedora/RHEL VMs, talking to a dedicated fastetcd cluster in
   **plaintext** (the daemons have no fastetcd mTLS settings yet, #26).
-  For Kubernetes, `deploy/golden/build-root.sh` builds the `irondirectory`
-  stormcos golden's root (a Fedora root carrying Fedora's FIPS provider),
-  which irondirectory-operator runs as rustkube pods (#25). The stormcos
-  recipe that seals it as a golden is not in place yet. Ports, settings and
+  For Kubernetes, stormcos builds the `irondirectory` golden (a clone of its
+  Fedora `fips-base` golden plus these daemons, fastetcd and
+  `deploy/golden/fips.cnf`), which irondirectory-operator runs as rustkube
+  pods (#25). It is not yet registered in stormcentral (stormcentral#78). Ports, settings and
   packaging: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 - **Partitioned from day one:** never a monolithic tree. The directory is many
   strongly-consistent partitions (one Raft cluster per naming context), federated

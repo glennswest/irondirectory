@@ -122,9 +122,12 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
   units on Fedora/RHEL VMs (`docs/CONFIGURATION.md`). The Kubernetes path is
   the `irondirectory` stormcos golden + `iron-bootstrap`, run as rustkube
   pods by irondirectory-operator (#25), not a Helm chart. The golden is a
-  Fedora root (`deploy/golden/build-root.sh`): Fedora's own glibc and
-  openssl-libs, so the FIPS provider is the OS's validated `fips.so` (D4),
-  rebuilt when the Fedora release changes. The
+  copy-on-write clone of stormcos's `fips-base` golden (Fedora's own glibc,
+  openssl-libs with its `fips.so`, ca-certificates, by `dnf --installroot`)
+  plus the daemons, fastetcd from the fastetcd golden, and `fips.cnf`; it is
+  rebuilt when the Fedora release changes. Fedora's `fips.so` is the OpenSSL
+  FIPS provider but not a CMVP-certified module (#30); a certified boundary
+  means moving `fips-base` to UBI packages. The
   daemons reach fastetcd in plaintext only; the mTLS link drawn in §2 needs
   per-binary TLS settings that don't exist yet (#26).
 

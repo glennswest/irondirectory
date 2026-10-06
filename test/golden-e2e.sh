@@ -4,7 +4,10 @@
 # comes from the host — not a library, not a setting. That is what a pod with
 # no image config is.
 #
-#   test/golden-e2e.sh <root>        # a tree from deploy/golden/build-root.sh
+#   test/golden-e2e.sh <root>        # the irondirectory golden's tree
+#
+# stormcos's stage build runs this against the golden it seals (stormcos
+# deploy/build-goldens.sh, `ONLY="fastetcd fips-base irondirectory"`).
 #
 # Checks, as the issue states them:
 #  1. fastetcd + iron-ldapd + iron-kdcd + iron-bootstrap come up; iron-ldapd's

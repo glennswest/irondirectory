@@ -188,25 +188,25 @@ config at `/usr/share/doc/<name>/<name>.conf.example`, and runs
 
 **Kubernetes: the `irondirectory` golden** (#25), run as rustkube pods by
 irondirectory-operator. It's a Fedora root, not a static-musl build, so the
-FIPS provider is Fedora's own validated `fips.so` (D4). `deploy/golden/build-root.sh <dir>`
-assembles it:
+daemons link Fedora's own OpenSSL and its FIPS provider (D4). stormcos builds
+it (`deploy/build-goldens.sh`, owner decision on #25): a copy-on-write clone
+of the `fips-base` golden plus what this repo and the fastetcd golden supply:
 
 | Path | What |
 |---|---|
-| `/usr/bin/fastetcd` | static musl, built from the tag in `deploy/golden/fastetcd.ref` (or `FASTETCD_BIN`) |
-| `/usr/bin/iron-ldapd`, `iron-kdcd`, `iron-kdc-ctl`, `iron-bootstrap` | glibc release builds |
-| `/usr/lib64/…`, `/usr/lib64/ossl-modules/fips.so` | Fedora `$FEDORA_RELEASE`'s `glibc` + `openssl-libs` and their dependencies, installed by `dnf --installroot` |
-| `/etc/irondirectory/fips.cnf` | `OPENSSL_CONF` for every daemon (FIPS + base providers only) |
-| `/etc/irondirectory/golden.txt` | Fedora release, rpm versions, both commits, sha256 of each binary |
+| `/usr/lib64/…`, `/usr/lib64/ossl-modules/fips.so` | from `fips-base`: Fedora `$FEDORA_RELEASE`'s `glibc`, `openssl-libs`, `ca-certificates`, installed by `dnf --installroot` |
+| `/usr/bin/iron-ldapd`, `iron-kdcd`, `iron-kdc-ctl`, `iron-bootstrap` | glibc (`x86_64-unknown-linux-gnu`) release builds, `ossl` dynamic, on a host of the same Fedora release |
+| `/usr/bin/fastetcd` | copied from the fastetcd golden, never rebuilt here |
+| `/etc/irondirectory/fips.cnf` | `deploy/golden/fips.cnf`: `OPENSSL_CONF` for every daemon (FIPS + base providers only) |
+| `/etc/irondirectory/golden.txt` | rpm versions, irondirectory commit, sha256 of each binary |
 | `/var/lib/irondirectory`, `/tmp`, `/run` | empty |
 
 The golden has no entrypoint or environment; the operator names every
-command and setting. It is rebuilt when `FEDORA_RELEASE` (default 43)
-changes, and must be built on a host of that release, since the binaries
-link against its glibc and OpenSSL. The script needs dnf5, rustup (with the
-musl target), protoc, musl-gcc and a `/etc/subuid`/`/etc/subgid` range: dnf
-runs as root inside a user namespace, no real root. `test/golden-e2e.sh <dir>`
-is its acceptance test. It runs fastetcd, iron-ldapd, iron-kdcd and
+command and setting. It is rebuilt when `FEDORA_RELEASE` changes (the
+binaries must link that release's glibc and OpenSSL) or this repo changes.
+Fedora's `fips.so` is the OpenSSL FIPS provider but not a CMVP-certified
+module (#30). This repo's contract is `fips.cnf`, the gnu/dynamic build and
+the file list above. `test/golden-e2e.sh <dir>` is its acceptance test. It runs fastetcd, iron-ldapd, iron-kdcd and
 iron-bootstrap chrooted into the tree with an empty environment, checks
 `ldapwhoami` and `kinit` for the administrator, then restarts everything on the
 same data with a changed password file.
