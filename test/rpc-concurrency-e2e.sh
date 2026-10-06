@@ -50,10 +50,19 @@ E1=http://127.0.0.1:$((P + 1))
 E2=http://127.0.0.1:$((P + 2))
 
 printf 'TestPass123!\n' > "$W/password"
-IRON_BOOTSTRAP_FASTETCD_ENDPOINT=$E1 IRON_BOOTSTRAP_PARTITION_ID=$PID_ID IRON_BOOTSTRAP_BASE_DN=$BASE \
+export IRON_BOOTSTRAP_FASTETCD_ENDPOINT=$E1 IRON_BOOTSTRAP_PARTITION_ID=$PID_ID IRON_BOOTSTRAP_BASE_DN=$BASE \
   IRON_BOOTSTRAP_REALM=$REALM IRON_BOOTSTRAP_NETBIOS_NAME=$(echo "$PID_ID" | tr a-z A-Z) \
-  IRON_BOOTSTRAP_ADMIN_PASSWORD_FILE=$W/password $B/iron-bootstrap > "$W/bootstrap.log" 2>&1 & BS=$!; pids+=($BS)
-for _ in $(seq 60); do grep -q "provisioned" "$W/bootstrap.log" && break; kill -0 $BS 2>/dev/null || fail "iron-bootstrap exited"; sleep 1; done
+  IRON_BOOTSTRAP_ADMIN_PASSWORD_FILE=$W/password
+# /health answers before the first leader takes writes, so a first write
+# can be refused (UNAVAILABLE); a pod would be restarted, so retry the same.
+for attempt in 1 2 3 4 5; do
+  $B/iron-bootstrap > "$W/bootstrap.log" 2>&1 & BS=$!; pids+=($BS)
+  for _ in $(seq 60); do grep -q "provisioned" "$W/bootstrap.log" && break; kill -0 $BS 2>/dev/null || break; sleep 1; done
+  grep -q "provisioned" "$W/bootstrap.log" && break
+  echo "== iron-bootstrap attempt $attempt: $(tail -1 "$W/bootstrap.log" | cut -c1-200)"
+  [ "$attempt" = 5 ] && fail "iron-bootstrap did not provision"
+  sleep 2
+done
 SID=$(sed 's/\x1b\[[0-9;]*m//g' "$W/bootstrap.log" | grep -o 'domain_sid=S-1-5-21-[0-9-]*' | head -1 | cut -d= -f2)
 [ -n "$SID" ] || fail "no domain SID from iron-bootstrap"
 echo "== provisioned $PID_ID ($SID)"
