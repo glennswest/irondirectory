@@ -17,7 +17,7 @@ COUNT=${COUNT:-25}
 export OPENSSL_CONF=${OPENSSL_CONF:-$PWD/crates/crypto/testdata/fips-dev.cnf}
 mkdir -p "$PWD/tmp"
 W=$(mktemp -d "$PWD/tmp/rpce2e.XXXX")
-P=$((20000 + RANDOM % 12000 / 10 * 10)) # port base, below the ephemeral range (32768+);; member i: client P+i, peer P+3+i, metrics P+6+i
+P=$((20000 + RANDOM % 12000 / 10 * 10)) # port base, below the ephemeral range (32768+); member i: client P+i, peer P+3+i, metrics P+6+i
 PID_ID="rpc$(date +%s)"
 BASE="dc=${PID_ID},dc=example,dc=lo"
 REALM="$(echo "$PID_ID" | tr a-z A-Z).EXAMPLE.LO"
