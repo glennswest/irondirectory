@@ -233,21 +233,19 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
-## In progress (2026-10-06): #24 concurrency failures under `iron-simulate join 25`
+## Done (2026-10-06): #24 concurrency failures under `iron-simulate join 25`
 
-Hypothesis: both failure modes are fastetcd < v1.0.0 serving default
-(linearizable) reads from a follower's local state (fastetcd#10, fixed in
-v1.0.0, 2026-07-19; #24 was found on v0.8.x on 2026-07-15). The harness and
-iron-rpcd reach `etcd.g8.lo` (3 A records) on different members, so the
-harness misses SAMR's write ("no such account") and NETLOGON misses the
-harness's NTOWF write; iron-rpc turns that `None` into `FAULT_UNK_IF`, unlogged.
-- [ ] iron-rpc: log why a call failed; unknown opnum → `nca_op_rng_error`,
-      NETLOGON auth failure → `STATUS_ACCESS_DENIED`, not `nca_unk_if`.
-- [ ] iron-simulate exits non-zero when any join fails.
-- [ ] `test/rpc-concurrency-e2e.sh`: a throwaway 3-member fastetcd (release
-      tarball, `FASTETCD_VERSION`), daemons on member 1, harness on member 2.
-      Run on v0.8.1 (expect failures) and v1.2.0 (expect 25/25) via sc-build.
-      (The shared dm1/dm2/dm3 cluster doesn't answer from dev today.)
+Root cause: fastetcd < 1.0.0 served default (linearizable) reads from a
+follower's own state (fastetcd#10). Processes reaching `etcd.g8.lo` through
+different members missed each other's writes: the harness missed SAMR's new
+account, and NETLOGON missed the harness's NTOWF. iron-rpc reported both as
+an unlogged `FAULT_UNK_IF`. `test/rpc-concurrency-e2e.sh` (throwaway
+three-member cluster, daemons on member 1, harness on member 2) reproduces
+it on v0.8.1 ("has no netlogonntowf" -> `STATUS_ACCESS_DENIED`) and passes
+on v1.2.0. Fixed here: iron-rpc names its failures; iron-store retries reads
+answered `UNAVAILABLE`. **The shared dm1/dm2/dm3 cluster is recorded as
+v0.8.1. Upgrade it to >= 1.0.0 before anything runs against it again.** (It
+didn't answer from dev on 2026-10-06.)
 
 ## Waiting on stormcentral#78 (2026-10-06): #25 irondirectory golden + iron-bootstrap
 
@@ -1635,7 +1633,7 @@ neither bug is fixed in this pass -- filed as #24 for the underlying
       only kpasswd/464 remains) -- see
       "#20 next step" and "#20 live test environment" below for exactly
       where this is paused and how to resume it.
-- [ ] `iron-rpc`/`iron-store` concurrency bugs found via #23 scale testing (#24): intermittent RPC `FAULT_UNK_IF` faults and a store read-after-write race under concurrent load (~40% failure rate at concurrency 25, 0% at concurrency <= 5)
+- [x] `iron-rpc`/`iron-store` concurrency failures found via #23 scale testing (#24, CLOSED): stale follower reads on fastetcd < 1.0.0, see "Done (2026-10-06)" above
 
 ### #20 next step: Netlogon Secure Channel RPC auth (not NTLMSSP)
 

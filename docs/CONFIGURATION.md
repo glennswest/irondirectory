@@ -9,6 +9,13 @@ settings are environment variables. An empty value counts as unset.
 - **fastetcd connection: plaintext only.** Every binary connects to its
   `*_FASTETCD_ENDPOINT` (e.g. `http://etcd.g8.lo:2379`) without TLS. `iron-store`
   can speak mTLS, but no binary exposes a CA/cert/key setting yet (#26).
+- **fastetcd >= 1.0.0.** Every read relies on etcd's default linearizable
+  reads. Before 1.0.0 (fastetcd#10) a follower served them from its own
+  state, so a process reading through one member missed what another had
+  just written through a different one. Under concurrent domain joins this
+  was #24. Reads that fastetcd answers `UNAVAILABLE` are retried for
+  about 1.5 s; writes are not. `test/rpc-concurrency-e2e.sh` checks this
+  against a three-member cluster.
 - **FIPS:** `OPENSSL_CONF` must point at a config that activates the OS's
   `fips.so` provider (see [`FIPS.md`](FIPS.md);
   `crates/crypto/testdata/fips-dev.cnf` is an example). `iron-kdcd`,
