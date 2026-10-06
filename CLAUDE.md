@@ -233,30 +233,19 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
-## In progress (2026-10-06): #20 macOS half -- kpasswd/464 (RFC 3244)
+## Waiting on the owner (2026-10-06): #20
 
-`dsconfigad` creates the computer over LDAP, then sets its password with
-RFC 3244 Set-Password on 464, which nothing serves. Plan:
-- [ ] `iron-kdc::kpasswd`: RFC 3244 request/reply framing; AP-REQ for
-      `kadmin/changepw` (decrypted with the krbtgt key: in AD that SPN is on
-      the krbtgt account, so no extra principal to provision); KRB-PRIV in
-      the authenticator subkey (own `EncKrbPrivPart` with optional
-      s-address, Heimdal omits it); version 1 change-password (own
-      password, INITIAL ticket required) and 0xff80 set-password (targname
-      other than self needs RID 500 or a member of RID 512); target found
-      by `krbprincipalname`, else `samaccountname` (now indexed by both
-      iron-kdc and iron-ldap); reply AP-REP + KRB-PRIV with a seq number;
-      errors as KRB-ERROR carrying the result code.
-- [ ] AS-REQ honours `sname = kadmin/changepw` (MIT `kpasswd` asks the AS
-      for it, INITIAL); TGS-REQ for `kadmin/changepw` uses the krbtgt key.
-- [ ] `iron-kdcd` serves it on `IRON_KDC_KPASSWD_LISTEN` (default
-      `0.0.0.0:464`, UDP+TCP).
-- [ ] Verify on dev via sc-build with real MIT `kinit`/`kpasswd` (version 1)
-      and a set-password client, in a `test/kpasswd-e2e.sh`.
-- [ ] Real `dsconfigad` needs the Mac (192.168.8.100); this session runs on
-      stormcentral, not the Mac -> owner.
-Windows half (Add-Computer): needs SAMR/LSA over `ncacn_np` (rocketsmbd),
-CLDAP netlogon ping, a Windows client VM -> owner decision before starting.
+macOS half, server side done and verified on dev (`test/kpasswd-e2e.sh`):
+kpasswd/464 (RFC 3244) in iron-kdc, checked with real MIT `kpasswd` (v1,
+UDP+TCP) and impacket set-password (0xff80) on a computer created with
+`ldapadd`, as `dsconfigad` does. Open, both owner calls (asked on #20):
+- A real `dsconfigad` run needs the Mac (no access from this VM) and a
+  stack it can reach on 88/389/464. The old ironwintest stack on dev was
+  a root checkout, which the current rules forbid, so it is gone.
+- Windows `Add-Computer` needs SAMR/LSA/NETLOGON over `ncacn_np` (SMB
+  named pipes, rocketsmbd), a CLDAP LDAP ping (UDP 389), Netlogon
+  Schannel + `NetrServerPasswordSet2` (plan below), and a Windows client
+  VM. Proposed: split it out of #20 into separate issues.
 
 ## Done (2026-10-06): #24 concurrency failures under `iron-simulate join 25`
 
@@ -1655,7 +1644,8 @@ neither bug is fixed in this pass -- filed as #24 for the underlying
 - [x] SAMR/LSARPC/NETLOGON over DCE-RPC (the join handshake) (#19, CLOSED — see Live infrastructure below); SYSVOL via rocketsmbd is a separate, not-yet-filed cross-project follow-up
 - [x] Native Rust domain-join + login simulation harness for scale testing (#23, CLOSED — see Live infrastructure below); found real RPC/store concurrency bugs at scale, filed as #24
 - [ ] Windows `Add-Computer` join + login; macOS `dsconfigad` bind (macOS:
-      only kpasswd/464 remains) -- see
+      kpasswd/464 done 2026-10-06; a real dsconfigad run and the Windows
+      scope wait on the owner) -- see
       "#20 next step" and "#20 live test environment" below for exactly
       where this is paused and how to resume it.
 - [x] `iron-rpc`/`iron-store` concurrency failures found via #23 scale testing (#24, CLOSED): stale follower reads on fastetcd < 1.0.0, see "Done (2026-10-06)" above
