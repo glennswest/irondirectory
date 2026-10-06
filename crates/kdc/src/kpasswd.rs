@@ -37,8 +37,9 @@ use iron_crypto::kerberos::{self, Enctype};
 use iron_partition::{Dn, Sid};
 use iron_store::binary_attrs::{decode_binary_attr, OBJECT_SID_ATTR};
 use iron_store::model::Entry;
-use rasn::types::{Integer, OctetString};
-use rasn::{AsnType, Decode, Encode};
+// The prelude, not just the derive names: the derives expand to calls on
+// rasn's Encoder/Decoder traits, which must be in scope.
+use rasn::prelude::*;
 use rasn_kerberos::{ApRep, ApReq, Authenticator, EncApRepPart, EncTicketPart, EncryptedData, HostAddress, KerberosTime, KrbPriv, PrincipalName, Realm};
 
 use crate::{krberror, principal_name_to_string, realm_to_string, AppState, CLOCK_SKEW_SECS};
