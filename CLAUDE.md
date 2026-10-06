@@ -233,6 +233,31 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
+## In progress (2026-10-06): #20 macOS half -- kpasswd/464 (RFC 3244)
+
+`dsconfigad` creates the computer over LDAP, then sets its password with
+RFC 3244 Set-Password on 464, which nothing serves. Plan:
+- [ ] `iron-kdc::kpasswd`: RFC 3244 request/reply framing; AP-REQ for
+      `kadmin/changepw` (decrypted with the krbtgt key: in AD that SPN is on
+      the krbtgt account, so no extra principal to provision); KRB-PRIV in
+      the authenticator subkey (own `EncKrbPrivPart` with optional
+      s-address, Heimdal omits it); version 1 change-password (own
+      password, INITIAL ticket required) and 0xff80 set-password (targname
+      other than self needs RID 500 or a member of RID 512); target found
+      by `krbprincipalname`, else `samaccountname` (now indexed by both
+      iron-kdc and iron-ldap); reply AP-REP + KRB-PRIV with a seq number;
+      errors as KRB-ERROR carrying the result code.
+- [ ] AS-REQ honours `sname = kadmin/changepw` (MIT `kpasswd` asks the AS
+      for it, INITIAL); TGS-REQ for `kadmin/changepw` uses the krbtgt key.
+- [ ] `iron-kdcd` serves it on `IRON_KDC_KPASSWD_LISTEN` (default
+      `0.0.0.0:464`, UDP+TCP).
+- [ ] Verify on dev via sc-build with real MIT `kinit`/`kpasswd` (version 1)
+      and a set-password client, in a `test/kpasswd-e2e.sh`.
+- [ ] Real `dsconfigad` needs the Mac (192.168.8.100); this session runs on
+      stormcentral, not the Mac -> owner.
+Windows half (Add-Computer): needs SAMR/LSA over `ncacn_np` (rocketsmbd),
+CLDAP netlogon ping, a Windows client VM -> owner decision before starting.
+
 ## Done (2026-10-06): #24 concurrency failures under `iron-simulate join 25`
 
 Root cause: fastetcd < 1.0.0 served default (linearizable) reads from a
