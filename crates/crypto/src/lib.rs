@@ -103,8 +103,7 @@ impl FipsContext {
             return Err(Error::Ossl);
         }
 
-        let name = CStr::from_bytes_with_nul(b"fips\0").unwrap();
-        let active = unsafe { OSSL_PROVIDER_available(ctx.ptr(), name.as_ptr()) };
+        let active = unsafe { OSSL_PROVIDER_available(ctx.ptr(), c"fips".as_ptr()) };
         if active != 1 {
             return Err(Error::FipsProviderNotActive);
         }
