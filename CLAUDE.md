@@ -309,8 +309,11 @@ didn't answer from dev on 2026-10-06.)
          in its stage harness: PASS on irondirectory@d4f7128.
    - [x] Removed `deploy/golden/build-root.sh` + `fastetcd.ref` (they built
          their own root and fastetcd, diverging from the decision).
-   - [ ] stormcentral#78 registers `fips-base` + `irondirectory` as stage
-         goldens (a first `component stage fips-base` failed 2026-10-05).
+   - [x] stormcentral#78 closed 2026-11-07: `irondirectory` (special) and
+         `dirop` are in stormcentral's *seed*, but the live registry
+         (`component list`) has neither until the master runs
+         `component add`. `fips-base` has an image (golden-fips-base-4eec6688a200).
+   - [ ] 2026-11-07: `component stage irondirectory` started (d0519a679779).
    - [ ] When `stormcentral component list` shows `irondirectory`: run the
          in-pod acceptance (operator#1's live test), then close #25.
 
