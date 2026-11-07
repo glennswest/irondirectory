@@ -167,9 +167,18 @@ cargo test -p iron-crypto
 runs (tests, `cargo run`), unless `OPENSSL_CONF` is already set (#29). So a
 plain `cargo test` — which is what `sc-build` runs on dev — uses the FIPS
 provider without any setup. Without it, `FipsContext::new()` fails closed
-in every test; when those failures happen on many test threads at once
-the `iron-crypto` test binary has crashed with SIGSEGV rather than
-reporting them, so a crash there means "no FIPS config", not a crypto bug.
+with `FipsProviderNotActive` in every test.
+
+Creating and freeing a `FipsContext` is serialised by a process-wide lock
+(#31). OpenSSL's ssl config module (an `ssl_conf` line, which Fedora's
+system `openssl.cnf` has) keeps global state with no lock of its own, and
+two threads loading such a config at once crashed inside
+`ssl_module_init`. That's how the parallel tests used to die with SIGSEGV
+when no `OPENSSL_CONF` was set. `crates/crypto/testdata/fips-sslconf.cnf`
+and `nofips-sslconf.cnf` reproduce it in `iron-crypto`'s own tests. The
+lock covers only `FipsContext`. A different OpenSSL user in the same
+process loading a config at the same moment (rust-openssl's one-time
+init, for TLS) is not covered; the daemons make their contexts at startup.
 
 ## What's deliberately out of scope here
 

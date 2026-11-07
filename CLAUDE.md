@@ -324,6 +324,13 @@ transitive trust, #47 teardown/re-parenting, #48 OIDC brokering; Windows AD
 interop with #20. Found #45 (anonymous LDAP writes, P1) -- when fixed, this
 script's anonymous `ldapadd`/`ldapdelete` need a bind.
 
+## Done (2026-11-08): #31 iron-crypto SIGSEGV without FIPS
+
+OpenSSL's ssl config module (`ssl_conf`, in Fedora's system openssl.cnf)
+crashed in `ssl_module_init` when contexts were loaded on several threads
+at once. `FipsContext` creation and freeing now hold a process-wide lock.
+`crates/crypto/src/lib.rs` tests reproduce it (10/10 aborts before the fix).
+
 ## Locked decisions (see docs/ARCHITECTURE.md)
 
 - **D1** Dedicated fastetcd cluster — never the Kubernetes etcd.

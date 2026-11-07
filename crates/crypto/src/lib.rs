@@ -19,6 +19,21 @@ pub mod sign;
 use ossl::bindings::{OSSL_LIB_CTX_load_config, OSSL_PROVIDER_available};
 use ossl::OsslContext;
 use std::ffi::CStr;
+use std::mem::ManuallyDrop;
+use std::sync::Mutex;
+
+/// Serialises loading a config into a new library context, and freeing one
+/// (#31). OpenSSL's ssl config module (an `ssl_conf` line, which Fedora's
+/// system openssl.cnf has) keeps process-global state with no lock of its
+/// own: two threads in `OSSL_LIB_CTX_load_config` at once crashed in
+/// `ssl_module_init` (SIGSEGV/SIGABRT, about 1 run in 7 of the parallel
+/// tests). Contexts are made once per daemon, so the lock costs nothing.
+static CONTEXT_LIFECYCLE: Mutex<()> = Mutex::new(());
+
+fn lifecycle_lock() -> std::sync::MutexGuard<'static, ()> {
+    // Nothing guarded can be left half-done by a panic; ignore poisoning.
+    CONTEXT_LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -59,7 +74,15 @@ impl From<ossl::Error> for Error {
 /// active — this is deliberate. Every caller in this crate goes through
 /// `FipsContext`, so there is no silent fallback to an unvalidated default
 /// provider: either the FIPS module is active, or nothing runs.
-pub struct FipsContext(OsslContext);
+pub struct FipsContext(ManuallyDrop<OsslContext>);
+
+impl Drop for FipsContext {
+    fn drop(&mut self) {
+        let _guard = lifecycle_lock();
+        // SAFETY: dropped exactly once, here; never used afterwards.
+        unsafe { ManuallyDrop::drop(&mut self.0) };
+    }
+}
 
 impl FipsContext {
     pub fn new() -> Result<Self, Error> {
@@ -71,6 +94,9 @@ impl FipsContext {
     /// `OSSL_LIB_CTX_load_config` directly with a real C string (see the
     /// type's docs for why not `ossl`'s `load_configuration_file`).
     fn with_config(path: Option<&CStr>) -> Result<Self, Error> {
+        let _guard = lifecycle_lock();
+        // Declared after the guard, so on an error return it is freed
+        // while the lock is still held.
         let ctx = OsslContext::new_lib_ctx();
         let filename = path.map_or(std::ptr::null(), CStr::as_ptr);
         if unsafe { OSSL_LIB_CTX_load_config(ctx.ptr(), filename) } != 1 {
@@ -83,7 +109,7 @@ impl FipsContext {
             return Err(Error::FipsProviderNotActive);
         }
 
-        Ok(FipsContext(ctx))
+        Ok(FipsContext(ManuallyDrop::new(ctx)))
     }
 
     pub(crate) fn inner(&self) -> &OsslContext {

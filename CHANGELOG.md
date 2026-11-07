@@ -5,6 +5,19 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-08
+- **fix(crypto):** `FipsContext` creation and freeing are serialised by a
+  process-wide lock (#31). With no `OPENSSL_CONF`, the parallel iron-crypto
+  tests died (SIGSEGV/SIGABRT, 3 of 20 runs) instead of failing with
+  `FipsProviderNotActive`. The backtrace put the crash in OpenSSL's
+  `ssl_module_init`, under `OSSL_LIB_CTX_load_config` on two threads at
+  once. Fedora's system `openssl.cnf` has an `ssl_conf` section, and that
+  module's state is global and unlocked. `FipsContext::new()` now calls
+  `OSSL_LIB_CTX_load_config` itself.
+- **test(crypto):** 16 threads × 25 contexts from a config with `ssl_conf`,
+  with FIPS (`testdata/fips-sslconf.cnf`, all succeed) and without it
+  (`testdata/nofips-sslconf.cnf`, all `FipsProviderNotActive`).
+
 ### 2026-11-07
 - **test:** `test/federation-scale-e2e.sh`, the testable part of the D10
   federation matrix (#21). Suite A: one forest, `CHILDREN` (25) child
