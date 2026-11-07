@@ -141,7 +141,7 @@ echo "ok  GC search scoped to each child returns only that child's entry"
 for i in $(seq "$CHILDREN"); do
   lp=$(child_port "$i")
   out=$(ldapsearch -LLL -x -H "ldap://127.0.0.1:$((P + 3))" -b "dc=c$i,$ROOT" -s sub "(cn=user$i)" cn 2>&1 || true)
-  echo "$out" | grep -qi "ref: ldap://127.0.0.1:$lp/" || fail "root server, base dc=c$i: no referral to :$lp: $out"
+  echo "$out" | grep -qiE "^(ref|referral): ldap://127.0.0.1:$lp/dc=c$i,$ROOT$" || fail "root server, base dc=c$i: no referral to :$lp: $out"
   out=$(ldapsearch -LLL -C -x -H "ldap://127.0.0.1:$((P + 3))" -b "dc=c$i,$ROOT" -s sub "(cn=user$i)" cn 2>&1 || true)
   echo "$out" | grep -q "^cn: user$i$" || fail "ldapsearch -C did not chase to fed-c$i's entry: $out"
 done
