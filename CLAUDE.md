@@ -314,14 +314,15 @@ didn't answer from dev on 2026-10-06.)
    - [ ] When `stormcentral component list` shows `irondirectory`: run the
          in-pod acceptance (operator#1's live test), then close #25.
 
-## In progress (2026-11-07): #21 federation test matrix
+## Done (2026-11-07): #21 federation test matrix
 
-Owner decided (2026-10-06): run the testable parts, split the rest.
-`test/federation-scale-e2e.sh` (many partitions on two clusters; a
-100-forest GAL with convergence/staleness bounds). Split out: #46 transitive
-trust, #47 teardown/re-parenting, #48 OIDC brokering; Windows AD interop
-stays with #20. Found #45 (anonymous LDAP writes). Next: the sc-build run,
-then close #21.
+`test/federation-scale-e2e.sh` passes on a build VM (dd01d4d): 25 children on
+two clusters (GC, referral + chase to each, add/delete in ~130 ms); a
+100-forest GAL converged in 486 ms, no krb* attribute crossing, add staleness
+max 204 ms, delete max 118 ms. The rest was capability, split out: #46
+transitive trust, #47 teardown/re-parenting, #48 OIDC brokering; Windows AD
+interop with #20. Found #45 (anonymous LDAP writes, P1) -- when fixed, this
+script's anonymous `ldapadd`/`ldapdelete` need a bind.
 
 ## Locked decisions (see docs/ARCHITECTURE.md)
 

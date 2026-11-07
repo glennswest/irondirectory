@@ -16,6 +16,8 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
   whitelist: convergence within `CONVERGE_S`, no `krb*` attribute crossing,
   a new entry in every forest and a sampled delete reaching the GAL within
   `STALE_MS`; prints the times measured.
+  First run (build VM, 2026-11-07): GAL converged in 486 ms; add staleness
+  max 204 ms over 100 forests; deletes max 118 ms.
 - **docs:** ARCHITECTURE D10 says which deferred suites now run and that the
   rest is unbuilt capability, split out as #46 (transitive trust), #47
   (teardown/re-parenting) and #48 (OIDC brokering). Filed #45: iron-ldapd
