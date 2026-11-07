@@ -25,7 +25,7 @@ async fn main() {
             // used once for a ticket encrypt/decrypt round-trip.
             let ctx = FipsContext::new().map_err(|e| format!("task {i}: FipsContext::new failed: {e}"))?;
             let enctype = Enctype::Aes256CtsHmacSha1_96;
-            let key: Vec<u8> = (0..32).map(|b| (b + i as u8) as u8).collect();
+            let key: Vec<u8> = (0..32).map(|b| b + i as u8).collect();
             let plaintext = format!("enc-tgs-rep-part-{i}-payload-padding-out-to-a-reasonable-length").into_bytes();
             let cipher = kerberos::encrypt(&ctx, enctype, &key, 9, &plaintext).map_err(|e| format!("task {i}: encrypt failed: {e}"))?;
             match kerberos::decrypt(&ctx, enctype, &key, 9, &cipher) {
