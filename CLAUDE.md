@@ -314,14 +314,14 @@ didn't answer from dev on 2026-10-06.)
    - [ ] When `stormcentral component list` shows `irondirectory`: run the
          in-pod acceptance (operator#1's live test), then close #25.
 
-## Waiting on the owner (2026-10-06): #21 federation test matrix
+## In progress (2026-11-07): #21 federation test matrix
 
-Only two of its items can be tested today: many-partition scale and
-many-forest GAL convergence. The rest isn't built: transitive trust (iron-kdc
-refers only to a direct neighbour realm), partition teardown/re-parenting (no
-iron-config-ctl command), cross-forest OIDC brokering. Windows AD interop needs
-a Windows DC. Asked on #21: build the two suites here and split the rest into
-issues (recommended), or build the capabilities under #21?
+Owner decided (2026-10-06): run the testable parts, split the rest.
+`test/federation-scale-e2e.sh` (many partitions on two clusters; a
+100-forest GAL with convergence/staleness bounds). Split out: #46 transitive
+trust, #47 teardown/re-parenting, #48 OIDC brokering; Windows AD interop
+stays with #20. Found #45 (anonymous LDAP writes). Next: the sc-build run,
+then close #21.
 
 ## Locked decisions (see docs/ARCHITECTURE.md)
 
@@ -1867,12 +1867,12 @@ it committed to git (runtime/environment state, not code):
   errors.
 
 ### Deferred — exhaustive federation testing (D10), not capability
-- [ ] Many-partition / many-cluster scale matrices
-- [ ] Deep referral chains; transitive multi-realm trust paths, shortcut trusts
-- [ ] Hundreds-of-forests GAL convergence + staleness bounds
-- [ ] Divestiture/teardown, re-parenting, conflict cases
-- [ ] Cross-forest brokering at fan-out; selective-auth policy
-- [ ] **Real Windows AD interop** (trust, GC, Kerberos PAC)
+- [x] Many-partition / many-cluster scale (#21, `test/federation-scale-e2e.sh`)
+- [x] Many-forest GAL convergence + staleness bounds (#21, same script)
+- [ ] Deep referral chains; transitive multi-realm trust paths, shortcut trusts (#46)
+- [ ] Divestiture/teardown, re-parenting, conflict cases (#47)
+- [ ] Cross-forest brokering at fan-out; selective-auth policy (#48)
+- [ ] **Real Windows AD interop** (trust, GC, Kerberos PAC) (with #20)
 
 ### Phase 3 — deferred capability
 - DRSUAPI multi-master interop with real Windows DCs, Group Policy engine,

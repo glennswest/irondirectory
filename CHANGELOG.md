@@ -5,6 +5,22 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-07
+- **test:** `test/federation-scale-e2e.sh`, the testable part of the D10
+  federation matrix (#21). Suite A: one forest, `CHILDREN` (25) child
+  domains, every second on a second fastetcd cluster, an iron-ldapd per
+  child; the forest GC sees all of them, the root server refers to and
+  `ldapsearch -C` chases into every child, and a live add/delete on each
+  cluster reaches the GC within `STALE_MS`. Suite B: `FORESTS` (100)
+  independent forests behind one `IRON_GC_FORESTS` GAL with a strict
+  whitelist: convergence within `CONVERGE_S`, no `krb*` attribute crossing,
+  a new entry in every forest and a sampled delete reaching the GAL within
+  `STALE_MS`; prints the times measured.
+- **docs:** ARCHITECTURE D10 says which deferred suites now run and that the
+  rest is unbuilt capability, split out as #46 (transitive trust), #47
+  (teardown/re-parenting) and #48 (OIDC brokering). Filed #45: iron-ldapd
+  accepts writes from an anonymous bind.
+
 ### 2026-10-06
 - **feat(ldap):** Substring, ordering (`>=`/`<=`), approx and extensible
   filters are evaluated (#27); all four used to be a silent false.

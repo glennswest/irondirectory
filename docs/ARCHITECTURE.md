@@ -273,6 +273,17 @@ Each base feature ships with at least one end-to-end happy-path test so the code
 path is live and regression-guarded; the deferred column is tracked as a
 dedicated testing phase, not as missing capability.
 
+Status (#21, 2026-11-07): the first and fourth rows' suites run in
+`test/federation-scale-e2e.sh` -- one forest with 25 child domains split
+across two fastetcd clusters (GC over all of them, a referral to and a chase
+into every child, live add/delete reaching the GC), and a 100-forest
+federated GAL (convergence time, no Kerberos attribute crossing a strict
+whitelist, add/delete staleness under 5 s). The other rows turned out to be
+capability, not tests, and are issues of their own: transitive trust (#46),
+teardown/re-parenting (#47), cross-forest OIDC brokering (#48); real Windows
+AD interop goes with #20. The `iron-oidc` "brokering hook" in the left
+column is not built.
+
 ## 4. Known constraints / risks
 
 - **Scale — what is NOT a limit (Go-etcd folklore that does not apply):**
