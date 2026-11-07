@@ -16,7 +16,7 @@ pub mod md4;
 pub mod pbkdf2;
 pub mod sign;
 
-use ossl::bindings::OSSL_PROVIDER_available;
+use ossl::bindings::{OSSL_LIB_CTX_load_config, OSSL_PROVIDER_available};
 use ossl::OsslContext;
 use std::ffi::CStr;
 
@@ -63,8 +63,19 @@ pub struct FipsContext(OsslContext);
 
 impl FipsContext {
     pub fn new() -> Result<Self, Error> {
-        let mut ctx = OsslContext::new_lib_ctx();
-        ctx.load_default_configuration().map_err(|_| Error::Ossl)?;
+        Self::with_config(None)
+    }
+
+    /// `new()` with an explicit config file instead of `OPENSSL_CONF`/the
+    /// system default; `None` is exactly `new()`. Calls
+    /// `OSSL_LIB_CTX_load_config` directly with a real C string (see the
+    /// type's docs for why not `ossl`'s `load_configuration_file`).
+    fn with_config(path: Option<&CStr>) -> Result<Self, Error> {
+        let ctx = OsslContext::new_lib_ctx();
+        let filename = path.map_or(std::ptr::null(), CStr::as_ptr);
+        if unsafe { OSSL_LIB_CTX_load_config(ctx.ptr(), filename) } != 1 {
+            return Err(Error::Ossl);
+        }
 
         let name = CStr::from_bytes_with_nul(b"fips\0").unwrap();
         let active = unsafe { OSSL_PROVIDER_available(ctx.ptr(), name.as_ptr()) };
@@ -77,5 +88,58 @@ impl FipsContext {
 
     pub(crate) fn inner(&self) -> &OsslContext {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::sync::Barrier;
+
+    fn testdata(name: &str) -> CString {
+        CString::new(format!("{}/testdata/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    }
+
+    /// Creates (and drops) contexts from `config` on 16 threads at once, 25
+    /// times each, released together by a barrier.
+    fn contexts_on_many_threads(config: &str) -> Vec<Result<(), Error>> {
+        const THREADS: usize = 16;
+        let path = testdata(config);
+        let barrier = Barrier::new(THREADS);
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    s.spawn(|| {
+                        barrier.wait();
+                        (0..25).map(|_| FipsContext::with_config(Some(&path)).map(drop)).collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        })
+    }
+
+    /// #31: a config with an `ssl_conf` section (Fedora's system
+    /// openssl.cnf has one) crashed in OpenSSL's ssl_module_init when
+    /// several threads loaded it at once.
+    #[test]
+    fn contexts_from_an_ssl_conf_config_on_many_threads_all_have_fips() {
+        let results = contexts_on_many_threads("fips-sslconf.cnf");
+        assert_eq!(results.len(), 400);
+        for r in results {
+            assert!(r.is_ok(), "{:?}", r.err());
+        }
+    }
+
+    /// #31's fail-closed path: without the FIPS provider every one of them
+    /// is `FipsProviderNotActive`, and nothing crashes.
+    #[test]
+    fn contexts_without_fips_on_many_threads_fail_closed() {
+        let results = contexts_on_many_threads("nofips-sslconf.cnf");
+        assert_eq!(results.len(), 400);
+        for r in results {
+            assert!(matches!(r, Err(Error::FipsProviderNotActive)), "{r:?}");
+        }
     }
 }

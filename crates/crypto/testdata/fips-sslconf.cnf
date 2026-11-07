@@ -1,0 +1,27 @@
+# fips-dev.cnf plus an `ssl_conf` section, as Fedora's system openssl.cnf
+# has. Loading a config with `ssl_conf` from several threads at once crashed
+# inside OpenSSL's ssl_module_init (#31); lib.rs's tests load this one from
+# many threads to prove FipsContext::new() serialises it.
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+ssl_conf = ssl_module
+
+[provider_sect]
+fips = fips_sect
+base = base_sect
+
+[base_sect]
+activate = 1
+
+[fips_sect]
+module = /usr/lib64/ossl-modules/fips.so
+activate = 1
+tls1-prf-ems-check = 1
+
+[ssl_module]
+system_default = tls_defaults
+
+[tls_defaults]
+MinProtocol = TLSv1.2

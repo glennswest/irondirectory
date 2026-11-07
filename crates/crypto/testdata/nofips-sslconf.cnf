@@ -1,0 +1,20 @@
+# Like Fedora's system openssl.cnf: the default provider and an `ssl_conf`
+# section, no FIPS provider. FipsContext::new() must fail closed with
+# FipsProviderNotActive from many threads at once, not crash (#31).
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+ssl_conf = ssl_module
+
+[provider_sect]
+default = default_sect
+
+[default_sect]
+activate = 1
+
+[ssl_module]
+system_default = tls_defaults
+
+[tls_defaults]
+MinProtocol = TLSv1.2
