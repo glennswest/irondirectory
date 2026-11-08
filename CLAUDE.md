@@ -313,7 +313,15 @@ didn't answer from dev on 2026-10-06.)
          `dirop` are in stormcentral's *seed*, but the live registry
          (`component list`) has neither until the master runs
          `component add`. `fips-base` has an image (golden-fips-base-4eec6688a200).
-   - [ ] 2026-11-07: `component stage irondirectory` started (d0519a679779).
+   - [ ] 2026-11-07: `component stage irondirectory` FAILS: the fastetcd
+         input golden is mounted `Permission denied` for the build
+         (`/build/in/<id>/fastetcd/`), so the recipe finds no fastetcd.
+         Filed stormcentral#1311 (auto-filed stormcos#685); #25 proposed
+         `--after stormcentral#1311`. `--no-wait` stages showed "passed" with
+         no image, which is why this was hidden. Master noted for the live
+         `component add irondirectory` / `dirop`. Re-run with
+         `stormcentral component stage irondirectory` (no `--no-wait`, to see
+         the output).
    - [ ] When `stormcentral component list` shows `irondirectory`: run the
          in-pod acceptance (operator#1's live test), then close #25.
 

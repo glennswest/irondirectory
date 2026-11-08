@@ -5,6 +5,11 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-07
+- **docs:** #25 status: `component stage irondirectory` fails because its
+  fastetcd input golden is mounted unreadable (stormcentral#1311); the work
+  plan records it.
+
 ### 2026-11-08
 - **fix(crypto):** `FipsContext` creation and freeing are serialised by a
   process-wide lock (#31). With no `OPENSSL_CONF`, the parallel iron-crypto
