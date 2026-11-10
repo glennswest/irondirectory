@@ -69,6 +69,17 @@ def connect(port, uuid, level=None, account=None, session_key=None):
     return dce, received
 
 
+def pdus(received):
+    """The PDUs in the captured byte stream (impacket reads each in two
+    recv calls: the header, then the rest)."""
+    buf, out = b"".join(received), []
+    while len(buf) >= 16:
+        frag_len = struct.unpack("<H", buf[8:10])[0]
+        out.append(buf[:frag_len])
+        buf = buf[frag_len:]
+    return out
+
+
 def status_of(e):
     return getattr(e, "error_code", None) or getattr(e, "get_error_code", lambda: None)()
 
@@ -181,7 +192,6 @@ def cmd_setpw(port, computer, old, new, level_name):
     expect_denied("NetrServerPasswordSet2 on an unauthenticated binding", lambda: password_set2(plain, computer, auth, trust_password(new, sk)))
 
     dce, received = connect(port, nrpc.MSRPC_UUID_NRPC, level, computer + "$", sk)
-    check = len(received)
     auth, ts = authenticator(stored, sk)
     resp = password_set2(dce, computer, auth, trust_password(new, sk))
     if resp["ErrorCode"] != 0:
@@ -189,14 +199,15 @@ def cmd_setpw(port, computer, old, new, level_name):
     stored = plus(plus(stored, ts), 1)
     if resp["ReturnAuthenticator"]["Credential"] != nrpc.ComputeNetlogonCredentialAES(stored, sk):
         fail("return authenticator does not chain")
-    check_server_signature(received[check], sk, 1, sealed)
+    # PDU 0 is the bind_ack; 1 answers request 0 (sequence 0), as sequence 1.
+    check_server_signature(pdus(received)[1], sk, 1, sealed)
     print(f"ok: NetrServerPasswordSet2 over a {level_name} Schannel binding; return authenticator chains; "
           f"response signature{' and seal' if sealed else ''} verified (server sequence 1)")
 
     # The same authenticator again: a replay.
     expect_denied("replayed authenticator", lambda: password_set2(dce, computer, auth, trust_password(new, sk)))
     # Request 2 was refused, response 3; the binding's counter moved on.
-    check_server_signature(received[-1], sk, 3, sealed)
+    check_server_signature(pdus(received)[2], sk, 3, sealed)
     # Zerologon's all-zero password buffer, with a good authenticator.
     auth, ts = authenticator(stored, sk)
     expect_denied("all-zero NL_TRUST_PASSWORD", lambda: password_set2(dce, computer, auth, b"\x00" * 516))
