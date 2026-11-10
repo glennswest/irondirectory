@@ -6,6 +6,9 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-10
+- **docs:** #25 status: `irondirectory` is in the live registry
+  (golden-irondirectory-10c5f5f1433a); the remaining in-pod check is
+  irondirectory-operator#1's live test, behind stormcos#922.
 - **docs:** Fedora's `fips.so` is not a CMVP-certified module (#30):
   FIPS.md, ARCHITECTURE D4, CONFIGURATION, README, CLAUDE.md and the code
   comments that called it validated now say "the OS's FIPS provider:
