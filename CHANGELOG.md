@@ -6,6 +6,12 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-10
+- **feat(ldap):** D2's USN (#28): rootDSE `highestCommittedUSN` is the
+  store's current etcd revision (it was a fixed `1`); every entry carries
+  `uSNCreated`/`uSNChanged` from its key's etcd revisions, computed on read,
+  so `(uSNChanged>=N)` polling works. `test/usn-e2e.sh`.
+- **docs:** ARCHITECTURE D2: USN as built; RFC 4533/persistent search (#59),
+  DNS dynamic update and leases recorded as design intent, not built.
 - **fix(ldap):** `userPassword` is never returned by a search (#58). It was
   left out of `*` but returned to any search that named it, anonymous
   included: every user's PBKDF2 hash for offline guessing. Found by

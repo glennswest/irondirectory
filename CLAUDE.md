@@ -1946,7 +1946,10 @@ it committed to git (runtime/environment state, not code):
       Helm-chart/OpenShift-Operator idea. `iron-ldapd`'s `:8080` `/health`
       is the readiness probe.
 - [x] LDAP substring/ordering/approx/extensible filter matching (#27).
-- [ ] D2's USN/persistent search/leases (#28, docs mark them unbuilt).
+- [x] D2's USN (#28, 2026-11-10): highestCommittedUSN = store revision,
+      uSNCreated/uSNChanged from etcd revisions (`test/usn-e2e.sh`).
+      RFC 4533/persistent search split to #59; DNS dynamic update and leases
+      recorded in D2 as design intent.
 - [ ] **fastetcd mTLS from the daemons (#26):** every binary builds a
       plaintext `ClusterRef`; add optional CA/cert/key settings.
 - Current settings, ports and packaging are in `docs/CONFIGURATION.md`;

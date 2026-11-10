@@ -60,15 +60,26 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
     kind is evaluated by scanning the search scope (RFC 4511 three-valued
     logic, `crates/ldap/src/filter.rs`, #27). No index is used, not even
     for equality; one is added when scale needs it.
-- **USN equivalent:** etcd MVCC `mod_revision` is the natural change sequence
-  number for syncrepl/persistent-search.
-- **Change notification:** etcd **Watch** drives LDAP persistent search /
-  content-sync (RFC 4533) and DNS dynamic-update fan-out.
-- **Leases:** etcd leases back session/ticket lifetime where appropriate.
-- *As built (2026-09-27):* none of the three bullets above exist yet.
-  `highestCommittedUSN` is a fixed `1`, iron-ldap has no persistent-search or
-  RFC 4533 control, iron-dns only publishes SRV records, and no code uses etcd
-  leases (#28). Watch is used today by `iron-gc` (D8's aggregator).
+- **USN equivalent:** etcd MVCC revisions are the change sequence numbers.
+  *As built (#28):* rootDSE's `highestCommittedUSN` is the store's current
+  revision; every entry read carries `uSNCreated` (its key's
+  `create_revision`) and `uSNChanged` (its `mod_revision`), computed on read
+  and never stored, so `(uSNChanged>=N)` -- how an AD client polls for
+  changes -- works (`test/usn-e2e.sh`). Revisions are per fastetcd cluster:
+  partitions on one cluster share one sequence, partitions on different
+  clusters have their own, as each AD DC has its own USN.
+- **Change notification (design intent, not built):** etcd **Watch** is to
+  drive LDAP persistent search / content sync (RFC 4533; #59) and DNS
+  dynamic-update fan-out. Today Watch is used by `iron-gc` (D8's
+  aggregator); iron-ldap has no sync or persistent-search control, and
+  iron-dns publishes SRV records through MicroDNS's REST API with no
+  dynamic-update path (that need arrives with Windows clients registering
+  their own records, #20).
+- **Leases (design intent, not built):** etcd leases are for state that must
+  expire on its own. Nothing needs one yet: Kerberos tickets carry their own
+  lifetimes, LDAP sessions live and die with their connection, and
+  NETLOGON secure channels are in memory (#20). A lease is the tool when such
+  state has to be shared between replicas.
 - Because we use the `/iron/...` prefix and Kubernetes uses `/registry/...`,
   there is no key collision even on a shared cluster — but D1 mandates a
   separate cluster anyway.
