@@ -21,6 +21,9 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
   levels, verifies the server's response signatures independently, and
   `kinit`s with the new password.
 - **feat(rpc):** `IRON_RPC_REALM` (default: the DNS domain upper-cased).
+- **fix:** clippy 1.95 lints (`manual_ignore_case_cmp`, `useless_vec` in
+  iron-kdc; `manual_repeat_n` in iron-ldap; `len_without_is_empty` in
+  iron-gc): `cargo clippy --all-targets -- -D warnings` is clean again.
 - **docs:** #25 status: stormcentral#1311 is fixed; the stage now fails in
   stormcos's recipe (build box Fedora 44, fips-base 43, stormcos#685). The
   work plan records it.

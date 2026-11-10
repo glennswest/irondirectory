@@ -246,22 +246,27 @@ macOS: wait for the golden + operator (#25); the owner runs dsconfigad from
 the Mac against that. kpasswd/464 is already done and verified.
 Windows: build the real path; test against a networked Windows VM
 (stormrdp#18). This pass, buildable and verifiable here with impacket:
-- [ ] Zerologon (CVE-2020-1472) fixes: random server challenge; reject a
-      ClientCredential whose first 5 bytes are equal; NetrServerPasswordSet2
-      only over a sealed/signed channel.
+- [x] Zerologon (CVE-2020-1472) fixes: random server challenge; reject a
+      client *challenge* whose first 5 bytes are equal (MS-NRPC 3.1.4.1 /
+      Samba -- not the credential); NetrServerPasswordSet2 only over a
+      Schannel binding; refuse an unencrypted length/confounder.
 - [x] `iron_crypto::aead`: AES-128-CFB8 encrypt/decrypt with an IV.
-- [ ] `schannel.rs`: NL_AUTH_SHA2_SIGNATURE sign/verify, seal/unseal
+- [x] `schannel.rs`: NL_AUTH_SHA2_SIGNATURE sign/verify, seal/unseal
       (known-answer vectors from impacket 0.13.1 `nrpc.SIGN`/`SEAL`).
-- [ ] `pdu.rs`: sec_trailer + auth_value on bind/bind_ack/request/response.
-- [ ] Netlogon Schannel (auth_type 68): NL_AUTH_MESSAGE bind, AES
-      NL_AUTH_SHA2_SIGNATURE sign/verify and seal/unseal (MS-NRPC 3.3.4.2);
-      secure channels kept per computer name across connections.
-- [ ] NetrServerPasswordSet2 (opnum 30): authenticator chain, NL_TRUST_PASSWORD
-      decrypt, NTOWF + Kerberos keys.
-- [ ] `test/netlogon-schannel-e2e.sh`: impacket at PKT_PRIVACY and
-      PKT_INTEGRITY; kinit with the new password.
-Filed for the rest: CLDAP LDAP ping; iron-rpcd side of ncacn_np (session
-key preamble, SAMR AES password set); rocketsmbd IPC$/pipe forwarding.
+- [x] `pdu.rs`: sec_trailer + auth_value on bind/bind_ack/request/response; bind_nak.
+- [x] Netlogon Schannel (auth_type 68) bind via NL_AUTH_MESSAGE; secure
+      channels per computer name across connections (in memory).
+- [x] NetrServerPasswordSet2 (opnum 30): authenticator chain, NL_TRUST_PASSWORD
+      decrypt, NTOWF + Kerberos keys (`IRON_RPC_REALM`).
+- [x] `test/netlogon-schannel-e2e.sh`: impacket at PKT_INTEGRITY and
+      PKT_PRIVACY, response signatures checked independently, kinit with the
+      new password. **PASS on sc-build at e12514f (2026-11-10).**
+Gotchas found: impacket without a domain sends a malformed NL_AUTH_MESSAGE
+(flag 0x10 alone + "WORKGROUP\0host\0"); impacket reads each PDU in two
+recv calls; MIT krb5.conf needs `REALM = {` on its own line.
+Filed for the rest (2026-11-10): #52 CLDAP LDAP ping; #53 iron-rpcd behind
+ncacn_np + authenticated SAMR AES password set; rocketsmbd#83 IPC$ pipe
+forwarding. Windows VM: stormcentral#465. macOS: after #25.
 
 ## Done (2026-10-06): #27 LDAP filters
 
