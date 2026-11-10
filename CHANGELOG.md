@@ -5,6 +5,11 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-10
+- **docs:** #25 status: stormcentral#1311 is fixed; the stage now fails in
+  stormcos's recipe (build box Fedora 44, fips-base 43, stormcos#685). The
+  work plan records it.
+
 ### 2026-11-07
 - **docs:** #25 status: `component stage irondirectory` fails because its
   fastetcd input golden is mounted unreadable (stormcentral#1311); the work

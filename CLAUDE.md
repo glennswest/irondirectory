@@ -322,6 +322,13 @@ didn't answer from dev on 2026-10-06.)
          `component add irondirectory` / `dirop`. Re-run with
          `stormcentral component stage irondirectory` (no `--no-wait`, to see
          the output).
+   - [ ] 2026-11-10: stormcentral#1311 fixed (afcaebd); the input now
+         mounts. The stage (build 64c339f5fa96) now stops in stormcos's
+         recipe: "this box is Fedora 44, fips-base is 43". stormcos's fix
+         (fips-base to F44, or build the daemons against fips-base's root),
+         tracked on stormcos#685. #25 proposed `--after stormcos#685`.
+         Nothing to change here: the contract (gnu/dynamic, fips.cnf,
+         test/golden-e2e.sh) is release-agnostic.
    - [ ] When `stormcentral component list` shows `irondirectory`: run the
          in-pod acceptance (operator#1's live test), then close #25.
 
