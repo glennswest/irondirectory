@@ -6,6 +6,14 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-10
+- **feat:** mTLS to fastetcd from every daemon and CLI (#26):
+  `<PREFIX>_FASTETCD_CA`/`_CERT`/`_KEY` beside each
+  `<PREFIX>_FASTETCD_ENDPOINT` (`iron_store::cluster_from_env`). All three
+  with `https://`, or none with `http://`; anything else stops the binary.
+  iron-bootstrap and iron-config-ctl persist the TLS paths with the
+  partitions they create, so registry-loading daemons (iron-gcd) use them.
+  `test/mtls-e2e.sh` runs bootstrap, iron-ldapd, iron-kdcd and iron-gcd
+  against a `--client-cert-auth` fastetcd.
 - **docs:** CLAUDE.md no longer holds `--client-cert-auth` back for
   fastetcd#6, which v0.8.1 fixed (#32); what keeps the daemons on
   plaintext is #26.

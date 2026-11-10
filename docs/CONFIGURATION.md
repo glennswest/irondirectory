@@ -6,9 +6,26 @@ settings are environment variables. An empty value counts as unset.
 
 ## Common to every binary
 
-- **fastetcd connection: plaintext only.** Every binary connects to its
-  `*_FASTETCD_ENDPOINT` (e.g. `http://etcd.g8.lo:2379`) without TLS. `iron-store`
-  can speak mTLS, but no binary exposes a CA/cert/key setting yet (#26).
+- **fastetcd connection: plaintext or mTLS (#26).** Every
+  `<PREFIX>_FASTETCD_ENDPOINT` (comma-separated for several members) has
+  three companions, `<PREFIX>_FASTETCD_CA`, `_CERT` and `_KEY`: PEM file
+  paths for the CA that signed fastetcd's certificate and this binary's
+  client certificate and key, as fastetcd's `--client-cert-auth` requires.
+  Set all three with `https://` endpoints, or none with `http://`
+  endpoints; anything else (half the settings, a scheme that doesn't match)
+  stops the binary at start rather than falling back to plaintext. The
+  prefixes: `IRON_LDAP_FASTETCD`, `IRON_LDAP_CONFIG_FASTETCD`,
+  `IRON_KDC_FASTETCD` (iron-kdcd and iron-kdc-ctl), `IRON_KDC_CONFIG_FASTETCD`,
+  `IRON_GC_CONFIG_FASTETCD` (every forest in `IRON_GC_FORESTS` too),
+  `IRON_OIDC_FASTETCD`, `IRON_RPC_FASTETCD` (iron-rpcd and iron-rpc-ctl),
+  `IRON_BOOTSTRAP_FASTETCD`, `IRON_CONFIG_FASTETCD` and `IRON_CHILD_FASTETCD`
+  (iron-config-ctl). **The forest registry stores each partition's cluster
+  with its TLS paths** (iron-bootstrap and `iron-config-ctl
+  init-forest`/`create-child` write them), and a daemon that loads the
+  registry (iron-gcd; iron-ldapd and iron-kdcd for referrals) reaches each
+  partition with those paths, so mount the certificates at the same paths
+  everywhere. `iron-simulate` is a test harness and stays plaintext.
+  `test/mtls-e2e.sh` checks it.
 - **fastetcd >= 1.0.0.** Every read relies on etcd's default linearizable
   reads. Before 1.0.0 (fastetcd#10) a follower served them from its own
   state, so a process reading through one member missed what another had
@@ -180,7 +197,8 @@ does not change the stored password.
 | `iron-dns-ctl` | none (arguments only) | `ldap\|kerberos <microdns-url> <domain-or-realm> <host:port>...` |
 | `iron-simulate` | `IRON_SIM_RPC_ADDR`, `_KDC_ADDR`, `_PARTITION_ID`, `_BASE_DN`, `_REALM`, `_FASTETCD_ENDPOINT`, `_SERVICE_PRINCIPAL` (all required) | `join <count> [prefix]`, `login <count> <user> <pass>` |
 
-`iron-store`'s ignored mTLS test reads `IRON_STORE_MTLS_ENDPOINT`/`_CA`/`_CERT`/`_KEY`.
+`iron-store`'s ignored mTLS test reads `IRON_STORE_MTLS_ENDPOINT`/`_CA`/`_CERT`/`_KEY`
+(`test/mtls-e2e.sh` sets them).
 
 ## How it ships
 

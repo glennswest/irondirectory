@@ -1952,8 +1952,9 @@ it committed to git (runtime/environment state, not code):
       uSNCreated/uSNChanged from etcd revisions (`test/usn-e2e.sh`).
       RFC 4533/persistent search split to #59; DNS dynamic update and leases
       recorded in D2 as design intent.
-- [ ] **fastetcd mTLS from the daemons (#26):** every binary builds a
-      plaintext `ClusterRef`; add optional CA/cert/key settings.
+- [x] **fastetcd mTLS from the daemons (#26, 2026-11-10):**
+      `<PREFIX>_FASTETCD_CA`/`_CERT`/`_KEY` everywhere
+      (`iron_store::cluster_from_env`); `test/mtls-e2e.sh`.
 - Current settings, ports and packaging are in `docs/CONFIGURATION.md`;
   keep it in step with any `IRON_*` setting change.
 

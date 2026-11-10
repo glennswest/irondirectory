@@ -100,7 +100,8 @@ first-class design constraint rather than a bolt-on.
   crypto boundary.
 - **Deployment:** today, **standalone**: per-daemon RPMs + systemd units
   on Fedora/RHEL VMs, talking to a dedicated fastetcd cluster in
-  **plaintext** (the daemons have no fastetcd mTLS settings yet, #26).
+  plaintext or mTLS (`<PREFIX>_FASTETCD_CA`/`_CERT`/`_KEY`, #26; see
+  `docs/CONFIGURATION.md`).
   For Kubernetes, stormcos builds the `irondirectory` golden (a clone of its
   Fedora `fips-base` golden plus these daemons, fastetcd and
   `deploy/golden/fips.cnf`), which irondirectory-operator runs as rustkube

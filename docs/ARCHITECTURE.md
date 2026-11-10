@@ -25,7 +25,7 @@ It is the **directory + KDC + DNS** half of an AD-compatible domain controller.
         │  • DNS SRV autodiscovery     │ krb5 │  • Kerberos AP-REQ acceptor  │
         │  • LDAPS (OpenSSL FIPS)      │tickets│   (roadmap #31–#37)          │
         └──────────────┬───────────────┘      └──────────────────────────────┘
-                       │ etcd v3 gRPC (mTLS planned; plaintext today, #26)
+                       │ etcd v3 gRPC (mTLS, #26)
                        ▼
         ┌──────────────────────────────┐
         │  fastetcd — DEDICATED cluster │  (never the Kubernetes etcd)
@@ -140,8 +140,8 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
   rebuilt when the Fedora release changes. Fedora's `fips.so` is the OpenSSL
   FIPS provider but not a CMVP-certified module (#30); a certified boundary
   means moving `fips-base` to UBI packages. The
-  daemons reach fastetcd in plaintext only; the mTLS link drawn in §2 needs
-  per-binary TLS settings that don't exist yet (#26).
+  daemons reach fastetcd over mTLS when given `<PREFIX>_FASTETCD_CA`/
+  `_CERT`/`_KEY` (#26), plaintext otherwise.
 
 ### D7 — SSO surfaces
 irondirectory is a self-contained IdP (no Keycloak dependency). It exposes
