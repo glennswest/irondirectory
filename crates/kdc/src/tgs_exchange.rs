@@ -126,7 +126,7 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     // full RFC 4120 §3.3.3 logic; falls through to the ordinary local
     // lookup (and its ordinary S_PRINCIPAL_UNKNOWN failure) if no
     // one-hop trust or key is configured for that realm.
-    if realm_str.to_ascii_uppercase() != app.realm.to_ascii_uppercase() {
+    if !realm_str.eq_ignore_ascii_case(&app.realm) {
         if let Some(rep) = referral_tgs_rep(app, &mut store, &realm_str, &tgt, tkt_enctype, &session_key, authenticator.subkey.as_ref(), &req.req_body).await {
             return rep;
         }

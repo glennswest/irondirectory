@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_magic() {
-        let buf = vec![0xFFu8; 10];
+        let buf = [0xFFu8; 10];
         assert!(matches!(read(&mut &buf[..]), Err(Error::BadMagic)));
     }
 }
