@@ -233,6 +233,16 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
+## In progress (2026-11-10): #22 macOS light path (LDAPv3 plugin + Kerberos)
+
+Needs a real Mac, which this VM cannot reach; per the owner's #20 decision
+the owner runs the Mac side against the #25 stack. This pass:
+- [ ] `test/macos-ldap-e2e.sh`: the RFC2307-mapping lookups, LDAP bind auth
+      and kinit, against real iron-ldapd/iron-kdcd (server half).
+- [ ] `docs/MACOS-LDAP-KERBEROS.md`: the runbook (provisioning + Mac steps).
+- [ ] File: LDAP userPassword and Kerberos keys are separate passwords.
+- [ ] Hand the Mac steps to the owner once a stack is reachable (#25).
+
 ## Done (2026-10-06): #27 LDAP filters
 
 Every RFC 4511 filter kind is evaluated by `crates/ldap/src/filter.rs`
