@@ -11,6 +11,7 @@ authors.workspace = true
 
 [dependencies]
 iron-crypto = { path = "../crypto" }
+iron-kdc = { path = "../kdc" }
 iron-partition = { path = "../partition" }
 iron-store = { path = "../store" }
 tokio = { workspace = true }

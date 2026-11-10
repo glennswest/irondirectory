@@ -6,6 +6,21 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-10
+- **feat(rpc):** Netlogon secure channel as an RPC security provider
+  (auth type 68, AES `NL_AUTH_SHA2_SIGNATURE`, `PKT_INTEGRITY` and
+  `PKT_PRIVACY`) and `NetrServerPasswordSet2` (opnum 30): a computer sets
+  its own password over its secure channel, which sets its NTOWF and its
+  Kerberos keys (#20). PDUs carry a `sec_trailer` and auth value; secure
+  channels are kept per computer name across connections.
+- **fix(rpc):** Zerologon (CVE-2020-1472) mitigations: the server
+  challenge is random (it was the client's with one byte flipped); a client
+  challenge whose first five bytes are equal is refused;
+  `NetrServerPasswordSet2` is refused outside a Schannel binding, and so
+  is a password buffer whose length or confounder came through unencrypted.
+- **test:** `test/netlogon-schannel-e2e.sh` checks it with impacket at both
+  levels, verifies the server's response signatures independently, and
+  `kinit`s with the new password.
+- **feat(rpc):** `IRON_RPC_REALM` (default: the DNS domain upper-cased).
 - **docs:** #25 status: stormcentral#1311 is fixed; the stage now fails in
   stormcos's recipe (build box Fedora 44, fips-base 43, stormcos#685). The
   work plan records it.

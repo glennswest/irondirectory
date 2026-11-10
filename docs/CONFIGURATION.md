@@ -38,7 +38,7 @@ settings are environment variables. An empty value counts as unset.
 | `iron-gcd` | off (e.g. `:3269`) | Global Catalog LDAPS | `IRON_GC_LDAPS_LISTEN` |
 | `iron-gcd` | `0.0.0.0:8080` | HTTP `/health` | `IRON_GC_HEALTH_LISTEN` |
 | `iron-oidcd` | `0.0.0.0:8080` | HTTP (OIDC endpoints, no TLS, no `/health`) | `IRON_OIDC_LISTEN` |
-| `iron-rpcd` | `0.0.0.0:445` | DCE/RPC `ncacn_ip_tcp`, unauthenticated binds | `IRON_RPC_LISTEN` |
+| `iron-rpcd` | `0.0.0.0:445` | DCE/RPC `ncacn_ip_tcp`; Netlogon secure channel auth | `IRON_RPC_LISTEN` |
 
 Not served: `ncacn_np` over SMB, and a DNS
 server (SRV records are published into MicroDNS by `iron-dns-ctl`).
@@ -121,11 +121,21 @@ tokens and there is one replica only. See
 | `IRON_RPC_DOMAIN_SID` | required | e.g. `S-1-5-21-…` (`iron-config-ctl show`) |
 | `IRON_RPC_NETBIOS_NAME` | required | e.g. `G19RPC` |
 | `IRON_RPC_DNS_DOMAIN` | required | e.g. `g19rpc.lo` |
+| `IRON_RPC_REALM` | `IRON_RPC_DNS_DOMAIN` upper-cased | Kerberos realm: a computer's principal is `<account>@<realm>` |
 | `IRON_RPC_LISTEN` | `0.0.0.0:445` | TCP listener |
 
-Unauthenticated binds only. There is no `SamrSetInformationUser2` or
-`NetrServerPasswordSet2`, so a real Windows client cannot set its machine
-password yet (#20).
+Binds are unauthenticated, or authenticated with the Netlogon secure
+channel (auth type 68, `PKT_INTEGRITY` or `PKT_PRIVACY`, AES only) for a
+computer that has run `NetrServerAuthenticate3`. Over that binding,
+`NetrServerPasswordSet2` sets the computer's password: its NTOWF and its
+Kerberos keys, so it can `kinit` (#20, `test/netlogon-schannel-e2e.sh`).
+It is refused on an unauthenticated binding (Zerologon). Secure channels
+live in the process's memory: a restart drops them, and clients set up a
+new one. NTLMSSP and Kerberos RPC auth are not built, so SAMR has no
+`SamrSetInformationUser2` and its calls are unauthenticated; a computer's
+first secret still comes from `iron-rpc-ctl set-computer-secret`. Windows
+reaches these interfaces over SMB named pipes (`ncacn_np`), which
+`iron-rpcd` does not serve.
 
 ## iron-bootstrap (first-boot provisioning, #25)
 

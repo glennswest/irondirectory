@@ -936,6 +936,7 @@ version = "0.23.0"
 dependencies = [
  "anyhow",
  "iron-crypto",
+ "iron-kdc",
  "iron-partition",
  "iron-store",
  "thiserror",

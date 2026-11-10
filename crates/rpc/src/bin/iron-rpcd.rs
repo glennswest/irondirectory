@@ -1,7 +1,8 @@
 //! iron-rpcd: a minimal `ncacn_ip_tcp` DCE/RPC daemon serving SAMR,
 //! LSARPC, and NETLOGON (#19) -- see `iron_rpc`'s crate docs for scope
-//! (unauthenticated, no `ncacn_np`/SMB transport, no
-//! `SamrSetInformationUser2` password-setting).
+//! (Netlogon secure channel auth only, no `ncacn_np`/SMB transport, no
+//! `SamrSetInformationUser2`; a computer sets its password with
+//! `NetrServerPasswordSet2` over its secure channel, #20).
 //!
 //! Required:
 //!   IRON_RPC_FASTETCD_ENDPOINT   e.g. http://etcd.g8.lo:2379
@@ -11,6 +12,9 @@
 //!   IRON_RPC_NETBIOS_NAME        e.g. G19RPC
 //!   IRON_RPC_DNS_DOMAIN          e.g. g19rpc.lo
 //! Optional:
+//!   IRON_RPC_REALM               Kerberos realm (default: IRON_RPC_DNS_DOMAIN
+//!                                upper-cased) -- NetrServerPasswordSet2 names a
+//!                                computer's principal <account>@<realm>
 //!   IRON_RPC_LISTEN=0.0.0.0:445  (bind address; 445 needs root, use a
 //!                                 high port for testing, e.g. 13445)
 //!
@@ -42,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
     let domain_sid = Sid::parse(&require_env("IRON_RPC_DOMAIN_SID")?).ok_or_else(|| anyhow::anyhow!("IRON_RPC_DOMAIN_SID is not a valid SID"))?;
     let netbios_name = require_env("IRON_RPC_NETBIOS_NAME")?;
     let dns_domain = require_env("IRON_RPC_DNS_DOMAIN")?;
+    let realm = env("IRON_RPC_REALM").unwrap_or_else(|| dns_domain.to_uppercase());
     let listen_addr = env("IRON_RPC_LISTEN").unwrap_or_else(|| "0.0.0.0:445".to_string());
 
     let cluster = ClusterRef::plaintext([endpoint]);
@@ -59,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     let app = std::sync::Arc::new(AppState {
         domain_info: DomainInfo { netbios_name, dns_domain_name: dns_domain.clone(), dns_forest_name: dns_domain, domain_sid },
         samr: samr::SamrState { store: tokio::sync::Mutex::new(store_for_samr), base_dn: base_dn_parsed.clone(), index_spec },
-        netlogon: netlogon::NetlogonState { store: tokio::sync::Mutex::new(store_for_netlogon), base_dn: base_dn_parsed, fips },
+        netlogon: netlogon::NetlogonState::new(store_for_netlogon, base_dn_parsed, fips, realm),
     });
 
     let listener = TcpListener::bind(&listen_addr).await?;

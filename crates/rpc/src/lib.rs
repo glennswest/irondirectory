@@ -22,10 +22,12 @@
 //! <port>`, giving a real interop verification path without needing SMB
 //! or a real Windows machine at all.
 //!
-//! **Authentication**: none. SAMR calls that create/modify accounts are
-//! implemented, but real Windows/Samba gate them behind an authenticated
-//! (NTLMSSP) RPC bind -- adding that is a distinct, large protocol
-//! surface of its own and explicitly out of scope for this pass.
+//! **Authentication**: the Netlogon secure channel only ([`schannel`],
+//! `auth_type` 68, #20) -- what a joining computer uses to set its own
+//! password with `NetrServerPasswordSet2`. SAMR calls that create/modify
+//! accounts are implemented unauthenticated; real Windows/Samba gate them
+//! behind an NTLMSSP or Kerberos RPC bind, which is not built (NTLMSSP
+//! needs HMAC-MD5 and SAMR's password buffers RC4, both outside D4).
 //! NETLOGON's `NetrServerReqChallenge`/`NetrServerAuthenticate3` are
 //! implemented in full including the real secure-channel cryptography
 //! (by design unauthenticated at the RPC-bind layer -- that's the whole
@@ -37,6 +39,7 @@ pub mod ndr;
 pub mod netlogon;
 pub mod pdu;
 pub mod samr;
+pub mod schannel;
 pub mod server;
 pub mod uuid;
 
@@ -59,4 +62,5 @@ pub mod ntstatus {
     pub const ACCESS_DENIED: u32 = 0xC000_0022;
     pub const USER_EXISTS: u32 = 0xC000_0063;
     pub const INTERNAL_DB_ERROR: u32 = 0xC000_0158;
+    pub const INTERNAL_ERROR: u32 = 0xC000_00E5;
 }

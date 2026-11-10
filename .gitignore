@@ -41,3 +41,4 @@ crash.log
 **/.terragrunt-cache/
 provider.tf
 backend.tf
+__pycache__/

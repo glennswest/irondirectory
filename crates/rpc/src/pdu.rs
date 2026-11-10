@@ -3,10 +3,10 @@
 //! impacket's `dcerpc.v5.rpcrt` (`MSRPCHeader`/`MSRPCBind`/
 //! `MSRPCBindAck`/`MSRPCRequestHeader`/`MSRPCRespHeader`).
 //!
-//! Deliberately unauthenticated only: no `sec_trailer`/auth-data support
-//! (`auth_len` is always 0 here). SAMR/LSARPC/NETLOGON's real-world
-//! authenticated (NTLMSSP/Schannel) RPC binds are out of scope for this
-//! pass -- see the crate-level docs.
+//! Authentication (#20): a PDU may end in a `sec_trailer` (MS-RPCE
+//! 2.2.2.11, 8 bytes) and `auth_len` bytes of auth value; the stub before
+//! it is padded (`auth_pad_length`) so the trailer is aligned. Only the
+//! Netlogon secure channel ([`crate::schannel`]) uses it here.
 
 use crate::uuid::NDR_TRANSFER_SYNTAX;
 
@@ -16,6 +16,13 @@ pub const PTYPE_FAULT: u8 = 0x03;
 pub const PTYPE_BIND: u8 = 0x0B;
 pub const PTYPE_BIND_ACK: u8 = 0x0C;
 pub const PTYPE_BIND_NAK: u8 = 0x0D;
+
+/// `bind_nak` reason: `authentication_type_not_recognized`.
+pub const NAK_AUTH_TYPE_NOT_RECOGNIZED: u16 = 8;
+/// `bind_nak` reason: `invalid_checksum` (the auth value didn't check).
+pub const NAK_INVALID_CHECKSUM: u16 = 9;
+/// `bind_nak` reason: `reason_not_specified`.
+pub const NAK_NOT_SPECIFIED: u16 = 0;
 
 pub const PFC_FIRST_FRAG: u8 = 0x01;
 pub const PFC_LAST_FRAG: u8 = 0x02;
@@ -31,6 +38,10 @@ pub const FAULT_UNK_IF: u32 = 0x1C01_0003;
 /// `nca_op_rng_error` (0x1C010002) -- an opnum the bound interface
 /// doesn't implement.
 pub const FAULT_OP_RNG_ERROR: u32 = 0x1C01_0002;
+/// `nca_s_fault_access_denied` (0x00000005) -- a request whose auth value
+/// doesn't check, or an unauthenticated request on an authenticated
+/// binding.
+pub const FAULT_ACCESS_DENIED: u32 = 0x0000_0005;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PduError {
@@ -47,6 +58,8 @@ pub struct PduHeader {
     pub ptype: u8,
     pub flags: u8,
     pub call_id: u32,
+    /// Length of the auth value after the `sec_trailer` (0: no trailer).
+    pub auth_len: u16,
 }
 
 /// Reads a complete PDU (header + body) from `buf`, which must contain
@@ -65,19 +78,78 @@ pub fn parse_header(buf: &[u8]) -> Result<(PduHeader, u16), PduError> {
     let ptype = buf[2];
     let flags = buf[3];
     let frag_len = u16::from_le_bytes([buf[8], buf[9]]);
+    let auth_len = u16::from_le_bytes([buf[10], buf[11]]);
     let call_id = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
-    Ok((PduHeader { ptype, flags, call_id }, frag_len))
+    Ok((PduHeader { ptype, flags, call_id, auth_len }, frag_len))
+}
+
+/// MS-RPCE 2.2.2.11 `sec_trailer`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SecTrailer {
+    pub auth_type: u8,
+    pub auth_level: u8,
+    pub auth_pad_len: u8,
+    pub context_id: u32,
+}
+
+impl SecTrailer {
+    pub fn encode(&self) -> [u8; 8] {
+        let mut b = [0u8; 8];
+        b[0] = self.auth_type;
+        b[1] = self.auth_level;
+        b[2] = self.auth_pad_len;
+        b[4..].copy_from_slice(&self.context_id.to_le_bytes());
+        b
+    }
+    pub fn decode(b: &[u8]) -> Option<Self> {
+        let b: &[u8; 8] = b.get(..8)?.try_into().ok()?;
+        Some(SecTrailer { auth_type: b[0], auth_level: b[1], auth_pad_len: b[2], context_id: u32::from_le_bytes(b[4..].try_into().ok()?) })
+    }
+}
+
+/// Splits a whole PDU whose header says `auth_len` into the body (after
+/// the 16-byte header, up to the trailer -- still including any auth
+/// padding), the trailer and the auth value. `None` if it doesn't fit.
+pub fn split_auth(pdu: &[u8], auth_len: u16) -> Option<(&[u8], SecTrailer, &[u8])> {
+    let auth_start = pdu.len().checked_sub(auth_len as usize)?;
+    let trailer_start = auth_start.checked_sub(8)?;
+    if trailer_start < 16 {
+        return None;
+    }
+    let trailer = SecTrailer::decode(&pdu[trailer_start..auth_start])?;
+    Some((&pdu[16..trailer_start], trailer, &pdu[auth_start..]))
 }
 
 fn write_common_header(out: &mut Vec<u8>, ptype: u8, frag_len: u16, call_id: u32) {
+    write_header(out, ptype, frag_len, 0, call_id)
+}
+
+fn write_header(out: &mut Vec<u8>, ptype: u8, frag_len: u16, auth_len: u16, call_id: u32) {
     out.push(5); // ver_major
     out.push(0); // ver_minor
     out.push(ptype);
     out.push(PFC_FIRST_FRAG | PFC_LAST_FRAG); // never fragmented
     out.extend_from_slice(&0x10u32.to_le_bytes()); // representation: LE/ASCII/IEEE
     out.extend_from_slice(&frag_len.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes()); // auth_len = 0 (unauthenticated)
+    out.extend_from_slice(&auth_len.to_le_bytes());
     out.extend_from_slice(&call_id.to_le_bytes());
+}
+
+/// Appends the trailer and auth value to `body` and frames it.
+fn frame_with_auth(ptype: u8, call_id: u32, mut body: Vec<u8>, auth: Option<(SecTrailer, &[u8])>) -> Vec<u8> {
+    let auth_len = match auth {
+        Some((trailer, value)) => {
+            body.extend_from_slice(&trailer.encode());
+            body.extend_from_slice(value);
+            value.len() as u16
+        }
+        None => 0,
+    };
+    let frag_len = (16 + body.len()) as u16;
+    let mut out = Vec::with_capacity(frag_len as usize);
+    write_header(&mut out, ptype, frag_len, auth_len, call_id);
+    out.extend_from_slice(&body);
+    out
 }
 
 /// A single accepted-or-rejected presentation context result for `bind_ack`.
@@ -103,6 +175,11 @@ impl CtxResult {
 /// accepted (rpcclient/Samba don't require a real value for our ncacn_ip_tcp
 /// listener, since the client already knows the port it connected to).
 pub fn build_bind_ack(call_id: u32, max_frag: u16, assoc_group: u32, results: &[CtxResult]) -> Vec<u8> {
+    build_bind_ack_auth(call_id, max_frag, assoc_group, results, None)
+}
+
+/// [`build_bind_ack`] carrying the security provider's answer (#20).
+pub fn build_bind_ack_auth(call_id: u32, max_frag: u16, assoc_group: u32, results: &[CtxResult], auth: Option<(SecTrailer, &[u8])>) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&max_frag.to_le_bytes());
     body.extend_from_slice(&max_frag.to_le_bytes());
@@ -122,12 +199,34 @@ pub fn build_bind_ack(call_id: u32, max_frag: u16, assoc_group: u32, results: &[
         body.extend_from_slice(&r.reason.to_le_bytes());
         body.extend_from_slice(&*NDR_TRANSFER_SYNTAX);
     }
+    // ctx items are 24 bytes each after a 4-aligned ctx_num: the trailer
+    // that may follow is already 4-aligned.
+    frame_with_auth(PTYPE_BIND_ACK, call_id, body, auth)
+}
 
-    let frag_len = (16 + body.len()) as u16;
-    let mut out = Vec::with_capacity(frag_len as usize);
-    write_common_header(&mut out, PTYPE_BIND_ACK, frag_len, call_id);
-    out.extend_from_slice(&body);
-    out
+/// A `bind_nak` refusing the association, with one supported protocol
+/// version (5.0).
+pub fn build_bind_nak(call_id: u32, reason: u16) -> Vec<u8> {
+    let mut body = Vec::with_capacity(6);
+    body.extend_from_slice(&reason.to_le_bytes());
+    body.push(1); // n_protocols
+    body.push(5); // major
+    body.push(0); // minor
+    body.push(0); // pad
+    frame_with_auth(PTYPE_BIND_NAK, call_id, body, None)
+}
+
+/// A `response` PDU on an authenticated binding: `wire_stub` is the stub
+/// plus `trailer.auth_pad_len` bytes of padding, already signed or sealed;
+/// `alloc_hint` is the plain stub's length.
+pub fn build_response_auth(call_id: u32, ctx_id: u16, alloc_hint: u32, wire_stub: &[u8], trailer: SecTrailer, auth_value: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(8 + wire_stub.len() + 8 + auth_value.len());
+    body.extend_from_slice(&alloc_hint.to_le_bytes());
+    body.extend_from_slice(&ctx_id.to_le_bytes());
+    body.push(0); // cancel_count
+    body.push(0); // reserved
+    body.extend_from_slice(wire_stub);
+    frame_with_auth(PTYPE_RESPONSE, call_id, body, Some((trailer, auth_value)))
 }
 
 /// Builds a `response` PDU wrapping `stub_data` (the NDR-encoded return
@@ -312,6 +411,28 @@ pub fn parse_response_body(ptype: u8, body: &[u8]) -> Option<Result<&[u8], u32>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authenticated_response_splits_back_into_its_parts() {
+        let trailer = SecTrailer { auth_type: 0x44, auth_level: 6, auth_pad_len: 3, context_id: 79231 };
+        let pdu = build_response_auth(9, 0, 5, &[1, 2, 3, 4, 5, 0, 0, 0], trailer, &[7u8; 56]);
+        let (hdr, frag_len) = parse_header(&pdu).unwrap();
+        assert_eq!(frag_len as usize, pdu.len());
+        assert_eq!(hdr.auth_len, 56);
+        let (body, t, value) = split_auth(&pdu, hdr.auth_len).unwrap();
+        assert_eq!(t, trailer);
+        assert_eq!(value, &[7u8; 56]);
+        assert_eq!(&body[8..], &[1, 2, 3, 4, 5, 0, 0, 0]);
+    }
+
+    #[test]
+    fn bind_nak_carries_reason_and_version() {
+        let pdu = build_bind_nak(3, NAK_AUTH_TYPE_NOT_RECOGNIZED);
+        let (hdr, frag_len) = parse_header(&pdu).unwrap();
+        assert_eq!(hdr.ptype, PTYPE_BIND_NAK);
+        assert_eq!(frag_len as usize, pdu.len());
+        assert_eq!(&pdu[16..20], &[8, 0, 1, 5]);
+    }
 
     #[test]
     fn response_frames_stub_data_correctly() {
