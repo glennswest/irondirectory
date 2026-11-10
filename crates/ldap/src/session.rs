@@ -1236,16 +1236,11 @@ fn project_attributes(
         |name: &str| requested.iter().any(|a| a.eq_ignore_ascii_case(name));
     entry
         .attr_names()
-        // userPassword is write-only by convention: never returned by a
-        // wildcard/all-attributes request, only if named explicitly (and
-        // even then it's the PBKDF2 hash, never plaintext).
-        .filter(|name| {
-            if name.eq_ignore_ascii_case(USER_PASSWORD_ATTR) {
-                explicitly_requested(name)
-            } else {
-                want_all || explicitly_requested(name)
-            }
-        })
+        // userPassword is write-only: never returned, named or not, to
+        // anyone (#58; AD never returns unicodePwd). It used to come back
+        // to any search that named it, anonymous included, handing out the
+        // PBKDF2 hash for offline guessing. Binds check it server-side.
+        .filter(|name| !name.eq_ignore_ascii_case(USER_PASSWORD_ATTR) && (want_all || explicitly_requested(name)))
         .map(|name| {
             let values: Vec<Vec<u8>> = if types_only {
                 Vec::new()
@@ -1272,6 +1267,26 @@ fn project_attributes(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    #[test]
+    fn user_password_is_never_returned() {
+        let mut e = Entry::new();
+        e.set("uid", ["alice"]);
+        e.set("userPassword", ["$pbkdf2-sha256$210000$aa$bb"]);
+        let names = |req: &[&str]| -> Vec<String> {
+            let req: Vec<rasn_ldap::LdapString> = req.iter().map(|a| (*a).into()).collect();
+            project_attributes(&e, &req, false).iter().map(|a| a.r#type.as_str().to_ascii_lowercase()).collect()
+        };
+        assert_eq!(names(&[]), vec!["uid"]);
+        assert_eq!(names(&["*"]), vec!["uid"]);
+        assert_eq!(names(&["uid", "userPassword"]), vec!["uid"]);
+        assert!(names(&["userpassword"]).is_empty());
+    }
 }
 
 #[cfg(test)]

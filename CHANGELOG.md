@@ -6,6 +6,10 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-10
+- **fix(ldap):** `userPassword` is never returned by a search (#58). It was
+  left out of `*` but returned to any search that named it, anonymous
+  included: every user's PBKDF2 hash for offline guessing. Found by
+  `test/macos-ldap-e2e.sh` (the macOS RFC 2307 mapping names it).
 - **docs:** `docs/MACOS-LDAP-KERBEROS.md`: the macOS light-path runbook
   (provisioning, Kerberos, the LDAPv3 plugin's RFC 2307 mappings, the checks)
   (#22). Filed #56: LDAP `userPassword` and Kerberos keys are separate.
