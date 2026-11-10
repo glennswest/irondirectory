@@ -38,7 +38,7 @@
 //! command's env contract).
 
 use iron_kdc::keytab::KeytabEntry;
-use iron_partition::{ClusterRef, Dn, ForestId, Partition, PartitionRegistry};
+use iron_partition::{Dn, ForestId, Partition, PartitionRegistry};
 use iron_store::model::Entry;
 use iron_store::store::Store;
 
@@ -51,7 +51,7 @@ fn require_env(name: &str) -> anyhow::Result<String> {
 }
 
 async fn connect(base_dn_str: &str, pid: &str, endpoint: &str) -> anyhow::Result<(Store, Dn)> {
-    let cluster = ClusterRef::plaintext([endpoint.to_string()]);
+    let cluster = iron_store::cluster_from_env(endpoint, "IRON_KDC_FASTETCD")?;
     let forest = ForestId::new(pid.to_string())?;
     let base_dn = Dn::parse(base_dn_str)?;
     let partition = Partition::domain(pid.to_string(), forest, base_dn.clone(), cluster)?;

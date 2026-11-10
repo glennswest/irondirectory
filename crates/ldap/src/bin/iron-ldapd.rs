@@ -61,7 +61,7 @@
 use std::sync::Arc;
 
 use iron_ldap::AppState;
-use iron_partition::{ClusterRef, ForestId, Partition, PartitionRegistry};
+use iron_partition::{ForestId, Partition, PartitionRegistry};
 use iron_store::store::Store;
 use tokio::net::TcpListener;
 
@@ -98,7 +98,7 @@ async fn load_topology() -> anyhow::Result<Option<PartitionRegistry>> {
         return Ok(None);
     };
 
-    let cluster = ClusterRef::plaintext([endpoint]);
+    let cluster = iron_store::cluster_from_env(&endpoint, "IRON_LDAP_CONFIG_FASTETCD")?;
     let forest = ForestId::new(pid.clone())?; // placeholder, overwritten by the loaded record
     let config_dn = iron_partition::Dn::parse(&base_dn)?;
     let config_partition = Partition::configuration(pid, forest, config_dn.clone(), cluster)?;
@@ -128,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
         None => Vec::new(),
     };
 
-    let cluster = ClusterRef::plaintext([endpoint]);
+    let cluster = iron_store::cluster_from_env(&endpoint, "IRON_LDAP_FASTETCD")?;
     let forest = ForestId::new(pid.clone())?;
     let partition = Partition::domain(pid, forest, iron_partition::Dn::parse(&base_dn)?, cluster)?;
     let own_partition_id = partition.id.clone();

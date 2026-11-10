@@ -50,6 +50,45 @@ pub enum StoreError {
     NotConnected(String),
     #[error("RID pool for partition {0} is corrupt: {1}")]
     RidPoolCorrupt(String, String),
+    #[error("fastetcd TLS settings: {0}")]
+    TlsSettings(String),
+}
+
+/// The [`ClusterRef`] a binary reaches fastetcd with (#26): `endpoint`
+/// (several may be given, comma-separated), plus mTLS from the environment
+/// variables `<prefix>_CA`, `<prefix>_CERT` and `<prefix>_KEY` (PEM file
+/// paths) when they are set. For iron-ldapd, `prefix` is
+/// `IRON_LDAP_FASTETCD`: `IRON_LDAP_FASTETCD_ENDPOINT` names the cluster
+/// and `IRON_LDAP_FASTETCD_CA`/`_CERT`/`_KEY` its client identity.
+pub fn cluster_from_env(endpoint: &str, prefix: &str) -> Result<ClusterRef, StoreError> {
+    let var = |suffix: &str| std::env::var(format!("{prefix}_{suffix}")).ok().filter(|v| !v.is_empty());
+    cluster_ref(endpoint, prefix, var("CA"), var("CERT"), var("KEY"))
+}
+
+/// [`cluster_from_env`] without the environment. All three of `ca`, `cert`
+/// and `key`, or none: a client identity is what `--client-cert-auth`
+/// requires, and half a setting is a mistake to report, not to guess
+/// around. The scheme must agree: `https://` with TLS, `http://` without
+/// -- otherwise a forgotten setting would silently mean plaintext, or a
+/// TLS identity would be sent nowhere.
+pub fn cluster_ref(endpoint: &str, prefix: &str, ca: Option<String>, cert: Option<String>, key: Option<String>) -> Result<ClusterRef, StoreError> {
+    let endpoints: Vec<String> = endpoint.split(',').map(str::trim).filter(|e| !e.is_empty()).map(String::from).collect();
+    if endpoints.is_empty() {
+        return Err(StoreError::TlsSettings(format!("{prefix}_ENDPOINT is empty")));
+    }
+    let tls = match (ca, cert, key) {
+        (Some(ca), Some(cert), Some(key)) => Some(TlsRef { ca, cert, key }),
+        (None, None, None) => None,
+        _ => return Err(StoreError::TlsSettings(format!("set all of {prefix}_CA, {prefix}_CERT and {prefix}_KEY, or none"))),
+    };
+    for e in &endpoints {
+        match (&tls, e.starts_with("https://")) {
+            (Some(_), false) => return Err(StoreError::TlsSettings(format!("{e}: {prefix}_CA/_CERT/_KEY are set, so the endpoint must be https://"))),
+            (None, true) => return Err(StoreError::TlsSettings(format!("{e} is https://: set {prefix}_CA, {prefix}_CERT and {prefix}_KEY"))),
+            _ => {}
+        }
+    }
+    Ok(ClusterRef { endpoints, tls })
 }
 
 /// Connects to the fastetcd cluster described by `cluster`. Plaintext if
@@ -104,4 +143,35 @@ pub(crate) async fn get(client: &mut Client, key: &str, prefix: bool) -> Result<
         }
     }
     client.get(key, prefix.then(|| GetOptions::new().with_prefix())).await
+}
+
+#[cfg(test)]
+mod cluster_ref_tests {
+    use super::*;
+
+    fn s(v: &str) -> Option<String> {
+        Some(v.to_string())
+    }
+
+    #[test]
+    fn plaintext_without_tls_settings() {
+        let c = cluster_ref("http://a:2379, http://b:2379", "P", None, None, None).unwrap();
+        assert_eq!(c.endpoints, ["http://a:2379", "http://b:2379"]);
+        assert!(c.tls.is_none());
+    }
+
+    #[test]
+    fn mtls_with_all_three() {
+        let c = cluster_ref("https://a:2379", "P", s("ca.pem"), s("c.pem"), s("c.key")).unwrap();
+        let tls = c.tls.unwrap();
+        assert_eq!((tls.ca.as_str(), tls.cert.as_str(), tls.key.as_str()), ("ca.pem", "c.pem", "c.key"));
+    }
+
+    #[test]
+    fn half_settings_and_scheme_mismatches_are_refused() {
+        assert!(cluster_ref("https://a:2379", "P", s("ca.pem"), None, None).is_err());
+        assert!(cluster_ref("http://a:2379", "P", s("ca.pem"), s("c.pem"), s("c.key")).is_err());
+        assert!(cluster_ref("https://a:2379", "P", None, None, None).is_err());
+        assert!(cluster_ref(" , ", "P", None, None, None).is_err());
+    }
 }

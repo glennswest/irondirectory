@@ -67,7 +67,7 @@
 //! see docs/FIPS.md) for `init-forest`/`create-child` -- same posture
 //! as every other randomness/crypto operation in this codebase.
 
-use iron_partition::{ClusterRef, Dn, ForestId, Partition, PartitionId, PartitionRegistry, Sid};
+use iron_partition::{Dn, ForestId, Partition, PartitionId, PartitionRegistry, Sid};
 use iron_store::store::Store;
 
 fn env(name: &str) -> Option<String> {
@@ -112,7 +112,7 @@ async fn connect_and_load() -> anyhow::Result<(Store, Dn, PartitionRegistry)> {
     let config_base_dn_str = require_env("IRON_CONFIG_BASE_DN")?;
     let config_dn = Dn::parse(&config_base_dn_str)?;
 
-    let bootstrap_cluster = ClusterRef::plaintext([config_endpoint]);
+    let bootstrap_cluster = iron_store::cluster_from_env(&config_endpoint, "IRON_CONFIG_FASTETCD")?;
     let bootstrap_forest = ForestId::new(config_pid.clone())?; // placeholder, overwritten by the loaded record
     let bootstrap_config_partition = Partition::configuration(config_pid, bootstrap_forest, config_dn.clone(), bootstrap_cluster)?;
     let mut bootstrap_registry = PartitionRegistry::new();
@@ -233,7 +233,7 @@ async fn init_forest(args: &[String]) -> anyhow::Result<()> {
     let realm_override = args.get(5);
 
     let endpoint = require_env("IRON_CONFIG_FASTETCD_ENDPOINT")?;
-    let cluster = ClusterRef::plaintext([endpoint]);
+    let cluster = iron_store::cluster_from_env(&endpoint, "IRON_CONFIG_FASTETCD")?;
     let forest = ForestId::new(forest_id.clone())?;
     let config_dn = Dn::parse(config_base_dn)?;
     let root_dn = Dn::parse(root_base_dn)?;
@@ -309,7 +309,9 @@ async fn create_child(args: &[String]) -> anyhow::Result<()> {
     }
 
     let child_cluster = match env("IRON_CHILD_FASTETCD_ENDPOINT") {
-        Some(ep) => ClusterRef::plaintext([ep]),
+        // Persisted in the registry with the partition: every daemon that
+        // loads it reaches the child with these CA/cert/key paths (#26).
+        Some(ep) => iron_store::cluster_from_env(&ep, "IRON_CHILD_FASTETCD")?,
         None => parent.cluster.clone(),
     };
     let new_dn = Dn::parse(new_base_dn)?;

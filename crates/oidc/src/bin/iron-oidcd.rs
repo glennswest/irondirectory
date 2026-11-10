@@ -44,7 +44,7 @@ use iron_crypto::FipsContext;
 use iron_oidc::clients::ClientRegistry;
 use iron_oidc::codes::CodeStore;
 use iron_oidc::AppState;
-use iron_partition::{ClusterRef, Dn, ForestId, Partition, PartitionRegistry};
+use iron_partition::{Dn, ForestId, Partition, PartitionRegistry};
 use iron_store::store::Store;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -75,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
     let signing_key = EcKeyPair::generate(&fips)?;
     let clients = ClientRegistry::parse(&clients_raw)?;
 
-    let cluster = ClusterRef::plaintext([endpoint]);
+    let cluster = iron_store::cluster_from_env(&endpoint, "IRON_OIDC_FASTETCD")?;
     let forest = ForestId::new(pid.clone())?;
     let base_dn = Dn::parse(&base_dn_str)?;
     let partition = Partition::domain(pid, forest, base_dn.clone(), cluster)?;

@@ -12,6 +12,7 @@ use iron_partition::Dn;
 fn settings(endpoint: &str, pid: &str) -> Settings {
     Settings {
         endpoint: endpoint.to_string(),
+        tls: None,
         partition_id: pid.to_string(),
         base_dn: Dn::parse(&format!("dc={pid},dc=example,dc=lo")).unwrap(),
         realm: format!("{}.EXAMPLE.LO", pid.to_ascii_uppercase()),

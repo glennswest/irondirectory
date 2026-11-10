@@ -15,7 +15,7 @@
 //! Required env: IRON_RPC_FASTETCD_ENDPOINT, IRON_RPC_PARTITION_ID,
 //! IRON_RPC_BASE_DN (matching `iron-rpcd`'s own contract).
 
-use iron_partition::{ClusterRef, Dn, ForestId, Partition, PartitionRegistry};
+use iron_partition::{Dn, ForestId, Partition, PartitionRegistry};
 use iron_rpc::netlogon::NTOWF_ATTR;
 use iron_store::index::IndexSpec;
 use iron_store::store::Store;
@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     let pid = require_env("IRON_RPC_PARTITION_ID")?;
     let base_dn_str = require_env("IRON_RPC_BASE_DN")?;
 
-    let cluster = ClusterRef::plaintext([endpoint]);
+    let cluster = iron_store::cluster_from_env(&endpoint, "IRON_RPC_FASTETCD")?;
     let forest = ForestId::new(pid.clone())?;
     let base_dn = Dn::parse(&base_dn_str)?;
     let partition = Partition::domain(pid, forest, base_dn.clone(), cluster)?;

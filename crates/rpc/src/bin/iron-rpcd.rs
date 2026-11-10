@@ -22,7 +22,7 @@
 //! docs/FIPS.md) -- NETLOGON's session-key/credential crypto refuses to
 //! start without it, same posture as iron-kdcd.
 
-use iron_partition::{ClusterRef, Dn, ForestId, Partition, PartitionRegistry, Sid};
+use iron_partition::{Dn, ForestId, Partition, PartitionRegistry, Sid};
 use iron_rpc::server::{AppState, DomainInfo};
 use iron_rpc::{netlogon, samr};
 use iron_store::index::IndexSpec;
@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     let realm = env("IRON_RPC_REALM").unwrap_or_else(|| dns_domain.to_uppercase());
     let listen_addr = env("IRON_RPC_LISTEN").unwrap_or_else(|| "0.0.0.0:445".to_string());
 
-    let cluster = ClusterRef::plaintext([endpoint]);
+    let cluster = iron_store::cluster_from_env(&endpoint, "IRON_RPC_FASTETCD")?;
     let forest = ForestId::new(pid.clone())?;
     let base_dn_parsed = Dn::parse(&base_dn)?;
     let partition = Partition::domain(pid, forest, base_dn_parsed.clone(), cluster)?;

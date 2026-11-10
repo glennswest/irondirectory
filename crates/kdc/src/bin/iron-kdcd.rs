@@ -32,7 +32,7 @@
 //! a topology change requires restarting this process (same limitation
 //! as `iron-ldapd`'s referral wiring).
 
-use iron_partition::{ClusterRef, Dn, ForestId, Partition, PartitionId, PartitionRegistry};
+use iron_partition::{Dn, ForestId, Partition, PartitionId, PartitionRegistry};
 use iron_store::store::Store;
 use tokio::net::{TcpListener, UdpSocket};
 
@@ -56,7 +56,7 @@ async fn load_topology() -> anyhow::Result<Option<PartitionRegistry>> {
         return Ok(None);
     };
 
-    let cluster = ClusterRef::plaintext([endpoint]);
+    let cluster = iron_store::cluster_from_env(&endpoint, "IRON_KDC_CONFIG_FASTETCD")?;
     let forest = ForestId::new(pid.clone())?; // placeholder, overwritten by the loaded record
     let config_dn = Dn::parse(&base_dn)?;
     let config_partition = Partition::configuration(pid, forest, config_dn.clone(), cluster)?;
@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     let listen_addr = env("IRON_KDC_LISTEN").unwrap_or_else(|| "0.0.0.0:88".to_string());
     let kpasswd_addr = env("IRON_KDC_KPASSWD_LISTEN").unwrap_or_else(|| "0.0.0.0:464".to_string());
 
-    let cluster = ClusterRef::plaintext([endpoint]);
+    let cluster = iron_store::cluster_from_env(&endpoint, "IRON_KDC_FASTETCD")?;
     let forest = ForestId::new(pid.clone())?;
     let base_dn_parsed = Dn::parse(&base_dn)?;
     let partition = Partition::domain(pid.clone(), forest, base_dn_parsed.clone(), cluster)?;

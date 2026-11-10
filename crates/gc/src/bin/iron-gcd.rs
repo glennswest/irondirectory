@@ -15,6 +15,10 @@
 //!                                       itself full of `=` signs -- same
 //!                                       convention as IRON_LDAP_REFERRALS)
 //! Optional (defaults shown):
+//!   IRON_GC_CONFIG_FASTETCD_CA/_CERT/_KEY  mTLS to every forest's config
+//!                               cluster (all three or none; endpoints then
+//!                               https://). The domain partitions are
+//!                               reached with the TLS their registry holds.
 //!   IRON_GC_LISTEN=0.0.0.0:3268
 //!   IRON_GC_HEALTH_LISTEN=0.0.0.0:8080
 //!   IRON_GC_LDAPS_LISTEN=      (unset = no implicit-TLS port)
@@ -57,7 +61,7 @@
 
 use std::sync::Arc;
 
-use iron_partition::{ClusterRef, Dn, ForestId, Partition, PartitionKind, PartitionRegistry};
+use iron_partition::{Dn, ForestId, Partition, PartitionKind, PartitionRegistry};
 use iron_store::store::Store;
 use tokio::net::TcpListener;
 
@@ -110,7 +114,8 @@ fn forest_specs() -> anyhow::Result<Vec<ForestSpec>> {
 /// bootstrap-then-load pattern `iron-ldapd`/`iron-kdcd` use for their
 /// optional referral topology -- required here, not optional.
 async fn load_forest(spec: &ForestSpec) -> anyhow::Result<PartitionRegistry> {
-    let cluster = ClusterRef::plaintext([spec.endpoint.clone()]);
+    // One client identity for every forest's config cluster (#26).
+    let cluster = iron_store::cluster_from_env(&spec.endpoint, "IRON_GC_CONFIG_FASTETCD")?;
     let forest = ForestId::new(spec.partition_id.clone())?; // placeholder, overwritten by the loaded record
     let config_dn = Dn::parse(&spec.base_dn)?;
     let config_partition = Partition::configuration(spec.partition_id.clone(), forest, config_dn.clone(), cluster)?;

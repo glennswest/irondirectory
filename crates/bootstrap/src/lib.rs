@@ -46,6 +46,10 @@ pub const ADMINISTRATOR: &str = "administrator";
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub endpoint: String,
+    /// mTLS to fastetcd (#26): `IRON_BOOTSTRAP_FASTETCD_CA`/`_CERT`/`_KEY`.
+    /// Persisted with the partitions it creates, so every daemon that loads
+    /// the forest registry reaches them the same way.
+    pub tls: Option<iron_partition::TlsRef>,
     pub partition_id: String,
     pub base_dn: Dn,
     pub realm: String,
@@ -54,6 +58,11 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The cluster these settings reach.
+    pub fn cluster(&self) -> ClusterRef {
+        ClusterRef { endpoints: self.endpoint.split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect(), tls: self.tls.clone() }
+    }
+
     /// Reads the `IRON_BOOTSTRAP_*` environment (see `docs/CONFIGURATION.md`)
     /// and the admin password file it names.
     pub fn from_env() -> anyhow::Result<Self> {
@@ -61,8 +70,11 @@ impl Settings {
         let password_file = var("IRON_BOOTSTRAP_ADMIN_PASSWORD_FILE")?;
         let raw = std::fs::read(&password_file).with_context(|| format!("reading the admin password file {password_file}"))?;
         let base_dn = var("IRON_BOOTSTRAP_BASE_DN")?;
+        let endpoint = var("IRON_BOOTSTRAP_FASTETCD_ENDPOINT")?;
+        let tls = iron_store::cluster_from_env(&endpoint, "IRON_BOOTSTRAP_FASTETCD")?.tls;
         Ok(Settings {
-            endpoint: var("IRON_BOOTSTRAP_FASTETCD_ENDPOINT")?,
+            endpoint,
+            tls,
             partition_id: var("IRON_BOOTSTRAP_PARTITION_ID")?,
             base_dn: Dn::parse(&base_dn).with_context(|| format!("IRON_BOOTSTRAP_BASE_DN {base_dn:?}"))?,
             realm: var("IRON_BOOTSTRAP_REALM")?.to_ascii_uppercase(),
@@ -135,7 +147,7 @@ pub async fn wait_for_store(s: &Settings, retry: Duration) -> anyhow::Result<Sto
 }
 
 async fn connect(s: &Settings) -> anyhow::Result<Store> {
-    let cluster = ClusterRef::plaintext([s.endpoint.clone()]);
+    let cluster = s.cluster();
     let forest = ForestId::new(s.partition_id.clone())?;
     let mut registry = PartitionRegistry::new();
     registry.insert(Partition::configuration(s.config_partition_id(), forest.clone(), s.config_dn()?, cluster.clone())?)?;
@@ -149,7 +161,7 @@ pub async fn provision(store: &mut Store, s: &Settings) -> anyhow::Result<Report
     let fips = iron_crypto::FipsContext::new().context("the FIPS provider is not active (set OPENSSL_CONF)")?;
     let config_dn = s.config_dn()?;
     let config_spec = iron_config::index_spec();
-    let cluster = ClusterRef::plaintext([s.endpoint.clone()]);
+    let cluster = s.cluster();
     let forest = ForestId::new(s.partition_id.clone())?;
 
     // 1. The forest registry.
@@ -305,6 +317,7 @@ mod tests {
     fn layout_hangs_off_the_base_dn() {
         let s = Settings {
             endpoint: "http://127.0.0.1:2379".into(),
+            tls: None,
             partition_id: "corp".into(),
             base_dn: Dn::parse("dc=corp,dc=example,dc=lo").unwrap(),
             realm: "CORP.EXAMPLE.LO".into(),
