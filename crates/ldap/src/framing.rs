@@ -160,7 +160,7 @@ mod tests {
     fn long_form_length() {
         // tag=0x30, length octet 0x82 (2 length bytes follow) = 0x0100 = 256
         let mut buf = vec![0x30, 0x82, 0x01, 0x00];
-        buf.extend(std::iter::repeat(0u8).take(256));
+        buf.extend(std::iter::repeat_n(0u8, 256));
         assert_eq!(ber_message_len(&buf).unwrap(), Some(4 + 256));
     }
 
