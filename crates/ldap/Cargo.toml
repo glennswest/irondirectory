@@ -37,7 +37,7 @@ futures = { workspace = true }
 # Unlike fastetcd's musl-static packaging, iron-ldapd is a REGULAR
 # glibc-linked, dynamically-linked-against-system-libssl build --
 # deliberately. D4's FIPS posture depends on resolving the OS's
-# validated fips.so provider at runtime (see docs/FIPS.md); a
+# fips.so provider at runtime (see docs/FIPS.md); a
 # statically-linked/vendored OpenSSL would defeat that entirely.
 # `auto-req` therefore stays at its default (auto-detect via ldd),
 # unlike fastetcd's `disabled` -- this package genuinely needs

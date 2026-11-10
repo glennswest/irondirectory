@@ -97,7 +97,9 @@ first-class design constraint rather than a bolt-on.
 - **FIPS module:** **OpenSSL 3.x FIPS provider**, accessed via the **`ossl`
   crate** (idiomatic OpenSSL 3 bindings with explicit provider/FIPS handling),
   matching `rocketsmbd` so the whole identity stack validates against one
-  crypto boundary.
+  crypto boundary. FIPS *mode* on any Red Hat–derived OS; a CMVP-*certified*
+  boundary only with RHEL/UBI's `fips.so` (Fedora's, which the golden uses
+  today, is the same code uncertified, #30; `docs/FIPS.md`).
 - **Deployment:** today, **standalone**: per-daemon RPMs + systemd units
   on Fedora/RHEL VMs, talking to a dedicated fastetcd cluster in
   plaintext or mTLS (`<PREFIX>_FASTETCD_CA`/`_CERT`/`_KEY`, #26; see
@@ -105,7 +107,8 @@ first-class design constraint rather than a bolt-on.
   For Kubernetes, stormcos builds the `irondirectory` golden (a clone of its
   Fedora `fips-base` golden plus these daemons, fastetcd and
   `deploy/golden/fips.cnf`), which irondirectory-operator runs as rustkube
-  pods (#25). It is not yet registered in stormcentral (stormcentral#78). Ports, settings and
+  pods (#25). It is not yet registered in stormcentral's live registry
+  (stormcentral#1331). Ports, settings and
   packaging: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 - **Partitioned from day one:** never a monolithic tree. The directory is many
   strongly-consistent partitions (one Raft cluster per naming context), federated

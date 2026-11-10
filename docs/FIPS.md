@@ -2,21 +2,38 @@
 
 irondirectory's FIPS posture (decision D4) is: **all crypto goes through the
 system's OpenSSL 3 FIPS provider**, bound from Rust via the `ossl` crate
-(`crates/crypto`, package `iron-crypto`). Validated on `dev.g8.lo` (Fedora
-43, OpenSSL 3.5.4) 2026-07-06 — see irondirectory#1.
+(`crates/crypto`, package `iron-crypto`). Built and tested on `dev.g8.lo`
+(Fedora 43, OpenSSL 3.5.4) 2026-07-06 — see irondirectory#1 — and since on
+Fedora 44 build VMs; Fedora's provider is not a certified module (below).
 
 ## What "FIPS compliant" actually means here
 
-FIPS 140 compliance comes from a **CMVP-validated crypto module** — you
-cannot get there by compiling your own OpenSSL and calling it "FIPS." Two
-things are true on a Red Hat–derived OpenSSL build (Fedora and RHEL share
-the same FIPS provider code):
+FIPS 140 compliance comes from a **CMVP-certified crypto module** — you
+cannot get there by compiling your own OpenSSL and calling it "FIPS."
+Fedora and RHEL share the same OpenSSL FIPS provider code, but **only
+RHEL's (and UBI's) build of it is the CMVP-certified module; Fedora's build
+is not certified** (#30). So two different claims apply:
 
-- The system already ships a validated FIPS provider:
-  `/usr/lib64/ossl-modules/fips.so`, self-identifying as "Red Hat Enterprise
-  Linux OpenSSL FIPS Provider" with an active CMVP certificate baked into
-  the build (`REDHAT_FIPS_VENDOR`/`REDHAT_FIPS_VERSION` in `openssl version
-  -a`).
+- **FIPS mode** (only the provider's approved algorithms, fail closed
+  without it): what irondirectory enforces, on Fedora or RHEL alike.
+- **A certified boundary**: only with RHEL/UBI's `fips.so`. The golden's
+  `fips-base` is Fedora today (stormcos); moving it to UBI packages is the
+  step when a certified boundary is required, which also means building
+  the binaries against UBI's glibc and OpenSSL.
+
+On either:
+
+- The OS ships the FIPS provider at `/usr/lib64/ossl-modules/fips.so`.
+  **Its name does not tell you whether it is certified.** Fedora's build
+  calls itself "Red Hat Enterprise Linux OpenSSL FIPS Provider" too: on a
+  Fedora 44 build VM (2026-11-10, openssl-libs 3.5.9-1.fc44), `openssl list
+  -providers -verbose` reports that name, version `3.5.9-21eeb0533cf82b56`,
+  and `openssl version -a` shows the same strings compiled in as
+  `REDHAT_FIPS_VENDOR`/`REDHAT_FIPS_VERSION`, while the package's own
+  build note says `cpe:/o:fedoraproject:fedora:44`. Fedora's spec file
+  sets those strings; it is still not the certified module. Certification
+  is a property of the RHEL/UBI build, checked against its CMVP certificate,
+  not of the provider's self-reported name. (This doc used to say otherwise.)
 - Loading it does **not** require the kernel `fips=1` boot flag or a
   reboot. That flag is for RHEL's system-wide FIPS certification scope
   (kernel RNG, dm-crypt, etc.); the OpenSSL provider itself just needs to be
@@ -57,7 +74,7 @@ dgst: Unknown option or message digest: md5
 The `ossl` crate (from `latchset/kryoptic`, by Simo Sorce — the same
 reviewer who steered rocketsmbd toward it, see rocketsmbd#29) has a cargo
 feature literally named `fips`. **Do not enable it.** It is unrelated to the
-OS-validated provider above:
+OS's FIPS provider above:
 
 - `ossl`'s `fips` feature pulls in `ossl400` — **requires OpenSSL >= 4.0**,
   not the 3.5 this platform ships.
@@ -79,7 +96,7 @@ ossl = { version = "1.5.2", default-features = false, features = ["ossl-sys", "d
 This is exactly the pattern rocketsmbd landed on independently (rocketsmbd
 uses the plain `openssl` crate rather than `ossl`, but the principle is
 identical: dynamically link system OpenSSL, let the *OS* supply the
-validated FIPS provider — don't try to vendor or self-build one).
+FIPS provider — don't try to vendor or self-build one).
 
 ## `iron-crypto` (`crates/crypto`)
 
@@ -94,7 +111,7 @@ AES-256-GCM AEAD. `FipsContext::new()`:
    otherwise.
 
 There is no code path in this crate that silently falls back to the
-unvalidated default provider — either FIPS is active, or nothing runs.
+non-FIPS default provider — either FIPS is active, or nothing runs.
 Verified: unsetting `OPENSSL_CONF` makes every `iron-crypto` test fail
 closed with that error, rather than passing against non-FIPS crypto.
 

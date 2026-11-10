@@ -1,5 +1,5 @@
-# OpenSSL provider config that activates the OS-shipped, CMVP-validated
-# FIPS provider for a single process (via OPENSSL_CONF) without touching
+# OpenSSL provider config that activates the OS-shipped OpenSSL FIPS
+# provider (CMVP-certified on RHEL/UBI, uncertified on Fedora, #30) for a single process (via OPENSSL_CONF) without touching
 # system-wide crypto-policies or requiring a reboot. See ../../docs/FIPS.md.
 #
 # Usage: OPENSSL_CONF=$(pwd)/crates/crypto/testdata/fips-dev.cnf cargo test -p iron-crypto

@@ -6,6 +6,16 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-10
+- **docs:** Fedora's `fips.so` is not a CMVP-certified module (#30):
+  FIPS.md, ARCHITECTURE D4, CONFIGURATION, README, CLAUDE.md and the code
+  comments that called it validated now say "the OS's FIPS provider:
+  certified on RHEL/UBI, the same code uncertified on Fedora". D4 records
+  FIPS mode vs. a certified boundary, and that the golden's `fips-base`
+  moves to UBI (binaries built against UBI's glibc) when a certified
+  boundary is required. FIPS.md records why the name misleads: Fedora 44's
+  provider reports "Red Hat Enterprise Linux OpenSSL FIPS Provider".
+  Earlier entries below that say the OS's "validated" `fips.so` meant
+  Fedora's, so the same correction applies to them.
 - **feat:** mTLS to fastetcd from every daemon and CLI (#26):
   `<PREFIX>_FASTETCD_CA`/`_CERT`/`_KEY` beside each
   `<PREFIX>_FASTETCD_ENDPOINT` (`iron_store::cluster_from_env`). All three
@@ -166,8 +176,8 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ### 2026-09-28
 - **feat(golden):** `deploy/golden/build-root.sh` assembles the
   `irondirectory` golden's root (#25). It is a Fedora root built with dnf
-  (glibc + openssl-libs, so the FIPS provider is Fedora's validated
-  `fips.so`), with fastetcd, iron-ldapd, iron-kdcd, iron-kdc-ctl,
+  (glibc + openssl-libs, so the FIPS provider is Fedora's `fips.so`;
+  corrected 2026-11-10, #30: not a CMVP-certified build), with fastetcd, iron-ldapd, iron-kdcd, iron-kdc-ctl,
   iron-bootstrap and `/etc/irondirectory/fips.cnf`. It is rebuilt when the
   Fedora release changes. `test/golden-e2e.sh` runs the daemons inside it
   and checks ldapwhoami, kinit and a restart on the same data.

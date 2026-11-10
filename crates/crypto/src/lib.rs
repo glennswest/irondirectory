@@ -1,8 +1,9 @@
 //! FIPS crypto facade over the `ossl` crate (decision D4 — see
 //! `docs/ARCHITECTURE.md` and `docs/FIPS.md`).
 //!
-//! Real FIPS 140 compliance comes from the OS-shipped, CMVP-validated
-//! OpenSSL FIPS provider (`fips.so`), not from a cargo feature. The `ossl`
+//! FIPS mode comes from the OS-shipped OpenSSL FIPS provider (`fips.so`),
+//! not from a cargo feature. That module is CMVP-certified on RHEL/UBI;
+//! Fedora ships the same code uncertified (#30). The `ossl`
 //! crate's own `fips` feature is a different thing entirely — it vendor-
 //! builds OpenSSL >= 4.0 from source and produces a self-compiled, NOT
 //! CMVP-validated module (`KRYOPTIC_FIPS_BUILD` defaults to `"test"`). This

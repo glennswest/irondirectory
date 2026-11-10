@@ -438,7 +438,7 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
       correctly, `GET /health` returns 200, DNS LB probe switched tcp→http.
 - [x] Validate `ossl` crate + OpenSSL FIPS provider build on target platform
       (#1) — `crates/crypto` (`iron-crypto`), verified on dev.g8.lo against
-      the real Red Hat–validated `fips.so`; see `docs/FIPS.md`.
+      Fedora's `fips.so` (the RHEL provider code, but not the CMVP-certified build, #30); see `docs/FIPS.md`.
 - [x] fastetcd connection harness (etcd v3 gRPC client, mTLS) (#2) —
       `crates/store` (`iron-store`): `connect()` (plaintext or mTLS from a
       `ClusterRef`) + partition-scoped put/get/scan/watch on `iron_partition`
@@ -458,7 +458,7 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
 **FIPS crypto (D4)** — `crates/crypto` (`iron-crypto`): digest/HMAC/AES-256-
 GCM over the `ossl` crate, dynamically linked against the system OpenSSL
 3.5 (NOT `ossl`'s own `fips` cargo feature — that needs OpenSSL >= 4.0 and
-isn't CMVP-validated). `FipsContext::new()` verifies the OS's validated
+isn't CMVP-validated). `FipsContext::new()` verifies the OS's
 `fips.so` provider is actually active and fails closed otherwise. Build/test
 needs `openssl-devel` + `clang` + `OPENSSL_CONF` pointing at a config that
 activates `fips.so` — see `docs/FIPS.md`. Verified on dev.g8.lo.
@@ -514,7 +514,7 @@ production entry point (`crates/server` isn't built yet).
 full libssl bindings), **not** `ossl`/kryoptic (`iron-crypto`'s
 dependency) — `ossl` only binds libcrypto's EVP APIs, no TLS state
 machine at all. Dynamically links system libssl (no `vendored`), so it
-resolves through the same OS-validated `fips.so` as `iron-crypto`
+resolves through the same OS `fips.so` as `iron-crypto`
 whenever `OPENSSL_CONF` activates it — same operational requirement, no
 per-connection plumbing. Verified live under a FIPS-*only* provider set
 (base+fips, no default — `crates/crypto/testdata/fips-dev.cnf`): real

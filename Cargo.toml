@@ -60,8 +60,9 @@ etcd-client = { version = "0.19", features = ["tls"] }
 # Validated on target (#1, see docs/FIPS.md): dynamic-link the system
 # libcrypto via `ossl-sys`/`dynamic`. Do NOT add the crate's own `fips`
 # feature — it requires OpenSSL >= 4.0 vendored from source and produces a
-# self-built, non-CMVP-validated module. Real FIPS compliance comes from
-# the OS-shipped, already-validated fips.so provider, loaded at runtime.
+# self-built, non-CMVP-validated module. FIPS mode comes from the
+# OS-shipped fips.so provider, loaded at runtime (CMVP-certified on
+# RHEL/UBI, the same code uncertified on Fedora, #30).
 ossl = { version = "1.5.2", default-features = false, features = ["ossl-sys", "dynamic"] }
 
 # Errors / logging
@@ -94,7 +95,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # bindings), NOT the `ossl` crate above -- `ossl`/kryoptic only binds
 # libcrypto's EVP APIs, it has no SSL/TLS state machine at all. Default
 # features dynamically link the system libssl/libcrypto (no `vendored`),
-# so it picks up the same OS-validated fips.so provider as iron-crypto
+# so it picks up the same OS fips.so provider as iron-crypto
 # when OPENSSL_CONF activates it (see docs/FIPS.md).
 openssl = "0.10"
 tokio-openssl = "0.6"

@@ -6,7 +6,7 @@
 //! libcrypto's EVP APIs and has no TLS state machine at all. `openssl`
 //! dynamically links the system libssl/libcrypto by default (no
 //! `vendored` feature enabled), so it resolves through the same
-//! OS-validated `fips.so` provider as `iron-crypto` when the process's
+//! OS `fips.so` provider as `iron-crypto` when the process's
 //! `OPENSSL_CONF` activates it -- see `docs/FIPS.md`. There is no
 //! per-connection plumbing needed for that; it's a property of how the
 //! process is launched, not of this code.

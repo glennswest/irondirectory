@@ -204,7 +204,8 @@ does not change the stored password.
 
 RPMs are built with `cargo generate-rpm -p crates/<crate>` after
 `cargo build --release`. They link dynamically against the system
-glibc/libssl on purpose, so the OS's validated `fips.so` is the one in use.
+glibc/libssl on purpose, so the OS's `fips.so` is the one in use: the
+CMVP-certified module on RHEL, the same code uncertified on Fedora (#30).
 There's no CI release workflow; RPMs are built by hand and attached to GitHub
 releases. The Terraform cloud-init in `deploy/terragrunt/ldap/` installs
 `iron-ldapd` from the release URL.

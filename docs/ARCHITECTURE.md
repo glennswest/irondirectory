@@ -96,8 +96,17 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
 
 ### D4 — FIPS: OpenSSL 3.x FIPS provider via the `ossl` crate
 - Standardize on the **OpenSSL 3.x FIPS provider**, matching `rocketsmbd`
-  (its ROADMAP #29/#30). One validated crypto boundary across the whole
-  identity stack is what a FIPS audit wants.
+  (its ROADMAP #29/#30). One crypto boundary across the whole identity
+  stack is what a FIPS audit wants.
+- **Certified module vs. FIPS mode (#30):** the boundary is the OS's
+  OpenSSL FIPS provider, `/usr/lib64/ossl-modules/fips.so`. RHEL's (and
+  UBI's) build of it is the CMVP-certified module; Fedora ships the same
+  provider code, but its build is not certified. irondirectory runs in FIPS
+  *mode* on either (approved algorithms only, fail closed without the
+  provider); a *certified* boundary needs the RHEL/UBI module. The golden's
+  `fips-base` is Fedora today; moving it to UBI packages is the step when a
+  certified boundary is required, and it means building the binaries
+  against UBI's glibc and OpenSSL.
 - Bind via the **`ossl` crate** — idiomatic OpenSSL 3 bindings with explicit
   provider/FIPS-mode handling — rather than the raw `openssl` FFI crate or
   aws-lc-rs. (aws-lc-rs is also FIPS 140-3 validated and remains the fallback
@@ -118,8 +127,9 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
   requires OpenSSL >= 4.0 and vendor-builds a non-CMVP-validated test
   module. The real path is `ossl` with `default-features = false, features
   = ["ossl-sys", "dynamic"]` (dynamically link system `libcrypto`), which
-  picks up the OS's already-validated FIPS provider (Fedora/RHEL ship
-  `/usr/lib64/ossl-modules/fips.so`, an active CMVP-certified build) via
+  picks up the OS's FIPS provider (`/usr/lib64/ossl-modules/fips.so`:
+  the CMVP-certified module on RHEL/UBI, the same code uncertified on
+  Fedora, #30) via
   standard OpenSSL provider config — no kernel `fips=1` boot flag needed.
   Implemented as `crates/crypto` (`iron-crypto`); full writeup in
   `docs/FIPS.md`, including a memory-safety bug found in `ossl` 1.5.2's
