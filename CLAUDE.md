@@ -237,11 +237,16 @@ waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 
 Needs a real Mac, which this VM cannot reach; per the owner's #20 decision
 the owner runs the Mac side against the #25 stack. This pass:
-- [ ] `test/macos-ldap-e2e.sh`: the RFC2307-mapping lookups, LDAP bind auth
-      and kinit, against real iron-ldapd/iron-kdcd (server half).
-- [ ] `docs/MACOS-LDAP-KERBEROS.md`: the runbook (provisioning + Mac steps).
-- [ ] File: LDAP userPassword and Kerberos keys are separate passwords.
-- [ ] Hand the Mac steps to the owner once a stack is reachable (#25).
+- [x] `test/macos-ldap-e2e.sh`: the RFC2307-mapping lookups, LDAP bind auth
+      and kinit, against real iron-ldapd/iron-kdcd (server half). PASS at
+      7ea42cd. It found #58 (userPassword hash returned to anonymous
+      searches that name it), fixed in 7ea42cd.
+- [x] `docs/MACOS-LDAP-KERBEROS.md`: the runbook (provisioning + Mac steps;
+      Mac steps not yet run on a Mac).
+- [x] Filed #56: LDAP userPassword and Kerberos keys are separate passwords.
+- [ ] Hand the Mac steps to the owner once a stack is reachable: #22 is
+      `--after irondirectory#25`; then `wait-owner --action` with section 4
+      of the runbook.
 
 ## Done (2026-10-06): #27 LDAP filters
 
