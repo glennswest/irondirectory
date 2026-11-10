@@ -46,7 +46,11 @@ def connect(port, uuid, level=None, account=None, session_key=None):
     t = transport.DCERPCTransportFactory(f"ncacn_ip_tcp:127.0.0.1[{port}]")
     dce = t.get_dce_rpc()
     if level is not None:
-        dce.set_credentials(account, "", "")
+        # A domain makes impacket send a well-formed NL_AUTH_MESSAGE (flags
+        # NetBIOS domain | NetBIOS host | UTF-8 host); without one it writes
+        # "WORKGROUP\0<host>\0" under flag 0x10 alone, which MS-NRPC 2.2.1.3.1
+        # does not allow and Windows never sends.
+        dce.set_credentials(account, "", os.environ["NETBIOS"])
         dce.set_auth_type(rpcrt.RPC_C_AUTHN_NETLOGON)
         dce.set_auth_level(level)
         dce.set_session_key(session_key)
