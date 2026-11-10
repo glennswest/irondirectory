@@ -6,6 +6,11 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-10
+- **docs:** `docs/MACOS-LDAP-KERBEROS.md`: the macOS light-path runbook
+  (provisioning, Kerberos, the LDAPv3 plugin's RFC 2307 mappings, the checks)
+  (#22). Filed #56: LDAP `userPassword` and Kerberos keys are separate.
+- **test:** `test/macos-ldap-e2e.sh`: the lookups the LDAPv3 plugin makes,
+  LDAP bind auth and kinit against real iron-ldapd/iron-kdcd (#22).
 - **docs:** #25: stormcos#685 is fixed and `component stage irondirectory`
   built golden-irondirectory-8e3810032552 (Fedora 44 fips-base). The
   `test/golden-e2e.sh` header no longer says a production stage runs it

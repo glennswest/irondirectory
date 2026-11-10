@@ -66,6 +66,8 @@ or Samba domain controller.
 - [`docs/OPENSHIFT-LDAP-IDP.md`](docs/OPENSHIFT-LDAP-IDP.md),
   [`docs/OPENSHIFT-OIDC-IDP.md`](docs/OPENSHIFT-OIDC-IDP.md),
   [`docs/OPENSHIFT-SPNEGO-SSO.md`](docs/OPENSHIFT-SPNEGO-SSO.md): OpenShift SSO
+- [`docs/MACOS-LDAP-KERBEROS.md`](docs/MACOS-LDAP-KERBEROS.md): macOS light
+  path, LDAPv3 plugin (RFC 2307) + Kerberos (#22)
 
 ## What it is (and isn't)
 
