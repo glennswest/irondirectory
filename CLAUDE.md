@@ -346,8 +346,10 @@ didn't answer from dev on 2026-10-06.)
          sc-build, so the in-pod check is the image's acceptance.
    - [ ] The master runs `component add irondirectory` (and `dirop`) -- noted
          again 2026-11-10. Then irondirectory-operator#1's live short/medium
-         test runs this golden in a pod; that closes #25. #25 is proposed
-         `--after irondirectory-operator#1`.
+         test runs this golden in a pod; that closes #25. `--after
+         irondirectory-operator#1` is circular (operator#1 waits on #25), so
+         filed stormcentral#1331 (register both) and #25 is `--after
+         stormcentral#1331`; master asked to re-point operator#1 to it.
 
 ## Done (2026-11-07): #21 federation test matrix
 
