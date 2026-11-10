@@ -85,7 +85,8 @@ cat > "$W/krb5.conf" <<EOF
     $REALM = { kdc = 127.0.0.1:$((P + 3)) }
 EOF
 export KRB5_CONFIG=$W/krb5.conf KRB5CCNAME=FILE:$W/cc
-can_kinit() { echo "$2" | env -u OPENSSL_CONF kinit "$1@$REALM" >/dev/null 2>&1; }
+can_kinit() { : > "$W/trace.log"; echo "$2" | env -u OPENSSL_CONF KRB5_TRACE="$W/trace.log" kinit "$1@$REALM" > "$W/kinit.out" 2>&1; }
+kinit_fail() { cat "$W/kinit.out"; tail -25 "$W/trace.log"; sed 's/\x1b\[[0-9;]*m//g' "$W/kdcd.log" | tail -10; fail "$@"; }
 
 imp zerologon WS0 || fail "zerologon"
 
@@ -99,7 +100,7 @@ for pair in WS1:integrity WS2:privacy; do
   imp auth "$C" "$NEW" || fail "NETLOGON with $C's new password"
   if imp auth "$C" "$OLD" > /dev/null 2>&1; then fail "NETLOGON still accepts $C's old password"; fi
   echo "ok: NetrServerAuthenticate3 refuses $C's old password"
-  can_kinit "$C\$" "$NEW" || fail "kinit $C\$ with the password NetrServerPasswordSet2 set"
+  can_kinit "$C\$" "$NEW" || kinit_fail "kinit $C\$ with the password NetrServerPasswordSet2 set"
   echo "ok: kinit $C\$@$REALM with the new password"
 done
 
