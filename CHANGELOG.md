@@ -6,6 +6,12 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-10
+- **docs:** CLAUDE.md no longer holds `--client-cert-auth` back for
+  fastetcd#6, which v0.8.1 fixed (#32); what keeps the daemons on
+  plaintext is #26.
+- **test:** `test/mtls-e2e.sh` (#32): throwaway certificates, a fastetcd
+  with `--client-cert-auth`, and `mtls_spike`'s round trip plus a new
+  negative test (a client without a certificate cannot write).
 - **feat(ldap):** D2's USN (#28): rootDSE `highestCommittedUSN` is the
   store's current etcd revision (it was a fixed `1`); every entry carries
   `uSNCreated`/`uSNChanged` from its key's etcd revisions, computed on read,

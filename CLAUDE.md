@@ -446,11 +446,12 @@ GC/GAL aggregator) — built on a model that already assumes N partitions.
       (`tests/live_cluster.rs`, put/get/scan/watch all pass). mTLS path
       verified against a throwaway single-node instance (client identity
       required and honored correctly by `iron-store`'s side) — but found
-      **fastetcd doesn't actually enforce `--client-cert-auth`** (writes
-      succeed with no client cert presented at all); filed upstream as
-      fastetcd#6, not fixed here. The live cluster stays plaintext for now;
-      do not flip it to `--client-cert-auth` expecting real enforcement
-      until fastetcd#6 lands.
+      **fastetcd didn't enforce `--client-cert-auth`** (writes succeeded
+      with no client cert); filed as fastetcd#6, fixed upstream in v0.8.1
+      (2026-07-07). `test/mtls-e2e.sh` (#32) checks enforcement and the
+      mTLS round trip on the fastetcd the tests pin. The live cluster is
+      still plaintext; what keeps the daemons on plaintext now is #26
+      (every binary builds a plaintext `ClusterRef`), not fastetcd.
 
 ## Live infrastructure
 
@@ -469,9 +470,10 @@ partition-scoped `put_entry`/`get_entry`/`scan_subtree`/`watch_subtree` on
 default) is the spike against the real `etcd.g8.lo:2379` — run with
 `cargo test -p iron-store --test live_cluster -- --ignored
 --test-threads=1`. mTLS is validated separately (`tests/mtls_spike.rs`,
-env-var-gated) since the live cluster has no TLS configured — see
-fastetcd#6 (client-cert-auth doesn't actually enforce a client cert)
-before ever turning TLS on there.
+env-var-gated; `test/mtls-e2e.sh` makes the certificates and runs it,
+including a negative test that a certificate-less client is refused, #32)
+since the live cluster has no TLS configured. fastetcd#6 (client-cert-auth
+not enforced) is fixed in v0.8.1; the daemons' side is #26.
 
 **iron-store DIT layer (D2/D8, #3)** — on top of the connection harness:
 `model::Entry` (multi-valued attribute map, JSON-serialized value at each
