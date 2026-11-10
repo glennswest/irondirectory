@@ -32,12 +32,17 @@ fn single_domain_partition(registry: &PartitionRegistry) -> Option<&Partition> {
     }
 }
 
-pub fn build(registry: &PartitionRegistry, fips_active: bool) -> SearchResultEntry {
+/// `highest_committed_usn`: the store's current revision (D2/#28), when the
+/// caller has a store to ask; the GC passes `None`.
+pub fn build(registry: &PartitionRegistry, fips_active: bool, highest_committed_usn: Option<i64>) -> SearchResultEntry {
     let mut attrs = vec![
         attr("objectClass", ["top".to_string()]),
         attr("supportedLDAPVersion", ["3".to_string()]),
         attr("vendorName", ["irondirectory".to_string()]),
     ];
+    if let Some(usn) = highest_committed_usn {
+        attrs.push(attr("highestCommittedUSN", [usn.to_string()]));
+    }
 
     // Found live testing macOS's dsconfigad against a real client (#20):
     // it reads rootDSE's supportedSASLMechanisms up front to decide how
@@ -93,7 +98,6 @@ pub fn build(registry: &PartitionRegistry, fips_active: bool) -> SearchResultEnt
         attrs.push(attr("forestFunctionality", ["7".to_string()]));
         attrs.push(attr("domainControllerFunctionality", ["10".to_string()]));
         attrs.push(attr("isSynchronized", ["TRUE".to_string()]));
-        attrs.push(attr("highestCommittedUSN", ["1".to_string()]));
         if let Some(realm) = &domain.realm {
             attrs.push(attr("dnsHostName", [format!("iron-ldapd.{}", realm.to_ascii_lowercase())]));
             attrs.push(attr("ldapServiceName", [format!("{}:iron-ldapd@{realm}", realm.to_ascii_lowercase())]));

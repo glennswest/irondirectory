@@ -1164,8 +1164,14 @@ async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Refer
         // configured; fall back to the local registry (still correct
         // for a deployment with no configuration partition set up,
         // e.g. the standalone il1/il2/il3 replicas).
+        // highestCommittedUSN: the store's current revision (#28).
+        let own_base = store.registry().iter().next().map(|p| p.base_dn.clone());
+        let usn = match own_base {
+            Some(dn) => store.current_revision(&dn).await.ok(),
+            None => None,
+        };
         let registry = referrals.topology.unwrap_or_else(|| store.registry());
-        let entry_op = ProtocolOp::SearchResEntry(rootdse::build(registry, fips_active));
+        let entry_op = ProtocolOp::SearchResEntry(rootdse::build(registry, fips_active, usn));
         let mut ops = vec![entry_op];
         ops.extend(done(ResultCode::Success, ""));
         return ops;
@@ -1174,23 +1180,23 @@ async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Refer
         return done_result(result);
     }
 
+    // Every candidate carries uSNCreated/uSNChanged from its etcd revisions
+    // (D2's USN, #28), added before the filter so `(uSNChanged>=N)` -- how
+    // AD clients poll for changes -- matches on them.
     let candidates: Vec<(Dn, Entry)> = match req.scope {
-        SearchRequestScope::BaseObject => match store.get_entry(&base_dn).await {
-            Ok(Some(e)) => vec![(base_dn.clone(), e)],
+        SearchRequestScope::BaseObject => match store.get_entry_with_revisions(&base_dn).await {
+            Ok(Some((e, revs))) => vec![(base_dn.clone(), with_usn(e, revs))],
             Ok(None) => return done(ResultCode::NoSuchObject, ""),
             Err(e) => return done_store_error(&e, referrals, &base_dn),
         },
         SearchRequestScope::SingleLevel | SearchRequestScope::WholeSubtree => {
-            match store.scan_subtree(&base_dn).await {
+            match store.scan_subtree_with_revisions(&base_dn).await {
                 Ok(rows) => {
-                    if req.scope == SearchRequestScope::SingleLevel {
-                        let child_depth = base_dn.depth() + 1;
-                        rows.into_iter()
-                            .filter(|(dn, _)| dn.depth() == child_depth)
-                            .collect()
-                    } else {
-                        rows
-                    }
+                    let child_depth = base_dn.depth() + 1;
+                    rows.into_iter()
+                        .filter(|(dn, _, _)| req.scope != SearchRequestScope::SingleLevel || dn.depth() == child_depth)
+                        .map(|(dn, e, revs)| (dn, with_usn(e, revs)))
+                        .collect()
                 }
                 Err(e) => return done_store_error(&e, referrals, &base_dn),
             }
@@ -1224,6 +1230,15 @@ async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Refer
     }
     ops.extend(done(ResultCode::Success, ""));
     ops
+}
+
+/// `entry` with AD's `uSNCreated`/`uSNChanged` set from its etcd
+/// revisions (#28). Computed on every read, never stored: a client that
+/// writes either attribute has it replaced here.
+fn with_usn(mut entry: Entry, revs: iron_store::entry::Revisions) -> Entry {
+    entry.set("uSNCreated", [revs.created.to_string()]);
+    entry.set("uSNChanged", [revs.modified.to_string()]);
+    entry
 }
 
 fn project_attributes(
@@ -1286,6 +1301,16 @@ mod projection_tests {
         assert_eq!(names(&["*"]), vec!["uid"]);
         assert_eq!(names(&["uid", "userPassword"]), vec!["uid"]);
         assert!(names(&["userpassword"]).is_empty());
+    }
+
+    #[test]
+    fn usn_attributes_come_from_revisions_and_replace_written_ones() {
+        let mut e = Entry::new();
+        e.set("cn", ["alice"]);
+        e.set("uSNChanged", ["999999"]); // a client-written value is replaced
+        let e = with_usn(e, iron_store::entry::Revisions { created: 7, modified: 1500 });
+        assert_eq!(e.get("usncreated"), Some(&["7".to_string()][..]));
+        assert_eq!(e.get("usnchanged"), Some(&["1500".to_string()][..]));
     }
 }
 

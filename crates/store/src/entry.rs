@@ -70,6 +70,57 @@ pub async fn scan_subtree(
     Ok(out)
 }
 
+/// An entry key's etcd revisions (D2's USN, #28): `created` is the
+/// revision that created the key (AD's `uSNCreated`), `modified` the
+/// revision of its last write (`uSNChanged`). Revisions are the cluster's
+/// one MVCC counter, so they order every write on that cluster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Revisions {
+    pub created: i64,
+    pub modified: i64,
+}
+
+/// [`get_entry`] with the entry key's [`Revisions`].
+pub async fn get_entry_with_revisions(
+    client: &mut Client,
+    pid: &PartitionId,
+    dn: &Dn,
+) -> Result<Option<(Vec<u8>, Revisions)>, StoreError> {
+    let resp = crate::get(client, &key::entry_key(pid, dn), false).await?;
+    Ok(resp.kvs().first().map(|kv| (kv.value().to_vec(), Revisions { created: kv.create_revision(), modified: kv.mod_revision() })))
+}
+
+/// [`scan_subtree`] with each entry key's [`Revisions`].
+pub async fn scan_subtree_with_revisions(
+    client: &mut Client,
+    pid: &PartitionId,
+    dn: &Dn,
+) -> Result<Vec<(String, Vec<u8>, Revisions)>, StoreError> {
+    let base = key::entry_key(pid, dn);
+    let prefix = key::subtree_prefix(pid, dn);
+    let resp = crate::get(client, &prefix, true).await?;
+    let mut out: Vec<(String, Vec<u8>, Revisions)> = resp
+        .kvs()
+        .iter()
+        .map(|kv| {
+            let revs = Revisions { created: kv.create_revision(), modified: kv.mod_revision() };
+            (kv.key_str().unwrap_or_default().to_string(), kv.value().to_vec(), revs)
+        })
+        .collect();
+    if let Some((v, revs)) = get_entry_with_revisions(client, pid, dn).await? {
+        out.insert(0, (base, v, revs));
+    }
+    Ok(out)
+}
+
+/// The cluster's current revision (its newest committed write): AD's
+/// `highestCommittedUSN` (#28). Read from the header of a read of the
+/// partition's tree root, which answers whether or not the key exists.
+pub async fn current_revision(client: &mut Client, pid: &PartitionId) -> Result<i64, StoreError> {
+    let resp = crate::get(client, &key::tree_root(pid), false).await?;
+    Ok(resp.header().map(|h| h.revision()).unwrap_or(0))
+}
+
 /// One observed change under a watched subtree.
 #[derive(Debug)]
 pub struct SubtreeEvent {

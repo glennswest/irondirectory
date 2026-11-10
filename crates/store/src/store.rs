@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use etcd_client::Client;
 use iron_partition::{Dn, Partition, PartitionId, PartitionRegistry};
 
+use crate::entry::Revisions;
 use crate::index::IndexSpec;
 use crate::model::Entry;
 use crate::StoreError;
@@ -121,6 +122,33 @@ impl Store {
                 Ok((dn, entry))
             })
             .collect()
+    }
+
+    /// [`Store::get_entry`] with the entry's etcd revisions (#28).
+    pub async fn get_entry_with_revisions(&mut self, dn: &Dn) -> Result<Option<(Entry, Revisions)>, StoreError> {
+        let pid = self.resolve(dn)?.id.clone();
+        let client = self.client_mut(&pid)?;
+        match crate::entry::get_entry_with_revisions(client, &pid, dn).await? {
+            Some((b, revs)) => Ok(Some((Entry::decode(&b)?, revs))),
+            None => Ok(None),
+        }
+    }
+
+    /// [`Store::scan_subtree`] with each entry's etcd revisions (#28).
+    pub async fn scan_subtree_with_revisions(&mut self, dn: &Dn) -> Result<Vec<(Dn, Entry, Revisions)>, StoreError> {
+        let pid = self.resolve(dn)?.id.clone();
+        let client = self.client_mut(&pid)?;
+        let rows = crate::entry::scan_subtree_with_revisions(client, &pid, dn).await?;
+        rows.into_iter()
+            .map(|(k, v, revs)| Ok((crate::entry::dn_from_tree_key(&pid, &k)?, Entry::decode(&v)?, revs)))
+            .collect()
+    }
+
+    /// The current revision of the cluster hosting `dn`'s partition (#28).
+    pub async fn current_revision(&mut self, dn_in_partition: &Dn) -> Result<i64, StoreError> {
+        let pid = self.resolve(dn_in_partition)?.id.clone();
+        let client = self.client_mut(&pid)?;
+        crate::entry::current_revision(client, &pid).await
     }
 
     /// Allocates the next RID (#17) from `dn`'s partition's pool.
