@@ -21,10 +21,10 @@ settings are environment variables. An empty value counts as unset.
   `IRON_BOOTSTRAP_FASTETCD`, `IRON_CONFIG_FASTETCD` and `IRON_CHILD_FASTETCD`
   (iron-config-ctl). **The forest registry stores each partition's cluster
   with its TLS paths** (iron-bootstrap and `iron-config-ctl
-  init-forest`/`create-child` write them), and a daemon that loads the
-  registry (iron-gcd; iron-ldapd and iron-kdcd for referrals) reaches each
-  partition with those paths, so mount the certificates at the same paths
-  everywhere. `iron-simulate` is a test harness and stays plaintext.
+  init-forest`/`create-child` write them), and iron-gcd, which watches every
+  partition the registry lists, reaches each with those paths: mount the
+  certificates at the same paths everywhere. (iron-ldapd and iron-kdcd read
+  the registry only to build referrals.) `iron-simulate` is a test harness and stays plaintext.
   `test/mtls-e2e.sh` checks it.
 - **fastetcd >= 1.0.0.** Every read relies on etcd's default linearizable
   reads. Before 1.0.0 (fastetcd#10) a follower served them from its own
