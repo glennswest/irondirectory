@@ -3,9 +3,12 @@
 //! `--trusted-ca-file`/`--client-cert-auth`.
 //!
 //! Not run against the live dm1/dm2/dm3 cluster -- that cluster has no TLS
-//! configured (see irondirectory#1's DNS-probe notes), and enabling it there
-//! is a separate, bigger change. This spins up (by hand, see docs/FIPS.md's
-//! sibling doc `docs/MTLS-SPIKE.md`) a single-node instance instead.
+//! configured. `test/mtls-e2e.sh` makes throwaway certificates, starts a
+//! single-node fastetcd with `--client-cert-auth`, and runs these (#32).
+//!
+//! The second test is the one fastetcd#6 failed: with `--client-cert-auth`,
+//! a client that trusts the CA but has no certificate of its own must not
+//! be able to write. fastetcd fixed that in v0.8.1.
 //!
 //! Ignored by default; set these env vars to run:
 //!   IRON_STORE_MTLS_ENDPOINT (e.g. https://dev.g8.lo:23791)
@@ -54,4 +57,20 @@ async fn mtls_connect_and_roundtrip() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn mtls_refuses_a_client_without_a_certificate() {
+    let endpoint = std::env::var("IRON_STORE_MTLS_ENDPOINT").expect("set IRON_STORE_MTLS_ENDPOINT/_CA to run this spike");
+    let ca = std::fs::read(std::env::var("IRON_STORE_MTLS_CA").expect("set IRON_STORE_MTLS_CA")).unwrap();
+    // Trusts the server, presents nothing.
+    let options = etcd_client::ConnectOptions::new()
+        .with_tls(etcd_client::TlsOptions::new().ca_certificate(etcd_client::Certificate::from_pem(ca)));
+    let result = async {
+        let mut client = etcd_client::Client::connect([endpoint], Some(options)).await?;
+        client.put("/iron/mtls-spike/anonymous", "no client certificate", None).await
+    }
+    .await;
+    assert!(result.is_err(), "fastetcd with --client-cert-auth took a write from a client with no certificate (fastetcd#6): {result:?}");
 }
