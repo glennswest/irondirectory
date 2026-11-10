@@ -82,7 +82,9 @@ cat > "$W/krb5.conf" <<EOF
     rdns = false
     udp_preference_limit = 1
 [realms]
-    $REALM = { kdc = 127.0.0.1:$((P + 3)) }
+    $REALM = {
+        kdc = 127.0.0.1:$((P + 3))
+    }
 EOF
 export KRB5_CONFIG=$W/krb5.conf KRB5CCNAME=FILE:$W/cc
 can_kinit() { : > "$W/trace.log"; echo "$2" | env -u OPENSSL_CONF KRB5_TRACE="$W/trace.log" kinit "$1@$REALM" > "$W/kinit.out" 2>&1; }
