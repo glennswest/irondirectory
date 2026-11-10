@@ -240,7 +240,7 @@ Every RFC 4511 filter kind is evaluated by `crates/ldap/src/filter.rs`
 iron-gc; the size limit counts returned entries. `test/ldap-filters-e2e.sh`
 checks each kind with real `ldapsearch` on iron-ldapd and iron-gcd.
 
-## In progress (2026-10-06): #20 -- owner decided (issue comment)
+## In progress (2026-11-10): #20 -- owner decided (issue comment)
 
 macOS: wait for the golden + operator (#25); the owner runs dsconfigad from
 the Mac against that. kpasswd/464 is already done and verified.
@@ -249,7 +249,9 @@ Windows: build the real path; test against a networked Windows VM
 - [ ] Zerologon (CVE-2020-1472) fixes: random server challenge; reject a
       ClientCredential whose first 5 bytes are equal; NetrServerPasswordSet2
       only over a sealed/signed channel.
-- [ ] `iron_crypto::aead`: AES-128-CFB8 encrypt/decrypt with an IV.
+- [x] `iron_crypto::aead`: AES-128-CFB8 encrypt/decrypt with an IV.
+- [ ] `schannel.rs`: NL_AUTH_SHA2_SIGNATURE sign/verify, seal/unseal
+      (known-answer vectors from impacket 0.13.1 `nrpc.SIGN`/`SEAL`).
 - [ ] `pdu.rs`: sec_trailer + auth_value on bind/bind_ack/request/response.
 - [ ] Netlogon Schannel (auth_type 68): NL_AUTH_MESSAGE bind, AES
       NL_AUTH_SHA2_SIGNATURE sign/verify and seal/unseal (MS-NRPC 3.3.4.2);
