@@ -6,6 +6,10 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-10
+- **docs:** #25: stormcos#685 is fixed and `component stage irondirectory`
+  built golden-irondirectory-8e3810032552 (Fedora 44 fips-base). The
+  `test/golden-e2e.sh` header no longer says a production stage runs it
+  (only stormcos's stage test harness does).
 - **feat(rpc):** Netlogon secure channel as an RPC security provider
   (auth type 68, AES `NL_AUTH_SHA2_SIGNATURE`, `PKT_INTEGRITY` and
   `PKT_PRIVACY`) and `NetrServerPasswordSet2` (opnum 30): a computer sets

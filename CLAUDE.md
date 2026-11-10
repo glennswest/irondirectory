@@ -336,8 +336,18 @@ didn't answer from dev on 2026-10-06.)
          tracked on stormcos#685. #25 proposed `--after stormcos#685`.
          Nothing to change here: the contract (gnu/dynamic, fips.cnf,
          test/golden-e2e.sh) is release-agnostic.
-   - [ ] When `stormcentral component list` shows `irondirectory`: run the
-         in-pod acceptance (operator#1's live test), then close #25.
+   - [x] 2026-11-10: stormcos#685 fixed (fips-base moved to Fedora 44,
+         stormcos 29f4526). `component stage irondirectory` PASSED: image
+         **golden-irondirectory-8e3810032552** (irondirectory@ac223d8, clone
+         of golden-fips-base-3edb59c45a64, fastetcd 37343ace6c, Fedora 44,
+         192M), release request stormcos#917. The production stage does not
+         run test/golden-e2e.sh (only stormcos's stage-build.sh harness does,
+         which passed on F44 in stormcos#685); no tool hands a sealed root to
+         sc-build, so the in-pod check is the image's acceptance.
+   - [ ] The master runs `component add irondirectory` (and `dirop`) -- noted
+         again 2026-11-10. Then irondirectory-operator#1's live short/medium
+         test runs this golden in a pod; that closes #25. #25 is proposed
+         `--after irondirectory-operator#1`.
 
 ## Done (2026-11-07): #21 federation test matrix
 
