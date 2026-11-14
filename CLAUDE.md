@@ -42,7 +42,8 @@ blocker for #20's *Windows* half: `iron-rpc` only supports
 unauthenticated RPC binds, and `SamrSetInformationUser2` (setting a
 computer account's password/Kerberos keys) needs an authenticated
 (NTLMSSP/Schannel) bind's session key to decrypt the wire-encrypted
-password material -- next up.
+password material -- since done (Netlogon Schannel + `NetrServerPasswordSet2`,
+see "#20 -- owner decided" below); SMB named pipes (#53) and CLDAP (#52) remain.
 
 Previous: `0.22.0` — Phase 2 underway: #23 native Rust domain-join + login
 simulation harness CLOSED (filed mid-session, not part of the
@@ -216,16 +217,6 @@ Version locations (keep in sync on every bump):
 - `README.md` status line
 - `CHANGELOG.md` release heading
 
-## Last session (2026-09-27)
-
-Issue triage done (#20/#21/#22/#24 still real; P1/P3/P3/P2). Docs refreshed
-three times; the third pass filed #27 (substring/ordering filters match
-nothing) and #28 (ARCHITECTURE D2's USN/persistent search/leases aren't
-built). Earlier passes filed #26 (fastetcd mTLS) and added
-`docs/CONFIGURATION.md`. Nothing in progress. Next: #20 (kpasswd/464 for
-macOS; Schannel auth + `NetrServerPasswordSet2` for Windows) or #25
-(operator golden + `iron-bootstrap`).
-
 ## Done (2026-09-28): #29 P0 build time on dev
 
 Not compile time: a clean `cargo build && cargo test` is 31 s on dev
@@ -282,27 +273,6 @@ recv calls; MIT krb5.conf needs `REALM = {` on its own line.
 Filed for the rest (2026-11-10): #52 CLDAP LDAP ping; #53 iron-rpcd behind
 ncacn_np + authenticated SAMR AES password set; rocketsmbd#83 IPC$ pipe
 forwarding. Windows VM: stormcentral#465. macOS: after #25.
-
-## Done (2026-10-06): #27 LDAP filters
-
-Every RFC 4511 filter kind is evaluated by `crates/ldap/src/filter.rs`
-(three-valued; AD bitwise rules; unknown rules Undefined), shared with
-iron-gc; the size limit counts returned entries. `test/ldap-filters-e2e.sh`
-checks each kind with real `ldapsearch` on iron-ldapd and iron-gcd.
-
-## Waiting on the owner (2026-10-06): #20
-
-macOS half, server side done and verified on dev (`test/kpasswd-e2e.sh`):
-kpasswd/464 (RFC 3244) in iron-kdc, checked with real MIT `kpasswd` (v1,
-UDP+TCP) and impacket set-password (0xff80) on a computer created with
-`ldapadd`, as `dsconfigad` does. Open, both owner calls (asked on #20):
-- A real `dsconfigad` run needs the Mac (no access from this VM) and a
-  stack it can reach on 88/389/464. The old ironwintest stack on dev was
-  a root checkout, which the current rules forbid, so it is gone.
-- Windows `Add-Computer` needs SAMR/LSA/NETLOGON over `ncacn_np` (SMB
-  named pipes, rocketsmbd), a CLDAP LDAP ping (UDP 389), Netlogon
-  Schannel + `NetrServerPasswordSet2` (plan below), and a Windows client
-  VM. Proposed: split it out of #20 into separate issues.
 
 ## Done (2026-10-06): #24 concurrency failures under `iron-simulate join 25`
 

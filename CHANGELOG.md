@@ -5,6 +5,15 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-14
+- **docs:** refreshed from the code since 2026-11-07: README status
+  (kpasswd/464, Schannel + `NetrServerPasswordSet2`, USN attributes, #25
+  registered live) and a known-gaps list (#45, #60, #61); CONFIGURATION
+  known gaps; CLAUDE.md drops a duplicated #27 section, the stale
+  "waiting on the owner (#20)" and "last session" notes. Filed #60 and #61
+  earlier from the same review (secret attributes returned by search;
+  in-memory secure channels).
+
 ### 2026-11-10
 - **docs:** #25 status: `irondirectory` is in the live registry
   (golden-irondirectory-10c5f5f1433a); the remaining in-pod check is

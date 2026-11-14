@@ -84,6 +84,12 @@ The systemd units for `iron-ldapd`, `iron-kdcd` and `iron-gcd` grant
 
 TLS is pinned to groups P-256/P-384/P-521.
 
+Known gaps (open issues): searches never return `userPassword` (#58), but
+`iron-ldapd` and `iron-gcd` still return `krbkey`, `krbsalt` and
+`netlogonntowf` to any bind (#60); add/delete/modify/modify-DN are accepted
+from an anonymous bind (#45). `iron-rpcd`'s secure channels are per
+process, so more than one replica breaks `NetrServerPasswordSet2` (#61).
+
 ## iron-kdcd (Kerberos KDC)
 
 | Setting | Default | Meaning |

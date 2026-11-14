@@ -22,8 +22,12 @@ or Samba domain controller.
 > **`iron-simulate`** crate driving concurrent, fully realistic
 > join+login sequences for scale testing — Windows-join
 > prerequisites, D6 Tier 2; RFC 3062 Password Modify and GSSAPI
-> confidentiality for macOS `dsconfigad` bind — the kpasswd service on
-> port 464 is not implemented yet, see #20). Phase 1.5's
+> confidentiality for macOS `dsconfigad` bind, a kpasswd service on port
+> 464 (RFC 3244), Netlogon Schannel authentication with
+> `NetrServerPasswordSet2`, AD-style `uSNCreated`/`uSNChanged`/
+> `highestCommittedUSN` from etcd revisions; the Windows `Add-Computer`
+> path still lacks SMB named-pipe transport and a CLDAP ping, see #20,
+> #52, #53; macOS awaits the operator golden, #22). Phase 1.5's
 > OpenShift LDAP identity provider and SPNEGO desktop→console SSO also
 > ship, docs-only — see `docs/OPENSHIFT-LDAP-IDP.md` and
 > `docs/OPENSHIFT-SPNEGO-SSO.md`). `iron-partition`
@@ -107,8 +111,8 @@ first-class design constraint rather than a bolt-on.
   For Kubernetes, stormcos builds the `irondirectory` golden (a clone of its
   Fedora `fips-base` golden plus these daemons, fastetcd and
   `deploy/golden/fips.cnf`), which irondirectory-operator runs as rustkube
-  pods (#25). It is not yet registered in stormcentral's live registry
-  (stormcentral#1331). Ports, settings and
+  pods (#25); it is registered in stormcentral's live registry, and the
+  operator's in-pod test is what remains. Ports, settings and
   packaging: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 - **Partitioned from day one:** never a monolithic tree. The directory is many
   strongly-consistent partitions (one Raft cluster per naming context), federated
@@ -116,6 +120,9 @@ first-class design constraint rather than a bolt-on.
   domain to a multi-forest holding company (hundreds of autonomous forests
   sharing a federated GAL + OIDC brokering; forest = security boundary).
   The federated GAL is built (#13); cross-forest OIDC brokering is not yet.
+- **Known gaps:** `iron-ldapd` and `iron-gcd` hide `userPassword` from
+  searches but still return `krbkey`, `krbsalt` and `netlogonntowf` (#60),
+  and accept writes from an anonymous bind (#45).
 - **No NTLM.** MD5/RC4 are non-FIPS and absent; Kerberos + SASL/GSSAPI only.
   One cited exception: `iron_crypto::md4` (pure Rust, outside the FIPS
   context) computes the NTOWF that MS-NRPC's NETLOGON secure channel
