@@ -224,11 +224,12 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
-## In progress (2026-11-18): #63 LDAP extended operations, no stubs
+## Done (2026-11-18): #63 LDAP extended operations, no stubs
 
-- [x] Cancel (RFC 3909), unknown OID -> protocolError naming it,
-      rootDSE supportedExtension, anonymous Password Modify refused.
-- [ ] `test/ldap-exop-e2e.sh` + `cargo test` passing on sc-build; then close.
+Cancel (RFC 3909), unknown OID -> protocolError naming it, rootDSE
+supportedExtension, anonymous Password Modify refused. `test/ldap-exop-e2e.sh`
+PASS on sc-build at 8e39f99 (real ldapwhoami/-ZZ, ldappasswd + kinit, raw-BER
+Cancel). The pvetest-node proof waits on the golden running in a pod (#25).
 
 ## In progress (2026-11-10): #22 macOS light path (LDAPv3 plugin + Kerberos)
 
