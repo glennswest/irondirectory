@@ -153,8 +153,8 @@ A `ldapwhoami` bind against the same DN/password separately fails with
 "Protocol error: extended operations are not implemented yet" — that is
 RFC 4532's WhoAmI *extended operation*, an entirely different mechanism
 from a simple bind, and OpenShift's LDAP IdP never issues it. Not a gap
-relevant to this issue; tracked as its own follow-up (`iron-ldap`'s
-extended-operation support beyond StartTLS).
+relevant to this issue. (Since fixed: Who am I in #14's follow-up, and
+#63 removed the "not implemented" answer altogether.)
 
 ## Known limitation carried over from #4
 

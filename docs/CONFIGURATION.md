@@ -84,6 +84,17 @@ The systemd units for `iron-ldapd`, `iron-kdcd` and `iron-gcd` grant
 
 TLS is pinned to groups P-256/P-384/P-521.
 
+Extended operations (#63), each listed in rootDSE `supportedExtension` only
+when it can run: StartTLS (RFC 4511 §4.14, needs the cert/key), Who am I
+(RFC 4532), Password Modify (RFC 3062: sets the entry's Kerberos keys, needs
+the FIPS provider and an authenticated bind; anonymous gets
+`insufficientAccessRights`), Cancel (RFC 3909: a connection's requests are
+handled in order, so a Cancel answers `tooLate` for an earlier operation,
+`cannotCancel` for a bind/StartTLS/abandon/cancel, `noSuchOperation`
+otherwise). Any other request name is answered `protocolError`
+"unsupported extended operation <OID>". `test/ldap-exop-e2e.sh` checks each
+with `ldapwhoami`, `ldappasswd` and raw BER.
+
 Known gaps (open issues): searches never return `userPassword` (#58), but
 `iron-ldapd` and `iron-gcd` still return `krbkey`, `krbsalt` and
 `netlogonntowf` to any bind (#60); add/delete/modify/modify-DN are accepted

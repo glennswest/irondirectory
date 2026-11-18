@@ -5,6 +5,21 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-18
+- **feat:** iron-ldapd implements the Cancel extended operation (RFC 3909,
+  #63): `tooLate` for an operation already answered on the connection,
+  `cannotCancel` for bind/StartTLS/abandon/cancel, `noSuchOperation`
+  otherwise. rootDSE now publishes `supportedExtension` (StartTLS when TLS is
+  configured, Who am I, Password Modify when FIPS is active, Cancel).
+- **fix:** an unrecognized extended operation is answered `protocolError`
+  "unsupported extended operation <OID>" (RFC 4511 §4.12) instead of
+  "extended operations are not implemented yet" (#63).
+- **fix:** Password Modify (RFC 3062) is refused to an anonymous connection
+  (`insufficientAccessRights`); it let anyone reset any entry's Kerberos keys.
+- **test:** `test/ldap-exop-e2e.sh`: StartTLS, Who am I, Password Modify and
+  Cancel with real `ldapwhoami -ZZ`/`ldappasswd`/kinit and raw BER; unit
+  tests for Cancel's result codes and its hand BER encoding.
+
 ### 2026-11-14
 - **docs:** refreshed from the code since 2026-11-07: README status
   (kpasswd/464, Schannel + `NetrServerPasswordSet2`, USN attributes, #25

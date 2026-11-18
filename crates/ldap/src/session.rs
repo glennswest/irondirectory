@@ -45,6 +45,121 @@ const WHOAMI_OID: &[u8] = b"1.3.6.1.4.1.4203.1.11.3";
 /// `SamrSetInformationUser2`/NETLOGON at all.
 const PASSWORD_MODIFY_OID: &[u8] = b"1.3.6.1.4.1.4203.1.11.1";
 
+/// RFC 3909 §2 -- the well-known OID for the Cancel extended operation.
+const CANCEL_OID: &[u8] = b"1.3.6.1.1.8";
+
+/// RFC 3909 §2's request value: `cancelRequestValue ::= SEQUENCE {
+/// cancelID MessageID }`.
+#[derive(rasn::AsnType, rasn::Decode, rasn::Encode)]
+struct CancelRequestValue {
+    cancel_id: u32,
+}
+
+/// RFC 3909 §2 result codes. `rasn_ldap::ResultCode` stops at 80 (RFC
+/// 4511's list), so a Cancel response is BER-encoded by hand
+/// (`cancel_response_bytes`).
+const RC_NO_SUCH_OPERATION: u8 = 119;
+const RC_TOO_LATE: u8 = 120;
+const RC_CANNOT_CANCEL: u8 = 121;
+
+/// How many of a connection's most recent operations a Cancel can name
+/// and be told `tooLate`/`cannotCancel` rather than `noSuchOperation`.
+const OP_LOG_CAPACITY: usize = 1024;
+
+/// The operations this connection has already answered, for Cancel (RFC
+/// 3909). This server handles one connection's requests strictly in order,
+/// so by the time a Cancel is read every earlier operation has completed:
+/// a Cancel naming one is `tooLate` (or `cannotCancel` for the kinds §2
+/// says cannot be cancelled), and one naming anything else is
+/// `noSuchOperation`. Bounded to the last `OP_LOG_CAPACITY` operations.
+#[derive(Default)]
+struct OpLog {
+    order: std::collections::VecDeque<u32>,
+    cancelable: std::collections::HashMap<u32, bool>,
+}
+
+impl OpLog {
+    fn record(&mut self, id: u32, cancelable: bool) {
+        if self.cancelable.insert(id, cancelable).is_none() {
+            self.order.push_back(id);
+            while self.order.len() > OP_LOG_CAPACITY {
+                let Some(old) = self.order.pop_front() else { break };
+                self.cancelable.remove(&old);
+            }
+        }
+    }
+
+    /// RFC 3909 §2-§3: the result code and diagnostic for a Cancel
+    /// carrying `value`.
+    fn cancel(&self, value: Option<&[u8]>) -> (u8, String) {
+        let Some(bytes) = value else {
+            return (ResultCode::ProtocolError as u8, "cancel: missing cancelRequestValue".into());
+        };
+        let req: CancelRequestValue = match rasn::ber::decode(bytes) {
+            Ok(r) => r,
+            Err(e) => return (ResultCode::ProtocolError as u8, format!("cancel: malformed cancelRequestValue: {e}")),
+        };
+        match self.cancelable.get(&req.cancel_id) {
+            None => (RC_NO_SUCH_OPERATION, format!("cancel: no outstanding operation {}", req.cancel_id)),
+            Some(false) => (RC_CANNOT_CANCEL, format!("cancel: operation {} cannot be cancelled", req.cancel_id)),
+            Some(true) => (RC_TOO_LATE, format!("cancel: operation {} has already completed", req.cancel_id)),
+        }
+    }
+}
+
+/// RFC 3909 §2: Abandon, Bind, Unbind, Cancel and StartTLS cannot be
+/// cancelled.
+fn is_cancelable(op: &ProtocolOp) -> bool {
+    match op {
+        ProtocolOp::BindRequest(_) | ProtocolOp::UnbindRequest(_) | ProtocolOp::AbandonRequest(_) => false,
+        ProtocolOp::ExtendedReq(r) => r.request_name.as_ref() != STARTTLS_OID && r.request_name.as_ref() != CANCEL_OID,
+        _ => true,
+    }
+}
+
+fn ber_tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    let n = content.len();
+    if n < 0x80 {
+        out.push(n as u8);
+    } else {
+        let len = (n as u64).to_be_bytes();
+        let skip = len.iter().take_while(|b| **b == 0).count();
+        out.push(0x80 | (8 - skip) as u8);
+        out.extend_from_slice(&len[skip..]);
+    }
+    out.extend_from_slice(content);
+    out
+}
+
+/// A Cancel's `ExtendedResponse` (RFC 3909 §2: no responseName, no
+/// responseValue), BER-encoded by hand because its result codes are outside
+/// `rasn_ldap::ResultCode`. Byte-identical to rasn's own encoding for any
+/// code both can express (see the tests).
+fn cancel_response_bytes(message_id: u32, code: u8, diagnostic: &str) -> Vec<u8> {
+    let mut resp = ber_tlv(0x0a, &[code]); // resultCode ENUMERATED (every code here is < 128)
+    resp.extend(ber_tlv(0x04, b"")); // matchedDN
+    resp.extend(ber_tlv(0x04, diagnostic.as_bytes())); // diagnosticMessage
+    let mut msg = rasn::ber::encode(&message_id).expect("an integer always encodes");
+    msg.extend(ber_tlv(0x78, &resp)); // [APPLICATION 24] ExtendedResponse
+    ber_tlv(0x30, &msg)
+}
+
+/// The `supportedExtension` values for rootDSE (RFC 4512 §5.1.4): only the
+/// operations this connection can actually perform.
+fn supported_extensions(fips_active: bool, starttls: bool) -> Vec<String> {
+    let mut oids = Vec::new();
+    if starttls {
+        oids.push(STARTTLS_OID);
+    }
+    oids.push(WHOAMI_OID);
+    if fips_active {
+        oids.push(PASSWORD_MODIFY_OID);
+    }
+    oids.push(CANCEL_OID);
+    oids.into_iter().map(|o| String::from_utf8_lossy(o).into_owned()).collect()
+}
+
 /// RFC 3062 §4's request value:
 /// ```text
 /// PasswdModifyRequestValue ::= SEQUENCE {
@@ -166,18 +281,35 @@ async fn send_response<S: AsyncRead + AsyncWrite + Unpin>(
     msg: &LdapMessage,
 ) -> Result<(), ()> {
     match sasl_state {
+        SaslState::SecurityLayerActive { .. } => {
+            let plain = rasn::ber::encode(msg).map_err(|_| ())?;
+            send_encoded(conn, fips, sasl_state, &plain).await
+        }
+        _ => write_message(conn, msg).await.map_err(|_| ()),
+    }
+}
+
+/// Writes an already BER-encoded `LdapMessage` (one `rasn_ldap` cannot
+/// express -- see `cancel_response_bytes`), GSS-wrapped like `send_response`.
+async fn send_encoded<S: AsyncRead + AsyncWrite + Unpin>(
+    conn: &mut Conn<S>,
+    fips: Option<&iron_crypto::FipsContext>,
+    sasl_state: &SaslState,
+    plain: &[u8],
+) -> Result<(), ()> {
+    use tokio::io::AsyncWriteExt;
+    match sasl_state {
         SaslState::SecurityLayerActive { session_key, enctype, sealed, send_seq } => {
             let fips = fips.ok_or(())?;
-            let plain = rasn::ber::encode(msg).map_err(|_| ())?;
             // Consume this token's SND_SEQ and advance the counter so the
             // next wrapped response uses the following value (RFC 4121
             // §4.2.6.2 -- see `SecurityLayerActive`'s doc comment).
             let seq = send_seq.fetch_add(1, Ordering::Relaxed);
             // Key usage 22: KG-USAGE-ACCEPTOR-SEAL -- we're the GSS acceptor.
-            let wrapped = crate::gssapi::wrap::wrap(fips, *enctype, session_key, 22, *sealed, seq, &plain).map_err(|_| ())?;
+            let wrapped = crate::gssapi::wrap::wrap(fips, *enctype, session_key, 22, *sealed, seq, plain).map_err(|_| ())?;
             write_sized_buffer(conn, &wrapped).await.map_err(|_| ())
         }
-        _ => write_message(conn, msg).await.map_err(|_| ()),
+        _ => conn.write_all(plain).await.map_err(|_| ()),
     }
 }
 
@@ -202,6 +334,7 @@ where
     // on the same connection, so this can change (including back to
     // `None`) more than once per connection.
     let mut bound_identity: Option<String> = None;
+    let mut op_log = OpLog::default();
     loop {
         let msg = match read_next_message(&mut conn, &mut buf, app.fips.as_ref(), &sasl_state).await {
             Ok(Some(m)) => m,
@@ -212,6 +345,7 @@ where
             }
         };
         let message_id = msg.message_id;
+        let cancelable = is_cancelable(&msg.protocol_op);
 
         match msg.protocol_op {
             ProtocolOp::UnbindRequest(_) => return,
@@ -240,7 +374,7 @@ where
             }
             ProtocolOp::SearchRequest(req) => {
                 let mut store = app.store.lock().await;
-                let ops = handle_search(&mut store, &req, &app.referral_config(), app.fips.is_some()).await;
+                let ops = handle_search(&mut store, &req, &app.referral_config(), app.fips.is_some(), tls_acceptor.is_some() && matches!(conn, Conn::Plain(_))).await;
                 drop(store);
                 for op in ops {
                     let resp = LdapMessage::new(message_id, op);
@@ -372,21 +506,18 @@ where
                     return;
                 }
             }
-            // Not yet implemented (#4 tracks the rest of the scope), but
-            // every one of these has a defined response -- a client must
-            // not be left hanging waiting for one that never comes.
-            ProtocolOp::ExtendedReq(_) => {
-                let resp = LdapMessage::new(
-                    message_id,
-                    ProtocolOp::ExtendedResp(ExtendedResponse {
-                        result_code: ResultCode::ProtocolError,
-                        matched_dn: String::new().into(),
-                        diagnostic_message: "extended operations are not implemented yet".into(),
-                        referral: None,
-                        response_name: None,
-                        response_value: None,
-                    }),
-                );
+            // RFC 3909 Cancel -- see `OpLog`.
+            ProtocolOp::ExtendedReq(req) if req.request_name.as_ref() == CANCEL_OID => {
+                let (code, diagnostic) = op_log.cancel(req.request_value.as_deref());
+                let bytes = cancel_response_bytes(message_id, code, &diagnostic);
+                if send_encoded(&mut conn, app.fips.as_ref(), &sasl_state, &bytes).await.is_err() {
+                    return;
+                }
+            }
+            // RFC 4511 §4.12: a request name the server does not recognize
+            // is answered protocolError, with no responseName.
+            ProtocolOp::ExtendedReq(req) => {
+                let resp = unsupported_extended_response(message_id, req.request_name.as_ref());
                 if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
                 }
@@ -396,7 +527,22 @@ where
             // reply with, so drop it rather than guess.
             _ => {}
         }
+        op_log.record(message_id, cancelable);
     }
+}
+
+fn unsupported_extended_response(message_id: u32, oid: &[u8]) -> LdapMessage {
+    LdapMessage::new(
+        message_id,
+        ProtocolOp::ExtendedResp(ExtendedResponse {
+            result_code: ResultCode::ProtocolError,
+            matched_dn: String::new().into(),
+            diagnostic_message: format!("unsupported extended operation {}", String::from_utf8_lossy(oid)).into(),
+            referral: None,
+            response_name: None,
+            response_value: None,
+        }),
+    )
 }
 
 fn unwilling(diagnostic: &str) -> LdapResult {
@@ -898,9 +1044,10 @@ fn principal_fqn_for(entry: &Entry, realm: &str) -> Option<String> {
 /// Sets the target entry's Kerberos keys (`iron_kdc::principal::set_password`)
 /// from `newPasswd`, deriving a `krbPrincipalName` from `sAMAccountName`/`cn`
 /// if the entry doesn't already have one (a fresh computer account created
-/// by an `AddRequest` won't). No fine-grained ACL check yet (D8/#4 scope) --
-/// any authenticated bind may reset any entry's password, matching this
-/// project's current single-tier trust model.
+/// by an `AddRequest` won't). Refused to an anonymous connection; no
+/// fine-grained ACL check yet (D8/#4 scope) -- any authenticated bind may
+/// reset any entry's password, matching this project's current
+/// single-tier trust model.
 async fn handle_password_modify(
     store: &mut Store,
     fips: Option<&iron_crypto::FipsContext>,
@@ -908,6 +1055,12 @@ async fn handle_password_modify(
     bound_identity: Option<&str>,
     spec: &iron_store::index::IndexSpec,
 ) -> Result<Option<OctetString>, PasswordModifyError> {
+    // An anonymous connection may not set anyone's password (RFC 3062 §5
+    // leaves the policy to the server; #45 tracks anonymous writes
+    // generally).
+    if bound_identity.is_none() {
+        return Err(PasswordModifyError::new(ResultCode::InsufficientAccessRights, "password modify requires an authenticated bind"));
+    }
     let Some(fips) = fips else {
         return Err(PasswordModifyError::new(ResultCode::UnwillingToPerform, "FIPS provider not active -- cannot set a Kerberos key"));
     };
@@ -1145,7 +1298,7 @@ async fn handle_moddn(
     ModifyDnResponse(success())
 }
 
-async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Referrals<'_>, fips_active: bool) -> Vec<ProtocolOp> {
+async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Referrals<'_>, fips_active: bool, starttls: bool) -> Vec<ProtocolOp> {
     let base_dn = match Dn::parse(&req.base_object) {
         Ok(dn) => dn,
         Err(_) => return done(ResultCode::InvalidDnSyntax, "invalid base DN"),
@@ -1171,7 +1324,12 @@ async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Refer
             None => None,
         };
         let registry = referrals.topology.unwrap_or_else(|| store.registry());
-        let entry_op = ProtocolOp::SearchResEntry(rootdse::build(registry, fips_active, usn));
+        let mut entry = rootdse::build(registry, fips_active, usn);
+        entry.attributes.push(PartialAttribute::new(
+            "supportedExtension".into(),
+            SetOf::from_vec(supported_extensions(fips_active, starttls).into_iter().map(|v| v.into_bytes().into()).collect()),
+        ));
+        let entry_op = ProtocolOp::SearchResEntry(entry);
         let mut ops = vec![entry_op];
         ops.extend(done(ResultCode::Success, ""));
         return ops;
@@ -1426,5 +1584,100 @@ mod referral_tests {
         let own_id = PartitionId::new("g10").unwrap();
         let refs = Referrals { topology: None, static_list: &[], own_partition_id: Some(&own_id) };
         assert!(proactive_referral(&refs, &dn("cn=alice,dc=emea,dc=g10,dc=lo")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod extended_op_tests {
+    use rasn_ldap::ExtendedRequest;
+
+    use super::*;
+
+    fn cancel_value(id: u32) -> Vec<u8> {
+        rasn::ber::encode(&CancelRequestValue { cancel_id: id }).unwrap()
+    }
+
+    #[test]
+    fn cancel_of_an_unknown_operation_is_no_such_operation() {
+        let log = OpLog::default();
+        assert_eq!(log.cancel(Some(&cancel_value(7))).0, RC_NO_SUCH_OPERATION);
+    }
+
+    #[test]
+    fn cancel_of_a_completed_operation_is_too_late() {
+        let mut log = OpLog::default();
+        log.record(3, true);
+        assert_eq!(log.cancel(Some(&cancel_value(3))).0, RC_TOO_LATE);
+    }
+
+    #[test]
+    fn cancel_of_bind_starttls_abandon_or_cancel_is_cannot_cancel() {
+        let ext = |oid: &[u8]| ProtocolOp::ExtendedReq(ExtendedRequest { request_name: oid.to_vec().into(), request_value: None });
+        assert!(!is_cancelable(&ProtocolOp::AbandonRequest(rasn_ldap::AbandonRequest(1))));
+        assert!(!is_cancelable(&ext(STARTTLS_OID)));
+        assert!(!is_cancelable(&ext(CANCEL_OID)));
+        assert!(is_cancelable(&ext(WHOAMI_OID)));
+        assert!(is_cancelable(&ext(PASSWORD_MODIFY_OID)));
+        let mut log = OpLog::default();
+        log.record(1, false);
+        assert_eq!(log.cancel(Some(&cancel_value(1))).0, RC_CANNOT_CANCEL);
+    }
+
+    #[test]
+    fn malformed_or_missing_cancel_value_is_protocol_error() {
+        let log = OpLog::default();
+        assert_eq!(log.cancel(None).0, ResultCode::ProtocolError as u8);
+        assert_eq!(log.cancel(Some(b"\x04\x01x")).0, ResultCode::ProtocolError as u8);
+    }
+
+    #[test]
+    fn op_log_is_bounded() {
+        let mut log = OpLog::default();
+        for id in 0..(OP_LOG_CAPACITY as u32 + 10) {
+            log.record(id, true);
+        }
+        assert_eq!(log.cancelable.len(), OP_LOG_CAPACITY);
+        assert_eq!(log.cancel(Some(&cancel_value(0))).0, RC_NO_SUCH_OPERATION);
+        assert_eq!(log.cancel(Some(&cancel_value(OP_LOG_CAPACITY as u32 + 9))).0, RC_TOO_LATE);
+    }
+
+    /// The hand encoding matches rasn's for a code both can express, with a
+    /// diagnostic long enough to need a long-form length.
+    #[test]
+    fn cancel_response_encoding_matches_rasn() {
+        let diag = "x".repeat(300);
+        for (id, code) in [(5u32, ResultCode::ProtocolError), (70000, ResultCode::Other)] {
+            let msg = LdapMessage::new(
+                id,
+                ProtocolOp::ExtendedResp(ExtendedResponse {
+                    result_code: code,
+                    matched_dn: String::new().into(),
+                    diagnostic_message: diag.clone().into(),
+                    referral: None,
+                    response_name: None,
+                    response_value: None,
+                }),
+            );
+            assert_eq!(cancel_response_bytes(id, code as u8, &diag), rasn::ber::encode(&msg).unwrap());
+        }
+        let b = cancel_response_bytes(9, RC_TOO_LATE, "");
+        assert!(b.windows(3).any(|w| w == [0x0a, 0x01, 120]));
+    }
+
+    #[test]
+    fn unknown_extended_operation_names_the_oid() {
+        let msg = unsupported_extended_response(4, b"1.2.3.4");
+        let ProtocolOp::ExtendedResp(r) = msg.protocol_op else { panic!() };
+        assert_eq!(r.result_code, ResultCode::ProtocolError);
+        assert_eq!(r.diagnostic_message.as_str(), "unsupported extended operation 1.2.3.4");
+        assert!(r.response_name.is_none());
+        assert!(!r.diagnostic_message.contains("not implemented"));
+    }
+
+    #[test]
+    fn supported_extension_matches_capability() {
+        let all = supported_extensions(true, true);
+        assert_eq!(all, ["1.3.6.1.4.1.1466.20037", "1.3.6.1.4.1.4203.1.11.3", "1.3.6.1.4.1.4203.1.11.1", "1.3.6.1.1.8"]);
+        assert_eq!(supported_extensions(false, false), ["1.3.6.1.4.1.4203.1.11.3", "1.3.6.1.1.8"]);
     }
 }
