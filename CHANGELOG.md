@@ -6,6 +6,9 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-19
+- **docs:** `docs/OPENSHIFT-LDAP-IDP.md` says what `ldapwhoami` gets now (Who
+  am I answered; unknown extended operations `protocolError` naming the OID)
+  instead of quoting the old refusal (#68), and names #45 for anonymous writes.
 - **docs:** iron-ldap's GSSAPI module docs say what the code does: all three
   RFC 4752 security layers (the text still said "no security layer" only),
   and delegation declined (RFC 4121 §4.1.1.1). Channel binding (#65) waits on

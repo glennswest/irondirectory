@@ -149,17 +149,17 @@ ldap_bind: Invalid credentials (49)
 (The test entry was removed after verification — `il1`/`il2`/`il3.g8.lo`
 are a real, ongoing shared deployment, not a throwaway test forest.)
 
-A `ldapwhoami` bind against the same DN/password separately fails with
-"Protocol error: extended operations are not implemented yet" — that is
-RFC 4532's WhoAmI *extended operation*, an entirely different mechanism
-from a simple bind, and OpenShift's LDAP IdP never issues it. Not a gap
-relevant to this issue. (Since fixed: Who am I in #14's follow-up, and
-#63 removed the "not implemented" answer altogether.)
+`ldapwhoami` against the same DN/password uses RFC 4532's Who am I
+*extended operation*, a different mechanism from a simple bind that
+OpenShift's LDAP IdP never issues. iron-ldapd answers it (added after this
+verification, in #14's follow-up; `test/ldap-exop-e2e.sh` checks it), and
+an extended operation it does not know is answered `protocolError` naming
+the OID (#63).
 
 ## Known limitation carried over from #4
 
 irondirectory has no authorization/ACL model yet — any bind (including
-anonymous) can currently write. This is a pre-existing gap tracked
-elsewhere, not something #14 introduces or needs to fix: OpenShift's LDAP
+anonymous) can currently write (#45). This is a pre-existing gap tracked
+there, not something #14 introduces or needs to fix: OpenShift's LDAP
 IdP only ever *reads* (search) and *authenticates* (bind), it never
 writes to the directory.

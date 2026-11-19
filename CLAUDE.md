@@ -224,6 +224,10 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
+## Done (2026-11-19): #68 OPENSHIFT-LDAP-IDP.md quoted an old stub answer
+
+Rewritten to the current behavior; check-stubs.sh clean for the file.
+
 ## Waiting on the owner (2026-11-19): #65 GSSAPI channel binding
 
 RFC 4121 §4.1.1.2's `Bnd` is MD5(gss_channel_bindings_struct); D4 excludes
