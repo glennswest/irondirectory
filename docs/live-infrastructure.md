@@ -598,14 +598,14 @@ Found, in passing, that this deployment doesn't have
 code gap -- StartTLS/LDAPS have been built and tested since #4), so the
 live check used `ldap://` (`insecure: true`); the doc covers the
 `ldaps://` path for a hardened deployment. Also found that `ldapwhoami`
-fails against `iron-ldap` with "extended operations are not implemented
-yet" -- that's RFC 4532's WhoAmI *extended operation*, unrelated to a
-plain bind and never used by OpenShift's LDAP IdP, so not a blocker for
-this issue; tracked separately.
+failed against the `iron-ldap` of that time, which refused every
+extended operation -- that's RFC 4532's WhoAmI *extended operation*,
+unrelated to a plain bind and never used by OpenShift's LDAP IdP, so not
+a blocker for this issue; built right after (next paragraph).
 
 **RFC 4532 WhoAmI extended operation** — found during #14's
-verification: `ldapwhoami` against real `il1.g8.lo` failed with
-"extended operations are not implemented yet." Not related to
+verification: `ldapwhoami` against real `il1.g8.lo` failed, because
+`iron-ldap` then refused every extended operation. Not related to
 OpenShift's LDAP IdP (which never issues WhoAmI, only plain binds), but
 a real, fixable gap. Each connection now tracks its current RFC 4513
 §3 authzId (`session::handle_connection`'s new `bound_identity`
@@ -1000,9 +1000,9 @@ are live from day one. Exhaustive proving suites are deferred (see Testing).
       against real `il1.g8.lo`: correct password succeeds, wrong
       password fails closed. Found this deployment lacks TLS cert/key
       (an ops gap, not code -- LDAPS/StartTLS already work since #4)
-      and that `ldapwhoami`'s WhoAmI extended operation isn't
-      implemented (unrelated to OpenShift's plain-bind flow, tracked
-      separately).
+      and that `ldapwhoami`'s WhoAmI extended operation was missing
+      (unrelated to OpenShift's plain-bind flow; built right after, see
+      "RFC 4532 WhoAmI extended operation").
 - [x] `iron-oidc`: FIPS OAuth2/OpenID Connect authorization server (#15,
       CLOSED): new crate, authorization code grant (RFC 6749) + OpenID
       Connect Core ID token/userinfo over `axum`, authenticating against
@@ -1305,7 +1305,8 @@ neither bug is fixed in this pass -- filed as #24 for the underlying
 
 ### #20 next step: Netlogon Secure Channel RPC auth (not NTLMSSP)
 
-Researched (not yet implemented) immediately after the v0.23.0 commit.
+Researched immediately after the v0.23.0 commit; since built (Netlogon
+Schannel + `NetrServerPasswordSet2`, `test/netlogon-schannel-e2e.sh`, #20).
 The macOS side is live-tested and mostly protocol-correct now (see
 Version section above); the confirmed remaining blocker is entirely on
 the **Windows** side: `crates/rpc` only supports unauthenticated RPC

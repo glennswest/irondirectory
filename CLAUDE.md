@@ -224,6 +224,13 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
+## Done (2026-11-19): #69 live-infrastructure.md stub markers
+
+Three history passages quoted iron-ldap's old exop refusal or called built
+things unbuilt; reworded to the current state. stormcentral's check-stubs.sh
+finds no marker in the file (the repo's one remaining marker is #65's, which
+waits on the owner).
+
 ## Done (2026-11-19): #67 re-bind through a SASL layer + subtree modDN
 
 `SaslSession` = negotiation + installed `SecurityLayer` (RFC 4513 §5.2.1.4,

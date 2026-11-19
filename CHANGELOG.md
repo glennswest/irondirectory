@@ -6,6 +6,9 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-19
+- **docs:** live-infrastructure.md no longer quotes iron-ldap's old
+  extended-operation refusal or calls the WhoAmI exop and Netlogon Schannel
+  unbuilt; both have been built since (#69).
 - **feat:** iron-ldapd re-binds on a connection with a SASL security layer
   in effect (#67), as RFC 4513 §5.2.1.4 and RFC 4422 §3.8 say: a failed,
   simple, anonymous or no-layer bind keeps the layer (a simple bind used to
