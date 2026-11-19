@@ -6,6 +6,20 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-19
+- **feat:** iron-ldapd re-binds on a connection with a SASL security layer
+  in effect (#67), as RFC 4513 §5.2.1.4 and RFC 4422 §3.8 say: a failed,
+  simple, anonymous or no-layer bind keeps the layer (a simple bind used to
+  drop it, so the next request was read as plain BER); a GSSAPI re-bind that
+  selects a layer replaces it after its response. The bind response no
+  longer reuses an acceptor sequence number.
+- **feat:** modify-DN moves a non-leaf entry with its descendants (#67).
+- **fix:** modify-DN refuses a target DN that exists (`entryAlreadyExists`;
+  it used to overwrite it), a missing `newSuperior` (`noSuchObject`), a
+  `newSuperior` under the entry (`unwillingToPerform`) and moves across
+  naming contexts (`affectsMultipleDSAs`).
+- **test:** `test/ldap-rebind-moddn-e2e.sh` + `test/ldap_rebind_impacket.py`:
+  five binds on one connection through confidentiality and integrity layers
+  (impacket's Kerberos client), and subtree modDN with `ldapmodify`.
 - **docs:** `docs/OPENSHIFT-LDAP-IDP.md` says what `ldapwhoami` gets now (Who
   am I answered; unknown extended operations `protocolError` naming the OID)
   instead of quoting the old refusal (#68), and names #45 for anonymous writes.

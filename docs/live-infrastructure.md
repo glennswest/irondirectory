@@ -793,9 +793,8 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       closed if FIPS isn't active; found the provider enforces an
       undocumented 8-byte minimum password length), search (base/one/
       subtree scope, core filters), add, del, **modify** (add/delete/
-      replace), **compare**, **modify-DN** (leaf entries; refuses
-      non-leaf moves with the standard `NotAllowedOnNonLeaf`, not a
-      stub), **StartTLS** (new `Conn<S>` enum for in-place plaintext→TLS
+      replace), **compare**, **modify-DN** (leaf entries at the time;
+      subtree moves since #67), **StartTLS** (new `Conn<S>` enum for in-place plaintext→TLS
       upgrade) + **LDAPS via OpenSSL** (pinned to NIST curves
       P-256/P-384/P-521, not OpenSSL's default TLS1.3 hybrid-PQC group),
       **cross-NC referrals** (`IRON_LDAP_REFERRALS`, real `Referral`
@@ -806,8 +805,8 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       `ldapmodrdn` (incl. over `ldaps://`, `-ZZ` StartTLS, and
       authenticated bind) against a live instance and the redundant
       `il1/il2/il3` deployment. **Remaining (deliberately out of scope
-      for this pass):** subtree rename (moving a non-leaf entry), other
-      extended ops besides StartTLS, full schema-subentry publishing
+      for this pass):** subtree rename (since done, #67), other
+      extended ops besides StartTLS (since done, #63), full schema-subentry publishing
       (`cn=subschema`) — schema is enforced but not yet discoverable by
       clients that query it
 - [x] `iron-kdc` (#5, CLOSED): Kerberos KDC. AS-REQ/AS-REP with

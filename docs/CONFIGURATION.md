@@ -95,6 +95,21 @@ otherwise). Any other request name is answered `protocolError`
 "unsupported extended operation <OID>". `test/ldap-exop-e2e.sh` checks each
 with `ldapwhoami`, `ldappasswd` and raw BER.
 
+Re-binds (#67): a bind on a connection with a SASL/GSSAPI security layer in
+effect (integrity or confidentiality) is read through that layer and answered
+through it. A failed bind, a simple or anonymous bind, or a GSSAPI bind that
+selects no layer leaves the layer in effect (RFC 4513 §5.2.1.4, RFC 4422
+§3.8); a GSSAPI bind that selects a layer replaces it from the next message
+on.
+
+Modify-DN (#67) renames or moves an entry with all its descendants. It is
+create-then-delete, not one transaction: if a target DN is taken
+(`entryAlreadyExists`), the entries it already created are removed again.
+It refuses a `newSuperior` that does not exist (`noSuchObject`) or lies
+under the entry (`unwillingToPerform`), and a move out of the naming context
+or of a subtree holding a naming context's head (`affectsMultipleDSAs`).
+`test/ldap-rebind-moddn-e2e.sh` checks both.
+
 Known gaps (open issues): searches never return `userPassword` (#58), but
 `iron-ldapd` and `iron-gcd` still return `krbkey`, `krbsalt` and
 `netlogonntowf` to any bind (#60); add/delete/modify/modify-DN are accepted

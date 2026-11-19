@@ -224,6 +224,12 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
+## In progress (2026-11-19): #67 re-bind through a SASL layer + subtree modDN
+
+Built both (e24bf13): `SaslSession` = negotiation + installed
+`SecurityLayer`; `handle_moddn` moves subtrees. `test/ldap-rebind-moddn-e2e.sh`.
+- [ ] sc-build (clippy -D warnings + tests) and the e2e pass; close #67.
+
 ## Done (2026-11-19): #68 OPENSHIFT-LDAP-IDP.md quoted an old stub answer
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
