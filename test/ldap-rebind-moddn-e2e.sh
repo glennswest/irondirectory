@@ -112,16 +112,16 @@ deleteoldrdn: 1
 newsuperior: ou=sales,$BASE
 LDIF
 NEW="ou=engineering,ou=sales,$BASE"
-ldapsearch -x -LLL -H "$H" -b "$NEW" -s sub '(objectClass=*)' dn > "$W/out" 2>&1 || fail "search the moved subtree"
+ldapsearch -x -LLL -o ldif-wrap=no -H "$H" -b "$NEW" -s sub '(objectClass=*)' dn > "$W/out" 2>&1 || fail "search the moved subtree"
 got=$(grep '^dn:' "$W/out" | tr 'A-Z' 'a-z' | sort | tr '\n' ' ')
 want=$(printf 'dn: %s\n' "$NEW" "cn=bob,$NEW" "ou=team,$NEW" "cn=carol,ou=team,$NEW" | tr 'A-Z' 'a-z' | sort | tr '\n' ' ')
 [ "$got" = "$want" ] || fail "moved subtree: got [$got], want [$want]"
-ldapsearch -x -LLL -H "$H" -b "$NEW" -s base '(objectClass=*)' ou > "$W/out" 2>&1 || fail "read the renamed entry"
+ldapsearch -x -LLL -o ldif-wrap=no -H "$H" -b "$NEW" -s base '(objectClass=*)' ou > "$W/out" 2>&1 || fail "read the renamed entry"
 grep -qx 'ou: engineering' "$W/out" && ! grep -qx 'ou: eng' "$W/out" || fail "deleteoldrdn: the renamed entry's ou is not just engineering"
-ldapsearch -x -LLL -H "$H" -b "cn=carol,ou=team,$NEW" -s base '(objectClass=*)' sn > "$W/out" 2>&1 || fail "read carol at her new DN"
+ldapsearch -x -LLL -o ldif-wrap=no -H "$H" -b "cn=carol,ou=team,$NEW" -s base '(objectClass=*)' sn > "$W/out" 2>&1 || fail "read carol at her new DN"
 grep -qx 'sn: Coder' "$W/out" || fail "carol's attributes did not move with her"
 for old in "ou=eng,$BASE" "cn=bob,ou=eng,$BASE" "cn=carol,ou=team,ou=eng,$BASE"; do
-  rc=0; ldapsearch -x -LLL -H "$H" -b "$old" -s base '(objectClass=*)' dn > "$W/out" 2>&1 || rc=$?
+  rc=0; ldapsearch -x -LLL -o ldif-wrap=no -H "$H" -b "$old" -s base '(objectClass=*)' dn > "$W/out" 2>&1 || rc=$?
   [ "$rc" = 32 ] || fail "old DN $old: search exit $rc, want 32 (noSuchObject)"
 done
 echo "ok: 2. modDN of a non-leaf (rename + newSuperior): 4 entries now under $NEW, old DNs noSuchObject, deleteoldrdn applied"
@@ -139,9 +139,9 @@ newrdn: ou=taken
 deleteoldrdn: 0
 newsuperior: $BASE
 LDIF
-ldapsearch -x -LLL -H "$H" -b "$NEW" -s sub '(objectClass=*)' dn > "$W/out" 2>&1 || fail "search after the refused move"
+ldapsearch -x -LLL -o ldif-wrap=no -H "$H" -b "$NEW" -s sub '(objectClass=*)' dn > "$W/out" 2>&1 || fail "search after the refused move"
 [ "$(grep -c '^dn:' "$W/out")" = 4 ] || fail "the refused move left the subtree changed"
-ldapsearch -x -LLL -H "$H" -b "ou=taken,$BASE" -s sub '(objectClass=*)' dn > "$W/out" 2>&1 || fail "search ou=taken"
+ldapsearch -x -LLL -o ldif-wrap=no -H "$H" -b "ou=taken,$BASE" -s sub '(objectClass=*)' dn > "$W/out" 2>&1 || fail "search ou=taken"
 [ "$(grep -c '^dn:' "$W/out")" = 1 ] || fail "the refused move left entries under ou=taken"
 refused 53 "newSuperior below the entry itself (unwillingToPerform)" <<LDIF
 dn: ou=sales,$BASE
