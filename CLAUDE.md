@@ -224,6 +224,12 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
+## In progress (2026-11-19): #64 kpasswd replay cache (stub sweep)
+
+`crates/kdc/src/replay.rs` + kpasswd's AP-REQ check; `test/kpasswd-e2e.sh`
+step 5 replays a captured impacket request. Password history/complexity
+filed as #70 (gap). Next: sc-build `bash test/kpasswd-e2e.sh`, then close #64.
+
 ## Done (2026-11-18): #63 LDAP extended operations, no stubs
 
 Cancel (RFC 3909), unknown OID -> protocolError naming it, rootDSE

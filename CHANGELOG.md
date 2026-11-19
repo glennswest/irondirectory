@@ -5,6 +5,18 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-19
+- **feat:** kpasswd refuses replays (RFC 4120 §3.2.3, #64): a new
+  `iron-kdc::replay::ReplayCache` remembers each accepted Authenticator
+  (SHA-256 of its ciphertext) for twice the clock skew; a request sent again
+  gets AUTHERROR "request is a replay" and changes nothing. A KRB-PRIV
+  timestamp outside the clock skew is refused too.
+- **docs:** kpasswd's module docs state the password policy it enforces (8
+  bytes minimum) instead of listing what it lacks; history/complexity is #70.
+- **test:** `test/kpasswd-e2e.sh` step 5 captures impacket's request, changes
+  the password since with MIT kpasswd, replays the captured bytes and checks
+  the refusal and that kinit takes only the newest password.
+
 ### 2026-11-18
 - **feat:** iron-ldapd implements the Cancel extended operation (RFC 3909,
   #63): `tooLate` for an operation already answered on the connection,

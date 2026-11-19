@@ -26,10 +26,15 @@
 //! request that can't be authenticated gets `AP-REP length 0` and a
 //! KRB-ERROR whose e-data is the result code and string.
 //!
-//! Not implemented, documented rather than silent: a replay cache for
-//! KRB-PRIV timestamps (the AP-REQ's own clock-skew check bounds a
-//! replay to the skew window), and password history or complexity
-//! policy beyond the FIPS PBKDF2 minimum of 8 bytes.
+//! Replays are refused (RFC 4120 §3.2.3): every accepted Authenticator
+//! is remembered in [`crate::replay::ReplayCache`] for twice the clock
+//! skew, so a captured request sent again (even after the password has
+//! changed since) gets AUTHERROR "request is a replay" and changes
+//! nothing. A KRB-PRIV carrying a timestamp must be within the clock
+//! skew too.
+//!
+//! The password policy is a minimum length of 8 bytes (the FIPS PBKDF2
+//! minimum); a shorter one is a SOFTERROR.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -210,6 +215,11 @@ async fn verify_ap_req(app: &AppState, ap_req: &ApReq) -> Result<Authenticated, 
     if crate::time::diff_seconds(&authenticator.ctime, &now).abs() > CLOCK_SKEW_SECS {
         return Err(refuse(result::AUTHERROR, "clock skew too great"));
     }
+    // Only once the Authenticator is known good: junk must not fill the cache.
+    let tag = kerberos_digest(app, &ap_req.authenticator.cipher)?;
+    if !app.kpasswd_replay.check_and_insert(tag, crate::replay::unix_now()) {
+        return Err(refuse(result::AUTHERROR, "request is a replay"));
+    }
 
     let (priv_key, priv_enctype) = match &authenticator.subkey {
         Some(sk) => (sk.value.to_vec(), Enctype::try_from(sk.r#type).map_err(|_| refuse(result::AUTHERROR, "unsupported subkey enctype"))?),
@@ -227,12 +237,22 @@ async fn verify_ap_req(app: &AppState, ap_req: &ApReq) -> Result<Authenticated, 
     })
 }
 
+/// SHA-256 of an Authenticator's ciphertext: its replay-cache tag.
+fn kerberos_digest(app: &AppState, cipher: &[u8]) -> Result<[u8; 32], Refusal> {
+    iron_crypto::digest::sha256(&app.fips, cipher).map_err(|e| refuse(result::HARDERROR, format!("hashing the authenticator: {e}")))
+}
+
 /// The request KRB-PRIV's user-data.
 fn open_priv(app: &AppState, auth: &Authenticated, msg: &KrbPriv) -> Result<Vec<u8>, Refusal> {
     let enctype = Enctype::try_from(msg.enc_part.etype).unwrap_or(auth.priv_enctype);
     let plain = kerberos::decrypt(&app.fips, enctype, &auth.priv_key, USAGE_KRB_PRIV, &msg.enc_part.cipher)
         .map_err(|_| refuse(result::AUTHERROR, "KRB-PRIV does not decrypt under the authenticator's key"))?;
     let part: EncKrbPrivPart = rasn::der::decode(&plain).map_err(|e| refuse(result::MALFORMED, format!("malformed KRB-PRIV body: {e}")))?;
+    if let Some(ts) = &part.timestamp {
+        if crate::time::diff_seconds(ts, &crate::time::now().0).abs() > CLOCK_SKEW_SECS {
+            return Err(refuse(result::AUTHERROR, "KRB-PRIV timestamp outside the clock skew"));
+        }
+    }
     Ok(part.user_data.to_vec())
 }
 

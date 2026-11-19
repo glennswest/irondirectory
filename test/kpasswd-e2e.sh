@@ -15,7 +15,9 @@
 #     request): administrator sets the password of a computer account
 #     created over LDAP (sAMAccountName TESTMAC1$, no Kerberos name yet),
 #     and kinit TESTMAC1$ then works with it; alice (not an admin) may not;
-#     alice may change her own.
+#     alice may change her own;
+#  5. a captured request sent again is refused as a replay (#64), even
+#     after the password changed since, and changes nothing.
 # Needs curl, kinit, kpasswd, ldapadd, python3 (impacket is pip-installed
 # into a venv) and a FIPS OPENSSL_CONF.
 set -euo pipefail
@@ -146,6 +148,18 @@ echo "== impacket: alice may not set it: $out"
 out=$(imp alice 'Third789!xyz' 'Fourth012!xyz' 2>&1) || fail "impacket: alice changing her own: $out"
 can_kinit alice 'Fourth012!xyz' || fail "kinit alice after impacket's change"
 echo "== impacket: alice changed her own (0xff80, no target)"
+
+# 5. Replay (#64): capture impacket's request, change the password since
+# with MIT kpasswd, send the captured bytes again.
+out=$(KPW_CAPTURE="$W/captured.req" imp alice 'Fourth012!xyz' 'Fifth345!xyz' 2>&1) || fail "impacket: alice's captured change: $out"
+[ -s "$W/captured.req" ] || fail "no request was captured"
+krb5conf 1465
+change alice 'Fifth345!xyz' 'Sixth678!xyz' || { cat "$W/kpasswd.out"; fail "kpasswd after the captured change"; }
+if out=$("$W/venv/bin/python" -I "$PWD/test/kpasswd_impacket.py" replay $((P + 4)) "$W/captured.req" 2>&1); then fail "a replayed request was accepted: $out"; fi
+echo "$out" | grep -q "request is a replay" || fail "the replay was not refused as a replay: $out"
+can_kinit alice 'Sixth678!xyz' || fail "a replayed request changed the password"
+can_kinit alice 'Fifth345!xyz' && fail "the replay put the captured password back"
+echo "== a captured request sent again is refused: $out"
 
 echo "-- iron-kdcd kpasswd log:"; sed 's/\x1b\[[0-9;]*m//g' "$W/kdcd.log" | grep -i kpasswd | sed -E 's/^[^ ]+ +//' | head -10
 echo "PASS: kpasswd (fastetcd $FV)"

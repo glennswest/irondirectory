@@ -20,6 +20,7 @@ pub mod kpasswd;
 pub mod krberror;
 pub mod pac;
 pub mod principal;
+pub mod replay;
 pub mod server;
 pub mod tgs_exchange;
 pub mod time;
@@ -86,6 +87,8 @@ pub struct AppState {
     /// its superior/subordinate partitions via `PartitionRegistry::superior_of`/
     /// `subordinates_of`.
     pub own_partition_id: Option<PartitionId>,
+    /// kpasswd's Authenticator replay cache (RFC 4120 §3.2.3, #64).
+    pub kpasswd_replay: replay::ReplayCache,
 }
 
 impl AppState {
@@ -97,7 +100,7 @@ impl AppState {
         own_partition_id: Option<PartitionId>,
     ) -> Result<Arc<Self>, iron_crypto::Error> {
         let fips = FipsContext::new()?;
-        Ok(Arc::new(AppState { store: Mutex::new(store), index_spec: index_spec(), base_dn, realm, fips, topology, own_partition_id }))
+        Ok(Arc::new(AppState { store: Mutex::new(store), index_spec: index_spec(), base_dn, realm, fips, topology, own_partition_id, kpasswd_replay: replay::ReplayCache::new() }))
     }
 }
 
