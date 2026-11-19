@@ -224,11 +224,13 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
-## In progress (2026-11-19): #64 kpasswd replay cache (stub sweep)
+## Done (2026-11-19): #64 kpasswd replay cache (stub sweep)
 
 `crates/kdc/src/replay.rs` + kpasswd's AP-REQ check; `test/kpasswd-e2e.sh`
-step 5 replays a captured impacket request. Password history/complexity
-filed as #70 (gap). Next: sc-build `bash test/kpasswd-e2e.sh`, then close #64.
+step 5 replays a captured impacket request: refused "request is a replay",
+kinit takes only the newest password. PASS on sc-build at c14f33b (clippy
+-D warnings clean). Password history/complexity is #70 (gap, proposed).
+TGS-REQ still has no replay cache (prose in tgs_exchange.rs says so).
 
 ## Done (2026-11-18): #63 LDAP extended operations, no stubs
 
