@@ -182,6 +182,10 @@ struct PasswdModifyRequestValue {
 /// through successive `BindRequest`s on the *same* connection -- unlike
 /// simple bind, a GSSAPI bind is a multi-message exchange (AP-REQ ->
 /// mutual-auth AP-REP -> ack -> security-layer negotiation -> success).
+/// The security layer a finished negotiation installs is kept apart, in
+/// [`SecurityLayer`], because a later bind on the same connection (a
+/// re-bind, RFC 4513 §5.2.1.7 / RFC 4422 §3.8) runs a new negotiation
+/// *through* the installed layer without disturbing it.
 #[derive(Default)]
 enum SaslState {
     #[default]
@@ -193,68 +197,61 @@ enum SaslState {
     /// Sent the security-layer negotiation challenge; waiting for the
     /// client's chosen layer.
     AwaitingSecurityLayerAck { session_key: Vec<u8>, enctype: Enctype, client_principal: String },
-    /// Bind completed with the client selecting a security layer (RFC
-    /// 4752 §3.4, integrity or confidentiality) -- every subsequent LDAP
-    /// message on this connection is a GSS Wrap token inside a 4-octet
-    /// length prefix, not a bare BER `LdapMessage`. `sealed` records
-    /// which: `false` for integrity-only, `true` for confidentiality.
-    /// Found live testing a real macOS `dsconfigad` join (#20): it
-    /// rejects a bind that only ever offers "no security layer" with
-    /// `GSS_S_BAD_QOP`, unlike MIT krb5's `ldapsearch` (used for every
-    /// earlier SASL/GSSAPI verification), which accepts it -- and it
-    /// separately requires confidentiality specifically to write the new
-    /// computer account's Kerberos key, failing integrity-only binds the
-    /// same way once it gets past the bind itself.
-    ///
-    /// `send_seq` is the acceptor's next outgoing Wrap-token sequence
-    /// number (RFC 4121 §4.2.6.2 SND_SEQ). The security-layer challenge
-    /// is the acceptor's *first* wrap token (seq 0, hardcoded in
-    /// `security_layer_challenge`), so this starts at 1 and increments on
-    /// every wrapped response -- a strict initiator (Heimdal / macOS
-    /// `dsconfigad`) drops a token whose sequence number doesn't advance
-    /// as a replay. `Cell` gives interior mutability so `send_response`
-    /// can bump it while holding only `&SaslState`.
-    SecurityLayerActive { session_key: Vec<u8>, enctype: Enctype, sealed: bool, send_seq: AtomicU64 },
 }
 
-// Manual `Clone` (rather than derived) because `AtomicU64` isn't `Clone`:
-// snapshots the current sequence value into a fresh atomic. Used only to
-// capture the pre-bind send state (see `handle_connection`'s bind arm);
-// the clone and the original never send concurrently, so the snapshot is
-// race-free in practice.
-impl Clone for SaslState {
-    fn clone(&self) -> Self {
-        match self {
-            SaslState::None => SaslState::None,
-            SaslState::AwaitingApRepAck { session_key, enctype, client_principal } => {
-                SaslState::AwaitingApRepAck { session_key: session_key.clone(), enctype: *enctype, client_principal: client_principal.clone() }
-            }
-            SaslState::AwaitingSecurityLayerAck { session_key, enctype, client_principal } => {
-                SaslState::AwaitingSecurityLayerAck { session_key: session_key.clone(), enctype: *enctype, client_principal: client_principal.clone() }
-            }
-            SaslState::SecurityLayerActive { session_key, enctype, sealed, send_seq } => SaslState::SecurityLayerActive {
-                session_key: session_key.clone(),
-                enctype: *enctype,
-                sealed: *sealed,
-                send_seq: AtomicU64::new(send_seq.load(Ordering::Relaxed)),
-            },
-        }
-    }
+/// A SASL security layer in effect on the connection (RFC 4752 §3.4,
+/// integrity or confidentiality) -- every LDAP message on this connection
+/// is a GSS Wrap token inside a 4-octet length prefix, not a bare BER
+/// `LdapMessage`. `sealed` records which: `false` for integrity-only,
+/// `true` for confidentiality. Found live testing a real macOS
+/// `dsconfigad` join (#20): it rejects a bind that only ever offers "no
+/// security layer" with `GSS_S_BAD_QOP`, unlike MIT krb5's `ldapsearch`
+/// (used for every earlier SASL/GSSAPI verification), which accepts it --
+/// and it separately requires confidentiality specifically to write the
+/// new computer account's Kerberos key, failing integrity-only binds the
+/// same way once it gets past the bind itself.
+///
+/// Its lifetime follows RFC 4513 §5.2.1.4 and RFC 4422 §3.8: it stays in
+/// effect until a later SASL bind installs a new layer (which replaces it)
+/// or the connection closes. A failed bind, a simple or anonymous bind, or
+/// a SASL bind that selects no layer leaves it in place.
+///
+/// `send_seq` is the acceptor's next outgoing Wrap-token sequence
+/// number (RFC 4121 §4.2.6.2 SND_SEQ). The security-layer challenge
+/// is the acceptor's *first* wrap token (seq 0, hardcoded in
+/// `security_layer_challenge`), so this starts at 1 and increments on
+/// every wrapped response -- a strict initiator (Heimdal / macOS
+/// `dsconfigad`) drops a token whose sequence number doesn't advance
+/// as a replay. Atomic for interior mutability, so `send_response` can
+/// bump it while holding only `&SaslSession`.
+struct SecurityLayer {
+    session_key: Vec<u8>,
+    enctype: Enctype,
+    sealed: bool,
+    send_seq: AtomicU64,
 }
 
-/// Reads the next `LdapMessage`, transparently unwrapping it first if
-/// `sasl_state` says the integrity security layer is active on this
-/// connection (see `SaslState::SecurityLayerActive`'s doc comment).
+/// A connection's SASL state: the negotiation in progress (if any) and
+/// the security layer in effect (if any). The two are independent -- see
+/// [`SecurityLayer`].
+#[derive(Default)]
+struct SaslSession {
+    negotiation: SaslState,
+    layer: Option<SecurityLayer>,
+}
+
+/// Reads the next `LdapMessage`, transparently unwrapping it first if a
+/// security layer is in effect on this connection (see [`SecurityLayer`]).
 /// `Err(())` on any framing/GSS-unwrap failure -- the caller just closes
 /// the connection either way, so the distinction isn't worth carrying.
 async fn read_next_message<S: AsyncRead + AsyncWrite + Unpin>(
     conn: &mut Conn<S>,
     buf: &mut Vec<u8>,
     fips: Option<&iron_crypto::FipsContext>,
-    sasl_state: &SaslState,
+    sasl_state: &SaslSession,
 ) -> Result<Option<LdapMessage>, ()> {
-    match sasl_state {
-        SaslState::SecurityLayerActive { session_key, enctype, .. } => {
+    match &sasl_state.layer {
+        Some(SecurityLayer { session_key, enctype, .. }) => {
             let fips = fips.ok_or(())?;
             let wrapped = match read_sized_buffer(conn, buf).await {
                 Ok(Some(w)) => w,
@@ -268,7 +265,7 @@ async fn read_next_message<S: AsyncRead + AsyncWrite + Unpin>(
             let plain = crate::gssapi::wrap::unwrap(fips, *enctype, session_key, 24, &wrapped).map_err(|_| ())?;
             rasn::ber::decode(&plain).map(Some).map_err(|_| ())
         }
-        _ => read_message(conn, buf).await.map_err(|_| ()),
+        None => read_message(conn, buf).await.map_err(|_| ()),
     }
 }
 
@@ -277,15 +274,15 @@ async fn read_next_message<S: AsyncRead + AsyncWrite + Unpin>(
 async fn send_response<S: AsyncRead + AsyncWrite + Unpin>(
     conn: &mut Conn<S>,
     fips: Option<&iron_crypto::FipsContext>,
-    sasl_state: &SaslState,
+    sasl_state: &SaslSession,
     msg: &LdapMessage,
 ) -> Result<(), ()> {
-    match sasl_state {
-        SaslState::SecurityLayerActive { .. } => {
+    match &sasl_state.layer {
+        Some(_) => {
             let plain = rasn::ber::encode(msg).map_err(|_| ())?;
             send_encoded(conn, fips, sasl_state, &plain).await
         }
-        _ => write_message(conn, msg).await.map_err(|_| ()),
+        None => write_message(conn, msg).await.map_err(|_| ()),
     }
 }
 
@@ -294,22 +291,22 @@ async fn send_response<S: AsyncRead + AsyncWrite + Unpin>(
 async fn send_encoded<S: AsyncRead + AsyncWrite + Unpin>(
     conn: &mut Conn<S>,
     fips: Option<&iron_crypto::FipsContext>,
-    sasl_state: &SaslState,
+    sasl_state: &SaslSession,
     plain: &[u8],
 ) -> Result<(), ()> {
     use tokio::io::AsyncWriteExt;
-    match sasl_state {
-        SaslState::SecurityLayerActive { session_key, enctype, sealed, send_seq } => {
+    match &sasl_state.layer {
+        Some(SecurityLayer { session_key, enctype, sealed, send_seq }) => {
             let fips = fips.ok_or(())?;
             // Consume this token's SND_SEQ and advance the counter so the
             // next wrapped response uses the following value (RFC 4121
-            // §4.2.6.2 -- see `SecurityLayerActive`'s doc comment).
+            // §4.2.6.2 -- see `SecurityLayer`'s doc comment).
             let seq = send_seq.fetch_add(1, Ordering::Relaxed);
             // Key usage 22: KG-USAGE-ACCEPTOR-SEAL -- we're the GSS acceptor.
             let wrapped = crate::gssapi::wrap::wrap(fips, *enctype, session_key, 22, *sealed, seq, plain).map_err(|_| ())?;
             write_sized_buffer(conn, &wrapped).await.map_err(|_| ())
         }
-        _ => conn.write_all(plain).await.map_err(|_| ()),
+        None => conn.write_all(plain).await.map_err(|_| ()),
     }
 }
 
@@ -325,7 +322,7 @@ where
 {
     let mut conn = Conn::Plain(stream);
     let mut buf = Vec::new();
-    let mut sasl_state = SaslState::None;
+    let mut sasl_state = SaslSession::default();
     // RFC 4513 §3 authzId this connection is currently bound as -- `None`
     // for anonymous, `Some("dn:...")`/`Some("u:...")` otherwise. Updated
     // on every *terminal* bind outcome (success or failure, but not a
@@ -350,26 +347,27 @@ where
         match msg.protocol_op {
             ProtocolOp::UnbindRequest(_) => return,
             ProtocolOp::BindRequest(req) => {
-                // RFC 4752 §3.1: the negotiated security layer takes effect
-                // on the *first octet following* the last authentication
-                // response -- i.e. the bindResponse that completes the SASL
-                // handshake is itself sent in the clear, and only messages
-                // after it are Wrapped. `handle_bind` flips `sasl_state` to
-                // `SecurityLayerActive` on that terminal success, so we must
-                // send the response using the state as it was *before* this
-                // request (found live via packet capture, #20: sealing the
-                // success response made macOS's client report GSS_S_BAD_QOP).
-                // For a re-bind arriving *through* an already-active layer,
-                // this same pre-request state correctly keeps the response
-                // Wrapped.
-                let send_state = sasl_state.clone();
-                let (resp, identity) = handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req, &mut sasl_state).await;
+                // RFC 4752 §3.1 / RFC 4513 §5.2.1.4: a newly negotiated
+                // security layer takes effect on the *first octet
+                // following* the bindResponse that completes the SASL
+                // handshake -- that response itself goes out under
+                // whatever layer was in effect *before* this request (none
+                // on a first bind; found live via packet capture, #20:
+                // sealing the success response made macOS's client report
+                // GSS_S_BAD_QOP). So `handle_bind` hands back the new
+                // layer instead of installing it, and it replaces the old
+                // one (RFC 4422 §3.8) only after the response is sent.
+                let (resp, identity, new_layer) =
+                    handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req, &mut sasl_state.negotiation).await;
                 if resp.result_code != ResultCode::SaslBindInProgress {
                     bound_identity = identity;
                 }
                 let resp = LdapMessage::new(message_id, ProtocolOp::BindResponse(resp));
-                if send_response(&mut conn, app.fips.as_ref(), &send_state, &resp).await.is_err() {
+                if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
                     return;
+                }
+                if let Some(layer) = new_layer {
+                    sasl_state.layer = Some(layer);
                 }
             }
             ProtocolOp::SearchRequest(req) => {
@@ -643,65 +641,75 @@ fn store_error_result(e: &iron_store::StoreError, refs: &Referrals<'_>, dn: &Dn)
 /// `resp.result_code`), since a SASL exchange returns
 /// `SaslBindInProgress` for every non-final step and this function
 /// always returns `None` for those regardless.
+///
+/// The third element is the security layer a GSSAPI bind that just
+/// completed has negotiated, for the caller to install once this response
+/// is sent (see [`SecurityLayer`]). Nothing here touches the layer already
+/// in effect: per RFC 4513 §5.2.1.4 a failed or non-SASL bind leaves it in
+/// place, and a SASL re-bind that selects no layer keeps it too (RFC 4422
+/// §3.8). `negotiation` is reset by any non-SASL bind, which aborts a SASL
+/// exchange in progress (RFC 4513 §5.2.1.2).
 async fn handle_bind(
     store: &mut Store,
     fips: Option<&iron_crypto::FipsContext>,
     req: &BindRequest,
     sasl_state: &mut SaslState,
-) -> (BindResponse, Option<String>) {
+) -> (BindResponse, Option<String>, Option<SecurityLayer>) {
     if req.version != 3 {
         *sasl_state = SaslState::None;
-        return (BindResponse::new(ResultCode::ProtocolError, String::new().into(), "only LDAPv3 is supported".into(), None, None), None);
+        return (BindResponse::new(ResultCode::ProtocolError, String::new().into(), "only LDAPv3 is supported".into(), None, None), None, None);
     }
     match &req.authentication {
         AuthenticationChoice::Simple(password) if req.name.is_empty() && password.is_empty() => {
             *sasl_state = SaslState::None;
-            (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), None)
+            (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), None, None)
         }
         AuthenticationChoice::Simple(password) => {
             *sasl_state = SaslState::None;
             let code = authenticate_simple(store, fips, &req.name, password).await;
             let identity = (code == ResultCode::Success).then(|| format!("dn:{}", req.name.as_str()));
-            (BindResponse::new(code, String::new().into(), String::new().into(), None, None), identity)
+            (BindResponse::new(code, String::new().into(), String::new().into(), None, None), identity, None)
         }
         AuthenticationChoice::Sasl(creds) => handle_sasl_bind(store, fips, creds, sasl_state).await,
         _ => {
             *sasl_state = SaslState::None;
-            (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "unrecognized authentication choice".into(), None, None), None)
+            (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "unrecognized authentication choice".into(), None, None), None, None)
         }
     }
 }
 
 /// RFC 4752 SASL/GSSAPI bind, over the Kerberos V5 GSS mechanism (RFC
-/// 4121). Only the "GSSAPI" mechanism is supported, and only the "no
-/// security layer" option (clients requesting integrity/confidentiality
-/// get told only "no protection" is on offer -- use StartTLS/LDAPS for
-/// transport security, which iron-ldap already supports).
+/// 4121). Only the "GSSAPI" mechanism is supported. All three security
+/// layers are offered (see `security_layer_challenge`); a negotiated
+/// integrity or confidentiality layer is returned for the caller to
+/// install. Works the same as a re-bind through a layer already in effect:
+/// the request arrived unwrapped by that layer, and this exchange's own
+/// context and keys are independent of it.
 async fn handle_sasl_bind(
     store: &mut Store,
     fips: Option<&iron_crypto::FipsContext>,
     creds: &SaslCredentials,
     sasl_state: &mut SaslState,
-) -> (BindResponse, Option<String>) {
+) -> (BindResponse, Option<String>, Option<SecurityLayer>) {
     if creds.mechanism.as_str() != "GSSAPI" {
         *sasl_state = SaslState::None;
-        return (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "only the GSSAPI SASL mechanism is supported".into(), None, None), None);
+        return (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "only the GSSAPI SASL mechanism is supported".into(), None, None), None, None);
     }
     let Some(fips) = fips else {
         *sasl_state = SaslState::None;
-        return (BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "FIPS provider not active -- SASL/GSSAPI unavailable".into(), None, None), None);
+        return (BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "FIPS provider not active -- SASL/GSSAPI unavailable".into(), None, None), None, None);
     };
 
     let resp = match std::mem::take(sasl_state) {
         SaslState::None => {
             let Some(input_token) = &creds.credentials else {
-                return (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "GSSAPI bind requires an initial token".into(), None, None), None);
+                return (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "GSSAPI bind requires an initial token".into(), None, None), None, None);
             };
             // Any DN within the (single) served partition works here --
             // lookup_by_index only uses it to resolve which cluster to
             // query, not as a search filter.
             let Some(any_dn) = store.registry().iter().next().map(|p| p.base_dn.clone()) else {
-                return (BindResponse::new(ResultCode::Other, String::new().into(), "no partition configured".into(), None, None), None);
+                return (BindResponse::new(ResultCode::Other, String::new().into(), "no partition configured".into(), None, None), None, None);
             };
             let lookup = move |sname: PrincipalName, realm: String| async move {
                 let principal_fqn = format!("{}@{realm}", iron_kdc::principal_name_to_string(&sname));
@@ -744,28 +752,28 @@ async fn handle_sasl_bind(
         },
         SaslState::AwaitingSecurityLayerAck { session_key, enctype, client_principal } => {
             let Some(response) = &creds.credentials else {
-                return (BindResponse::new(ResultCode::ProtocolError, String::new().into(), "missing security-layer response".into(), None, None), None);
+                return (BindResponse::new(ResultCode::ProtocolError, String::new().into(), "missing security-layer response".into(), None, None), None, None);
             };
             // Key usage 24: KG-USAGE-INITIATOR-SEAL (RFC 4121 §2) -- the
             // client is the GSS initiator, so its Wrap tokens use the
             // initiator-seal usage, not our own acceptor-seal (22).
             match crate::gssapi::wrap::unwrap(fips, enctype, &session_key, 24, response) {
-                // Bit 0: no security layer -- bind succeeds, connection
-                // stays plain BER framing (sasl_state already reset to
-                // `None` by the `mem::take` at the top of this function).
+                // Bit 0: no security layer -- bind succeeds, and whatever
+                // layer was already in effect (none on a first bind) stays
+                // (RFC 4422 §3.8).
                 Ok(plain) if plain.first() == Some(&0x01) => {
                     tracing::info!(%client_principal, "GSSAPI bind succeeded (no security layer)");
-                    return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")));
+                    return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")), None);
                 }
                 // Bit 1: integrity -- bind succeeds, but every later
                 // message on this connection must be a Wrap token (see
-                // `SaslState::SecurityLayerActive`'s doc comment).
+                // `SecurityLayer`'s doc comment).
                 Ok(plain) if plain.first() == Some(&0x02) => {
                     tracing::info!(%client_principal, "GSSAPI bind succeeded (integrity security layer active)");
                     // send_seq starts at 1: the challenge already consumed
                     // the acceptor's seq 0 (see `security_layer_challenge`).
-                    *sasl_state = SaslState::SecurityLayerActive { session_key, enctype, sealed: false, send_seq: AtomicU64::new(1) };
-                    return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")));
+                    let layer = SecurityLayer { session_key, enctype, sealed: false, send_seq: AtomicU64::new(1) };
+                    return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")), Some(layer));
                 }
                 // Bit 2: confidentiality -- found live (#20) that macOS's
                 // `dsconfigad` needs this specifically to write the new
@@ -777,24 +785,15 @@ async fn handle_sasl_bind(
                     tracing::info!(%client_principal, "GSSAPI bind succeeded (confidentiality security layer active)");
                     // send_seq starts at 1: the challenge already consumed
                     // the acceptor's seq 0 (see `security_layer_challenge`).
-                    *sasl_state = SaslState::SecurityLayerActive { session_key, enctype, sealed: true, send_seq: AtomicU64::new(1) };
-                    return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")));
+                    let layer = SecurityLayer { session_key, enctype, sealed: true, send_seq: AtomicU64::new(1) };
+                    return (BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, None), Some(format!("u:{client_principal}")), Some(layer));
                 }
                 Ok(_) => BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "client selected an unsupported security layer".into(), None, None),
                 Err(e) => BindResponse::new(ResultCode::InvalidCredentials, String::new().into(), e.to_string().into(), None, None),
             }
         }
-        // A `BindRequest` while a security layer is already active (a
-        // re-bind, RFC 4513 §3) -- not supported yet, and the request
-        // itself would need to have arrived *through* the active layer
-        // for this state to even be reachable correctly. Fail rather
-        // than silently drop back to an unprotected connection.
-        active @ SaslState::SecurityLayerActive { .. } => {
-            *sasl_state = active;
-            BindResponse::new(ResultCode::UnwillingToPerform, String::new().into(), "re-bind on a connection with an active security layer is not supported".into(), None, None)
-        }
     };
-    (resp, None)
+    (resp, None, None)
 }
 
 /// Builds the RFC 4752 §3.2 security-layer negotiation challenge: 4
@@ -812,7 +811,7 @@ async fn handle_sasl_bind(
 /// confidentiality, not just integrity, so bit 2 has to be offered too.
 ///
 /// This is always the acceptor's *first* Wrap token on the connection, so
-/// it takes SND_SEQ 0 (integrity-only, never sealed); `SecurityLayerActive`
+/// it takes SND_SEQ 0 (integrity-only, never sealed); `SecurityLayer`
 /// then continues the acceptor's send sequence from 1.
 fn security_layer_challenge(fips: &iron_crypto::FipsContext, enctype: Enctype, session_key: &[u8]) -> Result<Vec<u8>, crate::gssapi::wrap::Error> {
     const OFFERED_LAYERS: u8 = 0x01 | 0x02 | 0x04;
@@ -1192,18 +1191,27 @@ async fn handle_compare(store: &mut Store, req: &CompareRequest, referrals: &Ref
     CompareResponse(LdapResult::new(code, String::new().into(), String::new().into()))
 }
 
-/// Renames and/or moves a **leaf** entry. Subtree rename (moving a
-/// non-leaf entry, dragging its descendants along) is not implemented --
-/// this is standards-sanctioned, not a stub: RFC 4511 lets a server that
-/// doesn't support it return `NotAllowedOnNonLeaf`, which is exactly what
-/// this does after confirming (via `scan_subtree`) that the entry really
-/// has no children.
+/// Renames and/or moves an entry -- a leaf, or a whole subtree with its
+/// descendants (RFC 4511 §4.9). Each descendant keeps its RDNs below the
+/// renamed entry and takes the new DN as its suffix.
 ///
-/// The move itself is **not atomic across the old/new keys**: it puts the
-/// entry at the new DN first, then deletes the old one. A crash between
-/// those two steps leaves the entry readable at both DNs rather than
-/// losing it -- documented as a known limitation, same posture as
-/// `iron-store`'s other cross-key simplifications.
+/// Refused, with the RFC 4511 result codes:
+/// - `EntryAlreadyExists` if anything already exists at a target DN;
+/// - `NoSuchObject` if `newSuperior` names an entry that does not exist;
+/// - `UnwillingToPerform` if `newSuperior` is the entry or one of its own
+///   descendants (the subtree would become its own parent);
+/// - `AffectsMultipleDsas` if the new DN belongs to another naming context,
+///   or the subtree holds another naming context's head (a child domain or
+///   the configuration/schema NC): those live in other partitions, and the
+///   partition registry names them by DN.
+///
+/// The move is **not atomic** across keys: every entry is created at its
+/// new DN (parents first, each create-only), then the old entries are
+/// deleted (deepest first). If a create finds its target taken, the
+/// entries this call already created are deleted again before answering.
+/// A crash between the creates and the deletes leaves the entries readable
+/// at both DNs rather than losing any -- the same posture as `iron-store`'s
+/// other cross-key operations.
 async fn handle_moddn(
     store: &mut Store,
     req: &ModifyDnRequest,
@@ -1236,34 +1244,47 @@ async fn handle_moddn(
         },
         None => old_dn.parent().unwrap_or_else(Dn::root),
     };
-    let new_dn_str = if new_parent.is_empty() {
-        req.new_rdn.as_str().to_string()
-    } else {
-        format!("{},{}", req.new_rdn.as_str(), new_parent)
-    };
-    let new_dn = match Dn::parse(&new_dn_str) {
+    let new_dn = match Dn::parse(&join_dn(req.new_rdn.as_str(), &new_parent)) {
         Ok(dn) => dn,
         Err(_) => return ModifyDnResponse(invalid_dn()),
     };
-
-    // Refuse non-leaf moves (see doc comment above).
-    match store.scan_subtree(&old_dn).await {
-        Ok(rows) if rows.len() > 1 => {
-            return ModifyDnResponse(LdapResult::new(
-                ResultCode::NotAllowedOnNonLeaf,
-                String::new().into(),
-                "moving a non-leaf entry (subtree rename) is not supported yet".into(),
-            ))
+    if new_parent.is_within(&old_dn) {
+        return ModifyDnResponse(LdapResult::new(
+            ResultCode::UnwillingToPerform,
+            String::new().into(),
+            "newSuperior is the entry itself or one of its descendants".into(),
+        ));
+    }
+    let topology = referrals.topology.unwrap_or_else(|| store.registry());
+    if let Some(result) = moddn_crosses_naming_contexts(topology, store.registry(), &old_dn, &new_dn) {
+        return ModifyDnResponse(result);
+    }
+    if req.new_superior.is_some() && Some(&new_parent) != old_dn.parent().as_ref() {
+        match store.get_entry(&new_parent).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return ModifyDnResponse(LdapResult::new(
+                    ResultCode::NoSuchObject,
+                    String::new().into(),
+                    "newSuperior does not exist".into(),
+                ))
+            }
+            Err(e) => return ModifyDnResponse(store_error_result(&e, referrals, &new_parent)),
         }
-        Ok(_) => {}
-        Err(e) => return ModifyDnResponse(store_error_result(&e, referrals, &old_dn)),
     }
 
+    let mut subtree = match store.scan_subtree(&old_dn).await {
+        Ok(rows) => rows,
+        Err(e) => return ModifyDnResponse(store_error_result(&e, referrals, &old_dn)),
+    };
+    // The renamed entry itself is read by DN rather than taken from the
+    // scan: the scan reconstructs DNs from storage keys (normalized case).
     let mut entry = match store.get_entry(&old_dn).await {
         Ok(Some(e)) => e,
         Ok(None) => return ModifyDnResponse(LdapResult::new(ResultCode::NoSuchObject, String::new().into(), "".into())),
         Err(e) => return ModifyDnResponse(store_error_result(&e, referrals, &old_dn)),
     };
+    subtree.retain(|(dn, _)| dn != &old_dn);
 
     // The new RDN's attribute values become part of the entry (RFC 4511:
     // "Attribute values of the new RDN not matching any attribute value
@@ -1285,17 +1306,98 @@ async fn handle_moddn(
         }
     }
 
-    if let Err(e) = store.put_entry(&new_dn, &entry, spec).await {
-        return ModifyDnResponse(store_error_result(&e, referrals, &new_dn));
+    // Same DN (e.g. only deleteoldrdn/RDN-value changes): an in-place write.
+    if old_dn == new_dn {
+        return ModifyDnResponse(match store.put_entry(&new_dn, &entry, spec).await {
+            Ok(()) => success(),
+            Err(e) => store_error_result(&e, referrals, &new_dn),
+        });
     }
-    if old_dn != new_dn {
-        if let Err(e) = store.delete_entry(&old_dn, spec).await {
+
+    // (old DN, new DN, entry), parents before children.
+    let mut moves = vec![(old_dn.clone(), new_dn.clone(), entry)];
+    for (dn, e) in subtree {
+        match rebase_dn(&dn, &old_dn, &new_dn) {
+            Some(target) => moves.push((dn, target, e)),
+            None => return ModifyDnResponse(operations_error(&format!("cannot rebase {dn} under {new_dn}"))),
+        }
+    }
+    moves.sort_by_key(|(old, _, _)| old.depth());
+
+    let mut created: Vec<&Dn> = Vec::new();
+    for (_, target, e) in &moves {
+        let outcome = match store.create_entry(target, e, spec).await {
+            Ok(true) => None,
+            Ok(false) => Some(LdapResult::new(ResultCode::EntryAlreadyExists, target.to_string().into(), String::new().into())),
+            Err(err) => Some(store_error_result(&err, referrals, target)),
+        };
+        if let Some(result) = outcome {
+            for dn in created.iter().rev() {
+                if let Err(err) = store.delete_entry(dn, spec).await {
+                    tracing::warn!(%dn, "modDN rollback could not delete a created entry: {err}");
+                }
+            }
+            return ModifyDnResponse(result);
+        }
+        created.push(target);
+    }
+    for (old, _, _) in moves.iter().rev() {
+        if let Err(e) = store.delete_entry(old, spec).await {
             return ModifyDnResponse(operations_error(&format!(
-                "entry moved to the new DN but the old DN could not be removed: {e}"
+                "entries moved to the new DN but {old} could not be removed: {e}"
             )));
         }
     }
     ModifyDnResponse(success())
+}
+
+/// `rdn` under `parent`, as a DN string (`rdn` alone under the root).
+fn join_dn(rdn: &str, parent: &Dn) -> String {
+    if parent.is_empty() {
+        rdn.to_string()
+    } else {
+        format!("{rdn},{parent}")
+    }
+}
+
+/// `dn` (at or below `old_base`) with `old_base` replaced by `new_base`:
+/// the RDNs below `old_base` are kept, in order.
+fn rebase_dn(dn: &Dn, old_base: &Dn, new_base: &Dn) -> Option<Dn> {
+    if !dn.is_within(old_base) {
+        return None;
+    }
+    let keep = dn.depth() - old_base.depth();
+    let mut parts: Vec<String> = dn.rdns()[..keep].iter().map(|r| r.to_string()).collect();
+    if !new_base.is_empty() {
+        parts.push(new_base.to_string());
+    }
+    Dn::parse(&parts.join(",")).ok()
+}
+
+/// `AffectsMultipleDsas` (RFC 4511 §4.9) if the move would leave this
+/// entry's naming context: the new DN resolves to another partition, or
+/// the subtree at `old_dn` is or holds the head of a naming context
+/// (another partition's base DN, or this partition's own).
+/// `topology` is the forest's registry (or the local one when no forest
+/// is loaded); `local` is the store's own.
+fn moddn_crosses_naming_contexts(
+    topology: &iron_partition::PartitionRegistry,
+    local: &iron_partition::PartitionRegistry,
+    old_dn: &Dn,
+    new_dn: &Dn,
+) -> Option<LdapResult> {
+    let registry = topology;
+    let old_owner = registry.resolve(old_dn).map(|p| &p.id);
+    let new_owner = registry.resolve(new_dn).map(|p| &p.id);
+    let refuse = |why: String| Some(LdapResult::new(ResultCode::AffectsMultipleDsas, String::new().into(), why.into()));
+    if old_owner != new_owner {
+        return refuse(format!("{new_dn} is in another naming context"));
+    }
+    let heads: Vec<&Dn> = registry.iter().map(|p| &p.base_dn).chain(local.iter().map(|p| &p.base_dn)).collect();
+    if let Some(head) = heads.into_iter().find(|b| b.is_within(old_dn)) {
+        return refuse(format!("the subtree holds the naming context head {head}"));
+    }
+    None
 }
 
 async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Referrals<'_>, fips_active: bool, starttls: bool) -> Vec<ProtocolOp> {
@@ -1588,6 +1690,76 @@ mod referral_tests {
 }
 
 #[cfg(test)]
+mod moddn_tests {
+    use iron_partition::{ClusterRef, ForestId, Partition, PartitionRegistry};
+
+    use super::*;
+
+    fn dn(s: &str) -> Dn {
+        Dn::parse(s).unwrap()
+    }
+
+    fn forest() -> PartitionRegistry {
+        let forest = ForestId::new("acme").unwrap();
+        let cluster = ClusterRef::plaintext(["http://127.0.0.1:2379"]);
+        let parent = Partition::domain("g10", forest.clone(), dn("dc=g10,dc=lo"), cluster.clone()).unwrap();
+        let child = Partition::domain("g10-emea", forest, dn("dc=emea,dc=g10,dc=lo"), cluster).unwrap();
+        PartitionRegistry::from_partitions([parent, child]).unwrap()
+    }
+
+    fn local() -> PartitionRegistry {
+        let forest = ForestId::new("acme").unwrap();
+        let cluster = ClusterRef::plaintext(["http://127.0.0.1:2379"]);
+        PartitionRegistry::from_partitions([Partition::domain("g10", forest, dn("dc=g10,dc=lo"), cluster).unwrap()]).unwrap()
+    }
+
+    #[test]
+    fn rebase_keeps_the_rdns_below_the_moved_entry() {
+        let old = dn("ou=eng,dc=g10,dc=lo");
+        let new = dn("ou=engineering,ou=sales,dc=g10,dc=lo");
+        assert_eq!(rebase_dn(&old, &old, &new), Some(new.clone()));
+        assert_eq!(
+            rebase_dn(&dn("cn=Carol Smith,ou=team,ou=eng,dc=g10,dc=lo"), &old, &new),
+            Some(dn("cn=Carol Smith,ou=team,ou=engineering,ou=sales,dc=g10,dc=lo"))
+        );
+        // Values that need escaping survive the round trip.
+        let carol = rebase_dn(&dn(r"cn=Smith\, Carol,ou=eng,dc=g10,dc=lo"), &old, &new).unwrap();
+        assert_eq!(carol.rdns()[0].avas()[0].value(), "Smith, Carol");
+        assert_eq!(rebase_dn(&dn("cn=x,ou=other,dc=g10,dc=lo"), &old, &new), None);
+    }
+
+    #[test]
+    fn join_dn_under_root_and_parent() {
+        assert_eq!(join_dn("ou=a", &Dn::root()), "ou=a");
+        assert_eq!(join_dn("ou=a", &dn("dc=g10,dc=lo")), "ou=a,dc=g10,dc=lo");
+    }
+
+    #[test]
+    fn a_move_inside_one_naming_context_is_allowed() {
+        let (f, l) = (forest(), local());
+        assert!(moddn_crosses_naming_contexts(&f, &l, &dn("ou=eng,dc=g10,dc=lo"), &dn("ou=eng,ou=sales,dc=g10,dc=lo")).is_none());
+    }
+
+    #[test]
+    fn a_move_into_another_naming_context_affects_multiple_dsas() {
+        let (f, l) = (forest(), local());
+        let r = moddn_crosses_naming_contexts(&f, &l, &dn("ou=eng,dc=g10,dc=lo"), &dn("ou=eng,dc=emea,dc=g10,dc=lo")).unwrap();
+        assert_eq!(r.result_code, ResultCode::AffectsMultipleDsas);
+    }
+
+    #[test]
+    fn a_subtree_holding_a_naming_context_head_affects_multiple_dsas() {
+        let (f, l) = (forest(), local());
+        // The domain head itself (dc=emea, a child domain, also sits below it).
+        let r = moddn_crosses_naming_contexts(&f, &l, &dn("dc=g10,dc=lo"), &dn("dc=g11,dc=lo")).unwrap();
+        assert_eq!(r.result_code, ResultCode::AffectsMultipleDsas);
+        // With only the local registry, the partition's own head still counts.
+        let r = moddn_crosses_naming_contexts(&l, &l, &dn("dc=g10,dc=lo"), &dn("dc=x,dc=g10,dc=lo")).unwrap();
+        assert_eq!(r.result_code, ResultCode::AffectsMultipleDsas);
+    }
+}
+
+#[cfg(test)]
 mod extended_op_tests {
     use rasn_ldap::ExtendedRequest;
 
@@ -1671,7 +1843,6 @@ mod extended_op_tests {
         assert_eq!(r.result_code, ResultCode::ProtocolError);
         assert_eq!(r.diagnostic_message.as_str(), "unsupported extended operation 1.2.3.4");
         assert!(r.response_name.is_none());
-        assert!(!r.diagnostic_message.contains("not implemented"));
     }
 
     #[test]
