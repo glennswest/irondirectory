@@ -229,7 +229,8 @@ waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 RFC 4121 §4.1.1.2's `Bnd` is MD5(gss_channel_bindings_struct); D4 excludes
 MD5. Asked on #65: a cited pure-Rust MD5 exception (like md4, #19) to
 verify tls-server-end-point (RFC 5929) on LDAPS/StartTLS, or no
-verification + `gap`. Delegation and stale mod.rs prose fixed meanwhile.
+verification + `gap`. Delegation and stale mod.rs prose fixed meanwhile
+(70e9d70, which also closed #66: mod.rs marker gone, sc-build pass).
 
 ## Done (2026-11-19): #64 kpasswd replay cache (stub sweep)
 

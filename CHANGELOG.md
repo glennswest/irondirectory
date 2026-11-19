@@ -10,6 +10,7 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
   RFC 4752 security layers (the text still said "no security layer" only),
   and delegation declined (RFC 4121 §4.1.1.1). Channel binding (#65) waits on
   an owner decision: RFC 4121's `Bnd` is an MD5 hash, which D4 excludes.
+  This removes the stub-sweep marker in `gssapi/mod.rs` (#66).
 - **feat:** kpasswd refuses replays (RFC 4120 §3.2.3, #64): a new
   `iron-kdc::replay::ReplayCache` remembers each accepted Authenticator
   (SHA-256 of its ciphertext) for twice the clock skew; a request sent again
