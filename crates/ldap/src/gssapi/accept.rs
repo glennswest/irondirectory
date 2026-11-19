@@ -9,8 +9,12 @@
 //!
 //! Not implemented, documented rather than silent: channel binding
 //! verification (the `Bnd` field of the GSS checksum is read but never
-//! checked against the actual transport), and delegation
-//! (`GSS_C_DELEG_FLAG`/the `KRB_CRED` it would carry).
+//! checked against the actual transport; #65).
+//!
+//! Delegation is declined, as RFC 4121 §4.1.1.1 lets an acceptor do: a
+//! directory server has no use for a client's forwarded TGT, so a
+//! `GSS_C_DELEG_FLAG` and the `KRB_CRED` after the checksum's flags are
+//! ignored and the credential is never decrypted or kept.
 
 use iron_crypto::kerberos::{self, Enctype};
 use iron_crypto::FipsContext;

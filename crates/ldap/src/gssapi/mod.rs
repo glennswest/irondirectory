@@ -12,13 +12,11 @@
 //! and 22/24 (KG-USAGE-ACCEPTOR-SEAL/KG-USAGE-INITIATOR-SEAL) for the
 //! RFC 4752 security-layer negotiation's Wrap tokens.
 //!
-//! Scope for this pass: mutual authentication (when requested, which
-//! real LDAP GSSAPI clients always do), "no security layer" negotiation
-//! only (clients requesting integrity/confidentiality get told only
-//! "no protection" is available -- use StartTLS/LDAPS for transport
-//! security instead). Not implemented: channel binding verification,
-//! delegation, and integrity/confidentiality security layers for LDAP
-//! traffic after bind.
+//! Mutual authentication (when requested, which real LDAP GSSAPI
+//! clients always do) and all three RFC 4752 security layers: none,
+//! integrity and confidentiality, with LDAP traffic after the bind
+//! wrapped in whichever the client picks (`wrap`). Delegation is
+//! declined and channel bindings are not checked (see `accept`).
 
 pub mod accept;
 pub mod token;

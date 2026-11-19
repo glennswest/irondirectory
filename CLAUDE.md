@@ -224,6 +224,13 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
+## Waiting on the owner (2026-11-19): #65 GSSAPI channel binding
+
+RFC 4121 §4.1.1.2's `Bnd` is MD5(gss_channel_bindings_struct); D4 excludes
+MD5. Asked on #65: a cited pure-Rust MD5 exception (like md4, #19) to
+verify tls-server-end-point (RFC 5929) on LDAPS/StartTLS, or no
+verification + `gap`. Delegation and stale mod.rs prose fixed meanwhile.
+
 ## Done (2026-11-19): #64 kpasswd replay cache (stub sweep)
 
 `crates/kdc/src/replay.rs` + kpasswd's AP-REQ check; `test/kpasswd-e2e.sh`
