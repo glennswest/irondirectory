@@ -242,20 +242,14 @@ collision). sc-build clean with clippy -D warnings at e24bf13;
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
 
-## In progress (2026-11-20): #65 GSSAPI channel binding -- owner decided
+## Done (2026-11-20): #65 GSSAPI channel binding, as AD does
 
-Owner (2026-11-20): "Do what Ad does" = option 1. Plan:
-- [ ] `iron_crypto::md5`: pure-Rust RFC 1321, cited D4 exception like md4,
-      used only for RFC 4121 §4.1.1.2 `Bnd`.
-- [ ] `tls::server_end_point`: RFC 5929 tls-server-end-point of our cert.
-- [ ] `accept`: zero `Bnd` accepted (AD "When supported"); non-zero must
-      equal MD5(gss_channel_bindings_struct) of the connection's binding,
-      refused on plain LDAP; `IRON_LDAP_CHANNEL_BINDING=always` refuses a
-      zero `Bnd` over TLS (AD "Always").
-- [ ] `test/ldap-channel-binding-e2e.sh`: real `ldapsearch -Y GSSAPI -o
-      SASL_CBINDING=tls-endpoint` over LDAPS/StartTLS, the same through a
-      TLS-terminating relay (refused), impacket-built tokens for wrong/zero/
-      plain cases and the `always` setting.
+Owner: "Do what Ad does". `iron_crypto::md5` (cited D4 exception, Bnd only),
+`tls::server_end_point` (RFC 5929), `accept` checks Bnd: zero accepted
+unless `IRON_LDAP_CHANNEL_BINDING=always` over TLS; non-zero must match on
+LDAPS/StartTLS, refused on plain. Unit tests + clippy -D warnings pass on
+sc-build at 7ecb603; `test/ldap-channel-binding-e2e.sh` PASS at 4501bfb (real
+ldapwhoami -Y GSSAPI with tls-endpoint, TLS relay refused, impacket plain).
 
 ## Done (2026-11-19): #64 kpasswd replay cache (stub sweep)
 
