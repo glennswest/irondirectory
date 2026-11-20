@@ -121,6 +121,14 @@ person() { printf 'dn: cn=%s,%s\nobjectClass: top\nobjectClass: person\nobjectCl
 add() { # port, cn, base
   person "$2" "$3" | ldapadd -x -H "ldap://127.0.0.1:$1" > "$W/ldapadd.out" 2>&1 || { cat "$W/ldapadd.out"; fail "adding cn=$2,$3"; }
 }
+# Each naming context's head first: an entry needs its parent (#71), and
+# iron-config-ctl registers partitions without creating their heads.
+head() { # port, dc value, base
+  printf 'dn: %s\nobjectClass: top\nobjectClass: domain\ndc: %s\n\n' "$3" "$2" | ldapadd -x -H "ldap://127.0.0.1:$1" > "$W/ldapadd.out" 2>&1 ||
+    { cat "$W/ldapadd.out"; fail "adding the head $3"; }
+}
+head $((P + 3)) fed "$ROOT"
+for i in $(seq "$CHILDREN"); do head "$(child_port "$i")" "c$i" "dc=c$i,$ROOT"; done
 add $((P + 3)) rootuser "$ROOT"
 for i in $(seq "$CHILDREN"); do add "$(child_port "$i")" "user$i" "dc=c$i,$ROOT"; done
 

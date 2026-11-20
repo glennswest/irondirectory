@@ -102,6 +102,12 @@ selects no layer leaves the layer in effect (RFC 4513 §5.2.1.4, RFC 4422
 §3.8); a GSSAPI bind that selects a layer replaces it from the next message
 on.
 
+Add (#71) creates only: an existing DN is `entryAlreadyExists`, never
+overwritten, and the parent must exist (`noSuchObject`, matchedDN the nearest
+existing ancestor) unless the entry is a naming context's head. A partition
+registered with `iron-config-ctl init-forest`/`create-child` has no head entry
+until one is added (`iron-bootstrap` creates its domain's).
+
 Modify-DN (#67) renames or moves an entry with all its descendants. It is
 create-then-delete, not one transaction: if a target DN is taken
 (`entryAlreadyExists`), the entries it already created are removed again.

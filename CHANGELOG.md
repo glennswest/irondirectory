@@ -6,6 +6,15 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-20
+- **fix:** an LDAP Add of an existing DN replaced the entry (its attributes,
+  objectSid, Kerberos keys) instead of answering `entryAlreadyExists` (#71,
+  RFC 4511 §4.7). Add now writes create-only, checks before a SID/RID is
+  allocated, and needs the parent entry to exist (`noSuchObject`, matchedDN
+  the nearest existing ancestor) unless the entry is a naming context's head.
+- **test:** `test/ldap-rebind-moddn-e2e.sh` step 4: ldapadd of an existing
+  entry and of the head exit 68 with the entry unchanged; an orphan exits 32
+  with matchedDN. `test/federation-scale-e2e.sh` adds each partition's head
+  before its entries (iron-config-ctl creates none).
 - **feat:** domain password policy, as Active Directory's (#70): `minPwdLength`,
   `pwdHistoryLength`, `pwdProperties` (complexity), `minPwdAge` and
   `maxPwdAge` on the domain head, checked by one `iron_kdc::policy::check`

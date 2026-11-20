@@ -987,6 +987,17 @@ async fn handle_add(
     if let Err(msg) = crate::schema::validate(&entry) {
         return AddResponse(LdapResult::new(ResultCode::ObjectClassViolation, String::new().into(), msg.into()));
     }
+    // RFC 4511 §4.7 (#71): an existing DN is entryAlreadyExists, never an
+    // overwrite. Checked here so a refused add allocates no RID; the
+    // create-only write below settles a race with a concurrent add.
+    match store.get_entry(&dn).await {
+        Ok(Some(_)) => return AddResponse(already_exists(&dn)),
+        Ok(None) => {}
+        Err(e) => return AddResponse(store_error_result(&e, referrals, &dn)),
+    }
+    if let Some(result) = missing_parent(store, &dn, referrals).await {
+        return AddResponse(result);
+    }
     // #17: a user/computer/group entry gets an objectSid + default
     // nTSecurityDescriptor auto-assigned here, exactly like a real DC
     // does at object creation -- a no-op if the partition has no
@@ -995,11 +1006,40 @@ async fn handle_add(
         return AddResponse(store_error_result(&e, referrals, &dn));
     }
 
-    let result = match store.put_entry(&dn, &entry, spec).await {
-        Ok(()) => success(),
+    let result = match store.create_entry(&dn, &entry, spec).await {
+        Ok(true) => success(),
+        Ok(false) => already_exists(&dn),
         Err(e) => store_error_result(&e, referrals, &dn),
     };
     AddResponse(result)
+}
+
+fn already_exists(dn: &Dn) -> LdapResult {
+    LdapResult::new(ResultCode::EntryAlreadyExists, String::new().into(), format!("{dn} already exists").into())
+}
+
+/// RFC 4511 §4.7: an entry is added under an existing parent. `None` if
+/// `dn` is a naming context's head (a partition's base DN, whose parent
+/// lives elsewhere or nowhere) or its parent exists; else `noSuchObject`
+/// whose matchedDN is the nearest existing ancestor (empty if none).
+async fn missing_parent(store: &mut Store, dn: &Dn, referrals: &Referrals<'_>) -> Option<LdapResult> {
+    if store.registry().iter().any(|p| p.base_dn == *dn) {
+        return None;
+    }
+    let parent = dn.parent()?;
+    let mut ancestor = Some(parent.clone());
+    while let Some(a) = ancestor {
+        match store.get_entry(&a).await {
+            Ok(Some(_)) if a == parent => return None,
+            Ok(Some(_)) => return Some(LdapResult::new(ResultCode::NoSuchObject, a.to_string().into(), format!("parent {parent} does not exist").into())),
+            Ok(None) => {}
+            // Above this partition's base: nothing nearer exists here.
+            Err(iron_store::StoreError::NoPartitionFor(_)) => break,
+            Err(e) => return Some(store_error_result(&e, referrals, &a)),
+        }
+        ancestor = a.parent().filter(|p| !p.is_empty());
+    }
+    Some(LdapResult::new(ResultCode::NoSuchObject, String::new().into(), format!("parent {parent} does not exist").into()))
 }
 
 async fn handle_delete(

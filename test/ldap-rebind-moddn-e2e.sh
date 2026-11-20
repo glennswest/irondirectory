@@ -18,7 +18,11 @@
 #  3. modDN refusals: entryAlreadyExists (nothing half-moved after it),
 #     newSuperior under the entry itself (unwillingToPerform), a missing
 #     newSuperior (noSuchObject), the naming context head
-#     (affectsMultipleDSAs).
+#     (affectsMultipleDSAs);
+#  4. Add (#71): an existing entry and the naming context head are
+#     entryAlreadyExists (68) and stay unchanged; an entry whose parent does
+#     not exist is noSuchObject (32) with matchedDN the nearest existing
+#     ancestor; an add under an existing parent works.
 # Needs curl, python3, ldapsearch, ldapadd, ldapmodify and a FIPS OPENSSL_CONF.
 set -euo pipefail
 
@@ -164,4 +168,41 @@ newrdn: dc=renamed
 deleteoldrdn: 0
 LDIF
 
-echo "PASS: re-binds keep or replace the SASL layer as RFC 4513/4422 say; subtree modDN moves every descendant"
+# 4. Add (#71): an existing DN is entryAlreadyExists and changes nothing; an
+# entry needs its parent (noSuchObject, matchedDN the nearest ancestor).
+add() { ldapadd -x -H "$H" -D "$ADMIN" -w "$ADMIN_PW" > "$W/out" 2>&1; }
+add_refused() { # <want rc> <what> ; LDIF on stdin
+  local rc=0; add || rc=$?
+  [ "$rc" = "$1" ] || { cat "$W/out"; fail "$2: ldapadd exit $rc, want $1"; }
+  echo "ok: 4. $2 refused: $(grep -i 'ldap_add\|matched\|additional' "$W/out" | tr '\n\t' '  ')"
+}
+add_refused 68 "an add of an existing entry (entryAlreadyExists)" <<LDIF
+dn: cn=bob,$NEW
+objectClass: person
+cn: bob
+sn: Overwriter
+LDIF
+ldapsearch -x -LLL -o ldif-wrap=no -H "$H" -b "cn=bob,$NEW" -s base '(objectClass=*)' sn > "$W/out" 2>&1 || fail "search cn=bob after the refused add"
+grep -qx 'sn: Builder' "$W/out" || fail "the refused add changed cn=bob: $(cat "$W/out")"
+add_refused 68 "an add of the naming context head (entryAlreadyExists)" <<LDIF
+dn: $BASE
+objectClass: top
+objectClass: domain
+dc: $PID_ID
+LDIF
+add_refused 32 "an add under a parent that does not exist (noSuchObject)" <<LDIF
+dn: cn=orphan,ou=deeper,ou=nowhere,$BASE
+objectClass: person
+cn: orphan
+LDIF
+grep -qi "matched DN: $BASE\$" "$W/out" || fail "noSuchObject's matchedDN is not the nearest existing ancestor ($BASE): $(cat "$W/out")"
+ldapsearch -x -LLL -H "$H" -b "$BASE" -s sub '(cn=orphan)' dn > "$W/out" 2>&1 || fail "search for the orphan"
+grep -q '^dn:' "$W/out" && fail "the refused orphan was created"
+add <<LDIF || fail "an add under an existing parent: $(cat "$W/out")"
+dn: cn=dave,$NEW
+objectClass: person
+cn: dave
+LDIF
+echo "ok: 4. an add under an existing parent works"
+
+echo "PASS: re-binds keep or replace the SASL layer as RFC 4513/4422 say; subtree modDN moves every descendant; Add refuses existing DNs and orphans"
