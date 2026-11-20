@@ -121,6 +121,13 @@ That acceptor needs a KDC to issue tickets — **irondirectory is that KDC.**
   `FipsContext`, computes the NTOWF that MS-NRPC's NETLOGON secure channel
   requires even in its AES-negotiated form. Everything after that key
   derivation (HMAC-SHA256, AES-CFB8) stays inside the FIPS boundary.
+  A second (#65, owner 2026-11-20: "Do what AD does"): `iron_crypto::md5`,
+  pure Rust and outside the `FipsContext`, computes only the `Bnd` field of
+  the Kerberos GSS checksum (RFC 4121 §4.1.1.2), which is defined as the
+  MD5 of the channel bindings and has no other hash. It keys nothing and
+  hashes only public data (our certificate's RFC 5929 hash); `Bnd` travels
+  inside the encrypted Authenticator. It lets `iron-ldapd` check AD-style
+  LDAP channel binding (ADV190023) on LDAPS/StartTLS.
 - **Directory password storage:** FIPS-approved KDF (PBKDF2 via OpenSSL).
 - **Validated on target 2026-07-06** (roadmap #1): the `ossl` crate's own
   `fips` cargo feature is NOT what provides FIPS compliance here — it

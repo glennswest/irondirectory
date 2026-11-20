@@ -124,9 +124,16 @@ first-class design constraint rather than a bolt-on.
   searches but still return `krbkey`, `krbsalt` and `netlogonntowf` (#60),
   and accept writes from an anonymous bind (#45).
 - **No NTLM.** MD5/RC4 are non-FIPS and absent; Kerberos + SASL/GSSAPI only.
-  One cited exception: `iron_crypto::md4` (pure Rust, outside the FIPS
-  context) computes the NTOWF that MS-NRPC's NETLOGON secure channel
-  requires; everything downstream of it is FIPS AES/HMAC-SHA256.
+  Two cited exceptions, pure Rust and outside the FIPS context:
+  `iron_crypto::md4` computes the NTOWF that MS-NRPC's NETLOGON secure
+  channel requires (everything downstream of it is FIPS AES/HMAC-SHA256),
+  and `iron_crypto::md5` computes the RFC 4121 `Bnd` of GSSAPI channel
+  bindings (#65), which keys nothing.
+- **GSSAPI channel binding** as Active Directory's LDAP channel binding
+  (#65): RFC 5929 `tls-server-end-point` bindings a client sends with a
+  SASL/GSSAPI bind are checked against the LDAPS/StartTLS connection and
+  refused on plain LDAP. `IRON_LDAP_CHANNEL_BINDING=when-supported`
+  (default) accepts a bind without bindings; `always` refuses one over TLS.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full rationale.
 

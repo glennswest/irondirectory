@@ -5,6 +5,22 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-20
+- **feat:** iron-ldapd checks GSSAPI channel bindings as Active Directory
+  does (#65, owner decision). The RFC 4121 `Bnd` a client sends with a
+  SASL/GSSAPI bind must match the RFC 5929 `tls-server-end-point` of the
+  LDAPS/StartTLS connection, and is refused on plain LDAP, so a bind
+  relayed through a TLS-terminating proxy fails. A bind without bindings is
+  accepted (`IRON_LDAP_CHANNEL_BINDING=when-supported`, the default) or,
+  with `always`, refused over TLS.
+- **feat:** `iron_crypto::md5`, pure Rust and outside the FIPS context, a
+  cited D4 exception like `md4`, used only for the `Bnd` checksum.
+- **test:** `test/ldap-channel-binding-e2e.sh` (+ `tls_relay.py`,
+  `ldap_cbind_impacket.py`): real `ldapwhoami -Y GSSAPI` with
+  `SASL_CBINDING=tls-endpoint` over LDAPS and StartTLS, through a relay
+  with another certificate (refused), plain LDAP with impacket-built
+  tokens, and the `always` setting.
+
 ### 2026-11-19
 - **docs:** live-infrastructure.md no longer quotes iron-ldap's old
   extended-operation refusal or calls the WhoAmI exop and Netlogon Schannel

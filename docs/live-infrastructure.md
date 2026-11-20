@@ -249,9 +249,9 @@ defaults to requiring StartTLS for a plain `ldap://` URI unless
 `ldap_id_use_start_tls = false` is set explicitly (this test instance has
 no TLS cert configured).
 
-Deliberately scoped out (documented, not silent): channel binding
-verification, delegation (`GSS_C_DELEG_FLAG`), and integrity/
-confidentiality security layers for LDAP traffic itself.
+Scoped out at the time: channel binding verification (built since, #65),
+delegation (`GSS_C_DELEG_FLAG`, declined by design), and integrity/
+confidentiality security layers for LDAP traffic itself (built since, #20).
 
 **RHEL enrollment + host keytab; GSSAPI SSH SSO + rocketsmbd `sec=krb5`
 (#8)** — new `iron-kdc-ctl export-keytab <principal> <output-file>`
@@ -843,10 +843,10 @@ by Terragrunt + the shared `terraform-modules//modules/proxmox-fedora-vm?ref=v0.
       identity via `iron-ldap`, and `su` prompts for and validates a real
       password against `iron-kdc`, caching a genuine TGT. Found and fixed
       three live interop bugs unit tests couldn't have caught (see
-      Live infrastructure below). **Remaining (deliberately out of
-      scope):** channel binding verification, delegation
-      (`GSS_C_DELEG_FLAG`), integrity/confidentiality security layers for
-      LDAP traffic itself (StartTLS/LDAPS covers this instead).
+      Live infrastructure below). **Left out at the time:** channel
+      binding verification (built since, #65), delegation
+      (`GSS_C_DELEG_FLAG`, declined by design), integrity/confidentiality
+      security layers for LDAP traffic itself (built since, #20).
 - [x] RHEL enrollment + host keytab; GSSAPI SSO to SSH and rocketsmbd
       `sec=krb5` (#8, CLOSED): new `iron-kdc-ctl export-keytab`
       subcommand (the keytab I/O code has existed since #5 but never
