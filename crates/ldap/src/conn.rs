@@ -17,6 +17,17 @@ pub enum Conn<S> {
     Tls(tokio_openssl::SslStream<S>),
 }
 
+impl<S> Conn<S> {
+    /// The channel bindings of this connection once StartTLS has run
+    /// (`crate::tls::connection_binding`); `None` while plaintext.
+    pub fn tls_binding(&self) -> Option<Vec<u8>> {
+        match self {
+            Conn::Plain(_) => None,
+            Conn::Tls(s) => crate::tls::connection_binding(s.ssl()),
+        }
+    }
+}
+
 impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
     /// Performs the StartTLS server handshake, consuming the plaintext
     /// connection and returning the upgraded one. A no-op (returns `self`

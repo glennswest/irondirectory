@@ -24,6 +24,14 @@
 //! port; setting IRON_LDAP_LDAPS_LISTEN too additionally opens a
 //! dedicated implicit-TLS (ldaps://) port using the same cert/key.
 //!
+//!   IRON_LDAP_CHANNEL_BINDING=when-supported   (or `always`)
+//!
+//! GSSAPI channel bindings (#65), as Active Directory's LDAP channel
+//! binding: the RFC 5929 tls-server-end-point bindings a client sends with
+//! a SASL/GSSAPI bind are always checked against the LDAPS/StartTLS
+//! connection, and refused on plain LDAP. `when-supported` accepts a bind
+//! that carries none; `always` refuses one over TLS.
+//!
 //!   IRON_LDAP_REFERRALS=          (unset = no referrals)
 //!
 //! Naming contexts this instance doesn't host, for cross-NC referrals
@@ -123,6 +131,10 @@ async fn main() -> anyhow::Result<()> {
     let ldaps_addr = env("IRON_LDAP_LDAPS_LISTEN");
     let tls_cert = env("IRON_LDAP_TLS_CERT");
     let tls_key = env("IRON_LDAP_TLS_KEY");
+    let channel_binding = match env("IRON_LDAP_CHANNEL_BINDING") {
+        Some(v) => v.parse().map_err(|e: String| anyhow::anyhow!("IRON_LDAP_CHANNEL_BINDING: {e}"))?,
+        None => iron_ldap::gssapi::accept::ChannelBindingPolicy::default(),
+    };
     let referrals = match env("IRON_LDAP_REFERRALS") {
         Some(raw) => parse_referrals(&raw)?,
         None => Vec::new(),
@@ -158,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
         (None, None) => None,
         _ => anyhow::bail!("IRON_LDAP_TLS_CERT and IRON_LDAP_TLS_KEY must be set together"),
     };
-    let app = AppState::new(store, index_spec, tls_acceptor.clone(), referrals, topology, Some(own_partition_id));
+    let app = AppState::new(store, index_spec, tls_acceptor.clone(), referrals, topology, Some(own_partition_id), channel_binding);
 
     let mut tasks = Vec::new();
 

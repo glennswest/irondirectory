@@ -14,6 +14,7 @@ pub mod digest;
 pub mod hmac;
 pub mod kerberos;
 pub mod md4;
+pub mod md5;
 pub mod pbkdf2;
 pub mod sign;
 

@@ -315,12 +315,16 @@ async fn send_encoded<S: AsyncRead + AsyncWrite + Unpin>(
 /// connection when `Some` -- pass `None` from `serve_ldaps` (StartTLS
 /// over an already-implicit-TLS LDAPS connection is meaningless) and
 /// `Some` from the plaintext `serve` listener when LDAPS/TLS is
-/// configured at all.
-pub async fn handle_connection<S>(stream: S, app: Arc<AppState>, tls_acceptor: Option<Arc<SslAcceptor>>)
+/// configured at all. `ldaps_binding` is the channel bindings of an LDAPS
+/// connection (`crate::tls::connection_binding`), `None` from `serve`.
+pub async fn handle_connection<S>(stream: S, app: Arc<AppState>, tls_acceptor: Option<Arc<SslAcceptor>>, ldaps_binding: Option<Vec<u8>>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut conn = Conn::Plain(stream);
+    // GSS channel bindings of this connection (#65): set from the start on
+    // LDAPS, after the handshake on StartTLS, `None` while plaintext.
+    let mut tls_binding = ldaps_binding;
     let mut buf = Vec::new();
     let mut sasl_state = SaslSession::default();
     // RFC 4513 §3 authzId this connection is currently bound as -- `None`
@@ -357,8 +361,9 @@ where
                 // GSS_S_BAD_QOP). So `handle_bind` hands back the new
                 // layer instead of installing it, and it replaces the old
                 // one (RFC 4422 §3.8) only after the response is sent.
+                let channel = crate::gssapi::accept::Channel { tls_binding: tls_binding.as_deref(), policy: app.channel_binding };
                 let (resp, identity, new_layer) =
-                    handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req, &mut sasl_state.negotiation).await;
+                    handle_bind(&mut *app.store.lock().await, app.fips.as_ref(), &req, &mut sasl_state.negotiation, channel).await;
                 if resp.result_code != ResultCode::SaslBindInProgress {
                     bound_identity = identity;
                 }
@@ -446,6 +451,7 @@ where
                         }
                     };
                     buf.clear(); // any bytes buffered before the handshake were plaintext framing only
+                    tls_binding = conn.tls_binding();
                 }
             }
             // RFC 4532 "Who am I?" -- reports this connection's current
@@ -654,6 +660,7 @@ async fn handle_bind(
     fips: Option<&iron_crypto::FipsContext>,
     req: &BindRequest,
     sasl_state: &mut SaslState,
+    channel: crate::gssapi::accept::Channel<'_>,
 ) -> (BindResponse, Option<String>, Option<SecurityLayer>) {
     if req.version != 3 {
         *sasl_state = SaslState::None;
@@ -670,7 +677,7 @@ async fn handle_bind(
             let identity = (code == ResultCode::Success).then(|| format!("dn:{}", req.name.as_str()));
             (BindResponse::new(code, String::new().into(), String::new().into(), None, None), identity, None)
         }
-        AuthenticationChoice::Sasl(creds) => handle_sasl_bind(store, fips, creds, sasl_state).await,
+        AuthenticationChoice::Sasl(creds) => handle_sasl_bind(store, fips, creds, sasl_state, channel).await,
         _ => {
             *sasl_state = SaslState::None;
             (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "unrecognized authentication choice".into(), None, None), None, None)
@@ -690,6 +697,7 @@ async fn handle_sasl_bind(
     fips: Option<&iron_crypto::FipsContext>,
     creds: &SaslCredentials,
     sasl_state: &mut SaslState,
+    channel: crate::gssapi::accept::Channel<'_>,
 ) -> (BindResponse, Option<String>, Option<SecurityLayer>) {
     if creds.mechanism.as_str() != "GSSAPI" {
         *sasl_state = SaslState::None;
@@ -718,7 +726,15 @@ async fn handle_sasl_bind(
                 let entry = store.get_entry(&dn).await.ok()??;
                 iron_kdc::principal::keys(&entry).ok()
             };
-            match crate::gssapi::accept::accept(fips, input_token, lookup).await {
+            let accepted = crate::gssapi::accept::accept(fips, input_token, channel, lookup).await;
+            match &accepted {
+                Ok(a) if a.channel_bound => {
+                    tracing::info!(client = %a.client_principal, "GSSAPI channel bindings verified (tls-server-end-point)")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::info!("GSSAPI bind refused: {e}"),
+            }
+            match accepted {
                 Ok(accepted) => match accepted.output_token {
                     Some(tok) => {
                         *sasl_state = SaslState::AwaitingApRepAck {

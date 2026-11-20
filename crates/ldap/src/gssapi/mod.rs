@@ -15,8 +15,9 @@
 //! Mutual authentication (when requested, which real LDAP GSSAPI
 //! clients always do) and all three RFC 4752 security layers: none,
 //! integrity and confidentiality, with LDAP traffic after the bind
-//! wrapped in whichever the client picks (`wrap`). Delegation is
-//! declined and channel bindings are not checked (see `accept`).
+//! wrapped in whichever the client picks (`wrap`). Channel bindings are
+//! checked against TLS as Active Directory does (#65), and delegation is
+//! declined (see `accept`).
 
 pub mod accept;
 pub mod token;

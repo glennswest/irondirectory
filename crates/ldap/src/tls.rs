@@ -13,7 +13,38 @@
 
 use std::path::Path;
 
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use openssl::hash::MessageDigest;
+use openssl::nid::Nid;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslRef};
+use openssl::x509::X509Ref;
+
+/// The `application_data` of a TLS connection's GSS channel bindings
+/// (#65): `tls-server-end-point:` followed by the RFC 5929 §4.1 hash of
+/// `cert` (our own certificate) -- the hash of its signature algorithm,
+/// SHA-256 when that is MD5 or SHA-1 or the algorithm names no hash
+/// (Ed25519), as OpenLDAP's `tlso_session_endpoint` does.
+pub fn server_end_point(cert: &X509Ref) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    let sig_hash = cert.signature_algorithm().object().nid().signature_algorithms().map(|a| a.digest);
+    let md = match sig_hash {
+        Some(Nid::MD5) | Some(Nid::SHA1) | None => MessageDigest::sha256(),
+        Some(nid) => MessageDigest::from_nid(nid).unwrap_or_else(MessageDigest::sha256),
+    };
+    let mut out = b"tls-server-end-point:".to_vec();
+    out.extend_from_slice(&cert.digest(md)?);
+    Ok(out)
+}
+
+/// [`server_end_point`] of the certificate `ssl` presented, if any.
+pub fn connection_binding(ssl: &SslRef) -> Option<Vec<u8>> {
+    let cert = ssl.certificate()?;
+    match server_end_point(cert) {
+        Ok(b) => Some(b),
+        Err(e) => {
+            tracing::warn!("cannot hash our certificate for channel bindings: {e}");
+            None
+        }
+    }
+}
 
 /// Builds an `SslAcceptor` for LDAPS from a PEM certificate + private key.
 /// Uses Mozilla's "intermediate" TLS server profile (TLS 1.2 minimum,

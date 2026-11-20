@@ -82,6 +82,10 @@ pub struct AppState {
     /// `NoPartitionFor` path `session::referral_for` checks. See
     /// `session::proactive_referral`, checked before any local lookup.
     pub own_partition_id: Option<iron_partition::PartitionId>,
+    /// Whether GSSAPI binds over TLS must carry channel bindings (#65,
+    /// `IRON_LDAP_CHANNEL_BINDING`); bindings a client sends are always
+    /// checked.
+    pub channel_binding: gssapi::accept::ChannelBindingPolicy,
 }
 
 impl AppState {
@@ -92,6 +96,7 @@ impl AppState {
         referrals: Vec<(Dn, String)>,
         topology: Option<PartitionRegistry>,
         own_partition_id: Option<iron_partition::PartitionId>,
+        channel_binding: gssapi::accept::ChannelBindingPolicy,
     ) -> Arc<Self> {
         let fips = match FipsContext::new() {
             Ok(f) => Some(f),
@@ -112,6 +117,7 @@ impl AppState {
             referrals,
             topology,
             own_partition_id,
+            channel_binding,
         })
     }
 
@@ -136,7 +142,7 @@ pub async fn serve(listener: TcpListener, app: Arc<AppState>) -> std::io::Result
         let app = app.clone();
         let tls_acceptor = app.tls_acceptor.clone();
         tokio::spawn(async move {
-            session::handle_connection(stream, app, tls_acceptor).await;
+            session::handle_connection(stream, app, tls_acceptor, None).await;
             tracing::info!(%peer, "LDAP connection closed");
         });
     }
@@ -176,7 +182,8 @@ pub async fn serve_ldaps(
                 tracing::warn!(%peer, "TLS handshake failed: {e}");
                 return;
             }
-            session::handle_connection(stream, app, None).await;
+            let binding = tls::connection_binding(stream.ssl());
+            session::handle_connection(stream, app, None, binding).await;
             tracing::info!(%peer, "LDAPS connection closed");
         });
     }
