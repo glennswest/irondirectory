@@ -242,6 +242,15 @@ collision). sc-build clean with clippy -D warnings at e24bf13;
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
 
+## Done (2026-11-20): #74 review of finding 366e637ff815 (same as #73)
+
+Reviewed at 60ceb1b (2026-11-13), before #73's fix (0607a84). No new code:
+`is_our_tgs` refuses non-krbtgt tickets before key lookup; an incoming
+cross-realm TGT needs the provisioned `krbtgt/OURS@THEIRS` key (the trust).
+Re-verified at 8f4ed07: unit test + `test/tgs-service-ticket-e2e.sh` PASS.
+That trust check is only as good as LDAP's refusal to write key attributes:
+filed #75 (P1, proposed).
+
 ## In progress (2026-11-20): #71 LDAP Add overwrote an existing entry
 
 `handle_add`: existing DN -> entryAlreadyExists (68) before a SID is
