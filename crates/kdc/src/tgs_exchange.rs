@@ -33,11 +33,26 @@ use rasn_kerberos::{
     Ticket, TicketFlags, TgsRep, TransitedEncoding,
 };
 
-use crate::krberror::{self, KDC_ERR_S_PRINCIPAL_UNKNOWN, KRB_AP_ERR_BADMATCH, KRB_AP_ERR_BAD_INTEGRITY, KRB_AP_ERR_SKEW, KRB_AP_ERR_TKT_EXPIRED};
+use crate::krberror::{self, KDC_ERR_S_PRINCIPAL_UNKNOWN, KRB_AP_ERR_BADMATCH, KRB_AP_ERR_NOT_US, KRB_AP_ERR_BAD_INTEGRITY, KRB_AP_ERR_SKEW, KRB_AP_ERR_TKT_EXPIRED};
 use crate::wire::KdcResponse;
 use crate::{krbtgt_principal_name, principal_name_to_string, AppState, TICKET_LIFETIME_SECS, CLOCK_SKEW_SECS};
 
 const PA_TGS_REQ: i32 = 1;
+
+/// Whether `sname` names this KDC's ticket-granting service: exactly two
+/// components, `krbtgt` and `our_realm` -- `krbtgt/OURS@OURS` for our own
+/// TGT, `krbtgt/OURS@THEIRS` for a cross-realm one (finding 366e637ff815,
+/// #73). Only such a ticket may be presented in a TGS-REQ (RFC 4120
+/// §3.3.2: the TGS uses "the ticket-granting ticket"); any other is a
+/// service ticket, sealed with that service's key, and accepting it would
+/// let the holder of any service ticket -- or of the service's key --
+/// mint tickets for every other service as the ticket's client. The
+/// first component is matched exactly, as MIT's `krb5_is_tgs_principal`
+/// does; the realm without case, as realms are compared elsewhere here.
+fn is_our_tgs(sname: &rasn_kerberos::PrincipalName, our_realm: &str) -> bool {
+    let parts: Vec<String> = sname.string.iter().map(crate::gstring_to_string).collect();
+    matches!(parts.as_slice(), [krbtgt, realm] if krbtgt == "krbtgt" && realm.eq_ignore_ascii_case(our_realm))
+}
 
 pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     let realm = &req.req_body.realm;
@@ -66,6 +81,10 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     // principal). Model-correct but not live-tested beyond one realm
     // (D10): there's no second realm/partition deployed yet to chain
     // against.
+    if !is_our_tgs(&ap_req.ticket.sname, &app.realm) {
+        let named = principal_name_to_string(&ap_req.ticket.sname);
+        return krberror::build(KRB_AP_ERR_NOT_US, &realm_str, kdc_sname, Some(format!("ticket for {named} is not a ticket-granting ticket for {}", app.realm)), None).into();
+    }
     let issuer_principal = format!(
         "{}@{}",
         principal_name_to_string(&ap_req.ticket.sname),
@@ -394,3 +413,25 @@ async fn referral_tgs_rep(
     Some(KdcResponse::TgsRep(tgs_rep))
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::string_to_principal_name as pn;
+
+    #[test]
+    fn only_our_krbtgt_is_a_tgt() {
+        assert!(is_our_tgs(&pn("krbtgt/EXAMPLE.LO"), "EXAMPLE.LO"));
+        assert!(is_our_tgs(&pn("krbtgt/example.lo"), "EXAMPLE.LO"));
+        // Service tickets (366e637ff815): refused whatever key seals them.
+        assert!(!is_our_tgs(&pn("ldap/dc1.example.lo"), "EXAMPLE.LO"));
+        assert!(!is_our_tgs(&pn("kadmin/changepw"), "EXAMPLE.LO"));
+        assert!(!is_our_tgs(&pn("host/krbtgt"), "EXAMPLE.LO"));
+        // Another realm's TGS, a one-component krbtgt, extra components,
+        // and a case-folded service name are not ours either.
+        assert!(!is_our_tgs(&pn("krbtgt/OTHER.LO"), "EXAMPLE.LO"));
+        assert!(!is_our_tgs(&pn("krbtgt"), "EXAMPLE.LO"));
+        assert!(!is_our_tgs(&pn("krbtgt/EXAMPLE.LO/extra"), "EXAMPLE.LO"));
+        assert!(!is_our_tgs(&pn("KRBTGT/EXAMPLE.LO"), "EXAMPLE.LO"));
+    }
+}

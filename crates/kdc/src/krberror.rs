@@ -16,6 +16,8 @@ pub const KRB_AP_ERR_BAD_INTEGRITY: i32 = 31;
 pub const KRB_AP_ERR_SKEW: i32 = 37;
 pub const KRB_AP_ERR_BADMATCH: i32 = 36;
 pub const KRB_AP_ERR_MODIFIED: i32 = 41;
+/// RFC 4120 §7.5.9: "The ticket isn't for us".
+pub const KRB_AP_ERR_NOT_US: i32 = 35;
 pub const KRB_ERR_GENERIC: i32 = 60;
 
 /// Builds a `KRB-ERROR` message. `sname`/`realm` identify the KDC/TGS

@@ -6,6 +6,15 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-20
+- **fix:** iron-kdcd's TGS accepted any ticket it could decrypt as a TGT
+  (finding 366e637ff815, #73, critical): it looked up the key of whatever
+  service the presented ticket named, so a service ticket (e.g. for
+  `ldap/...`) bought tickets for every other service as its client. Only
+  a `krbtgt/<our realm>` ticket is accepted now; any other is refused with
+  `KRB_AP_ERR_NOT_US` before a key is looked up.
+- **test:** `test/tgs-service-ticket-e2e.sh` (+ `tgs_service_ticket_impacket.py`):
+  impacket presents alice's `ldap/127.0.0.1` service ticket as a TGT
+  (refused), a real TGT still works (impacket and MIT kvno).
 - **feat:** iron-ldapd checks GSSAPI channel bindings as Active Directory
   does (#65, owner decision). The RFC 4121 `Bnd` a client sends with a
   SASL/GSSAPI bind must match the RFC 5929 `tls-server-end-point` of the
