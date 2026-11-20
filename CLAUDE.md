@@ -242,14 +242,16 @@ collision). sc-build clean with clippy -D warnings at e24bf13;
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
 
-## In progress (2026-11-20): #73 P0 finding 366e637ff815 (TGS took service tickets)
+## Done (2026-11-20): #73 P0 finding 366e637ff815 (TGS took service tickets)
 
-- [x] `test/tgs-service-ticket-e2e.sh` (impacket: ldap/ service ticket sent
-      as a TGT) committed first, run SC_BUILD_EXPECT_FAIL on the unfixed KDC.
-- [ ] `tgs_exchange::is_our_tgs`: only krbtgt/<our realm> is a TGT, else
-      KRB_AP_ERR_NOT_US before any key lookup; unit test; e2e PASS.
-- Majors from the same review (6bbcf7596b07, aa60e7a85de9, bf4c13fcebad,
-  d5cd34a5fa12, e925e45000f8, f7d57dd68673) follow as P1 per #73.
+`tgs_exchange::is_our_tgs`: only krbtgt/<our realm> is a TGT, else
+KRB_AP_ERR_NOT_US before any key lookup. `test/tgs-service-ticket-e2e.sh`
+failed as expected on the unfixed KDC (0da439b, SC_BUILD_EXPECT_FAIL) and
+passes at 0607a84; unit test + clippy -D warnings pass at 0607a84. Cross-
+realm referral tickets (krbtgt/TARGET@US, checked at TARGET) still pass the
+check by construction; no e2e chases one yet. Majors from the same review
+(6bbcf7596b07, aa60e7a85de9, bf4c13fcebad, d5cd34a5fa12, e925e45000f8,
+f7d57dd68673) follow as P1 per #73.
 
 ## Done (2026-11-20): #65 GSSAPI channel binding, as AD does
 
