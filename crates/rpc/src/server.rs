@@ -1,7 +1,6 @@
-//! A minimal `ncacn_ip_tcp` DCE/RPC listener (#19) -- see crate docs for
-//! why this transport (not `ncacn_np`/SMB named pipes, which is
-//! `rocketsmbd`'s territory) and why it's still genuinely useful (real
-//! Samba `rpcclient`/`net rpc` can point straight at it).
+//! The DCE/RPC connection loop, over `ncacn_ip_tcp` (#19, [`serve`]) or
+//! over an SMB named pipe forwarded by rocketsmbd ([`crate::pipe`], #53),
+//! which adds the SMB session's identity and key ([`PipeIdentity`]).
 //!
 //! One presentation-context binding per connection (the abstract syntax
 //! negotiated by that connection's single `bind` PDU) -- real clients
@@ -17,10 +16,11 @@
 use std::sync::Arc;
 
 use iron_partition::Sid;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 use crate::pdu::{self, CtxResult, PduError, SecTrailer};
+use crate::pipe::PipeIdentity;
 use crate::schannel::{self, AUTH_LEVEL_INTEGRITY, AUTH_LEVEL_PRIVACY, AUTH_TYPE_NETLOGON};
 use crate::uuid::{LSARPC_SYNTAX, NETLOGON_SYNTAX, SAMR_SYNTAX};
 use crate::{lsarpc, netlogon, samr, CallError};
@@ -52,7 +52,8 @@ pub async fn serve(listener: TcpListener, app: Arc<AppState>) -> std::io::Result
         tracing::info!(%peer, "accepted RPC connection");
         let app = app.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, peer, app).await {
+            let peer = peer.to_string();
+            if let Err(e) = handle_connection(stream, &peer, app, None).await {
                 tracing::debug!(%peer, "RPC connection ended: {e}");
             }
             tracing::info!(%peer, "RPC connection closed");
@@ -60,7 +61,7 @@ pub async fn serve(listener: TcpListener, app: Arc<AppState>) -> std::io::Result
     }
 }
 
-async fn read_pdu(stream: &mut TcpStream) -> std::io::Result<Option<Vec<u8>>> {
+async fn read_pdu<S: AsyncRead + Unpin>(stream: &mut S) -> std::io::Result<Option<Vec<u8>>> {
     let mut header = [0u8; 16];
     if stream.read_exact(&mut header).await.is_err() {
         return Ok(None);
@@ -87,7 +88,7 @@ struct SchannelAuth {
 }
 
 /// What an authenticated bind asks for: the binding, or a `bind_nak` reason.
-fn schannel_bind(app: &AppState, peer: std::net::SocketAddr, trailer: SecTrailer, value: &[u8]) -> Result<SchannelAuth, u16> {
+fn schannel_bind(app: &AppState, peer: &str, trailer: SecTrailer, value: &[u8]) -> Result<SchannelAuth, u16> {
     if trailer.auth_type != AUTH_TYPE_NETLOGON {
         tracing::warn!(%peer, auth_type = trailer.auth_type, "bind with an auth type other than Netlogon (68) refused");
         return Err(pdu::NAK_AUTH_TYPE_NOT_RECOGNIZED);
@@ -112,7 +113,9 @@ fn schannel_bind(app: &AppState, peer: std::net::SocketAddr, trailer: SecTrailer
 /// flags, a 4-byte buffer.
 const NL_AUTH_MESSAGE_RESPONSE: [u8; 12] = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
-async fn handle_connection(mut stream: TcpStream, peer: std::net::SocketAddr, app: Arc<AppState>) -> std::io::Result<()> {
+/// Serves one connection until it closes. `identity` is the SMB session's
+/// when the connection is a forwarded pipe, `None` over TCP.
+pub async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, peer: &str, app: Arc<AppState>, identity: Option<PipeIdentity>) -> std::io::Result<()> {
     let mut bound: Option<(u16, BoundInterface)> = None;
     let mut netlogon_session = netlogon::Session::default();
     let mut auth: Option<SchannelAuth> = None;
@@ -198,7 +201,7 @@ async fn handle_connection(mut stream: TcpStream, peer: std::net::SocketAddr, ap
                 };
                 let binding = auth.as_ref().map(|a| netlogon::Binding { computer: a.computer.clone(), auth_level: a.level });
                 let status = match bound {
-                    Some((ctx_id, iface)) if ctx_id == req.ctx_id => match dispatch(&app, &mut netlogon_session, binding.as_ref(), iface, req.opnum, &stub).await {
+                    Some((ctx_id, iface)) if ctx_id == req.ctx_id => match dispatch(&app, &mut netlogon_session, binding.as_ref(), identity.as_ref(), iface, req.opnum, &stub).await {
                         Ok(stub) => Ok(stub),
                         Err(e) => {
                             tracing::warn!(%peer, ?iface, opnum = req.opnum, "RPC call faulted: {e:?}");
@@ -250,7 +253,7 @@ fn protect_response(app: &AppState, a: &mut SchannelAuth, call_id: u32, ctx_id: 
     Ok(pdu::build_response_auth(call_id, ctx_id, stub.len() as u32, &wire, trailer, &sig))
 }
 
-async fn dispatch(app: &AppState, netlogon_session: &mut netlogon::Session, binding: Option<&netlogon::Binding>, iface: BoundInterface, opnum: u16, stub: &[u8]) -> Result<Vec<u8>, CallError> {
+async fn dispatch(app: &AppState, netlogon_session: &mut netlogon::Session, binding: Option<&netlogon::Binding>, identity: Option<&PipeIdentity>, iface: BoundInterface, opnum: u16, stub: &[u8]) -> Result<Vec<u8>, CallError> {
     match iface {
         BoundInterface::Lsarpc => match opnum {
             lsarpc::OPNUM_OPEN_POLICY2 => Ok(lsarpc::open_policy2()),
@@ -266,7 +269,7 @@ async fn dispatch(app: &AppState, netlogon_session: &mut netlogon::Session, bind
             }
             _ => Err(CallError::UnknownOpnum),
         },
-        BoundInterface::Samr => samr::dispatch(&app.samr, &app.domain_info.domain_sid, opnum, stub).await,
+        BoundInterface::Samr => samr::dispatch(app, identity, opnum, stub).await,
         BoundInterface::Netlogon => netlogon::dispatch(&app.netlogon, netlogon_session, binding, opnum, stub).await,
     }
 }

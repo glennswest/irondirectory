@@ -17,7 +17,6 @@
 
 use iron_partition::{Dn, ForestId, Partition, PartitionRegistry};
 use iron_rpc::netlogon::NTOWF_ATTR;
-use iron_store::index::IndexSpec;
 use iron_store::store::Store;
 
 fn env(name: &str) -> Option<String> {
@@ -65,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
 
     let ntowf = iron_crypto::md4::ntowf(secret);
     entry.set(NTOWF_ATTR, [hex_encode(&ntowf)]);
-    store.put_entry(&dn, &entry, &IndexSpec::new(["cn", "member"])).await?;
+    store.put_entry(&dn, &entry, &iron_kdc::index_spec()).await?;
 
     println!("set NETLOGON secret for {account_name} (dn: {dn})");
     Ok(())

@@ -54,7 +54,11 @@ impl NdrWriter {
         self.buf.extend_from_slice(b);
     }
     pub fn pad_to_4(&mut self) {
-        while self.buf.len() % 4 != 0 {
+        self.align(4);
+    }
+    /// Pads to an `n`-byte boundary (NDR alignment: a hyper is 8).
+    pub fn align(&mut self, n: usize) {
+        while self.buf.len() % n != 0 {
             self.buf.push(0);
         }
     }
@@ -185,7 +189,11 @@ impl<'a> NdrReader<'a> {
         Ok(b)
     }
     pub fn pad_to_4(&mut self) {
-        while self.pos % 4 != 0 && self.pos < self.buf.len() {
+        self.align(4);
+    }
+    /// Skips to an `n`-byte boundary (NDR alignment: a hyper is 8).
+    pub fn align(&mut self, n: usize) {
+        while self.pos % n != 0 && self.pos < self.buf.len() {
             self.pos += 1;
         }
     }

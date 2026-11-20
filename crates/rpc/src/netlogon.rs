@@ -392,29 +392,41 @@ async fn password_set2(state: &NetlogonState, binding: Option<&Binding>, account
     };
     let utf16 = decrypt_trust_password(&state.fips, &channel.session_key, encrypted)?;
 
-    let (dn, mut entry) = find_account(state, account_name).await?;
+    let (dn, entry) = find_account(state, account_name).await?;
+    let principal = store_password(state, &dn, entry, account_name, &utf16, false).await?;
+    Ok((return_credential, principal))
+}
+
+/// Gives the account at `dn` the password `utf16` (UTF-16LE, as Windows
+/// sends it): its NTOWF and Kerberos keys, after the domain's password
+/// policy (#70) as a reset -- a machine account is held only to its
+/// length. `must_change` marks it expired (`pwdLastSet` 0). Used by
+/// `NetrServerPasswordSet2` and by SAMR's `SamrSetInformationUser2` (#53).
+/// Returns the Kerberos principal the keys are under.
+pub async fn store_password(state: &NetlogonState, dn: &Dn, mut entry: iron_store::model::Entry, account_name: &str, utf16: &[u8], must_change: bool) -> Result<String, String> {
     // NTOWF over the raw UTF-16 bytes (Windows machine passwords are
     // random UTF-16 code units, not always valid Unicode); the Kerberos
     // keys over its UTF-8 form with unpaired surrogates replaced, as
     // Samba's CH_UTF16MUNGED does.
-    let ntowf = iron_crypto::md4::md4(&utf16);
+    let ntowf = iron_crypto::md4::md4(utf16);
     let units: Vec<u16> = utf16.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
     let password = String::from_utf16_lossy(&units);
     let principal = iron_kdc::principal::principal_name(&entry).map(str::to_string).unwrap_or_else(|_| format!("{account_name}@{}", state.realm));
-    // The domain's password policy (#70) as for any reset; a machine
-    // account is held only to its length.
     let mut store = state.store.lock().await;
     let policy = iron_kdc::policy::Policy::load(&mut store, &state.base_dn).await.map_err(|e| format!("reading the password policy: {e}"))?;
     drop(store);
     iron_kdc::policy::check(&state.fips, &policy, &entry, password.as_bytes(), iron_kdc::policy::Mode::Reset, iron_kdc::policy::filetime_now()).map_err(|v| v.to_string())?;
     iron_kdc::principal::set_password(&state.fips, &mut entry, &principal, password.as_bytes()).map_err(|e| format!("Kerberos keys: {e}"))?;
+    if must_change {
+        entry.set(iron_kdc::policy::ATTR_PWD_LAST_SET, ["0"]);
+    }
     entry.set(NTOWF_ATTR, [ntowf.iter().map(|b| format!("{b:02x}")).collect::<String>()]);
     if entry.get("samaccountname").is_none() {
         entry.set("samaccountname", [account_name.to_string()]);
     }
     let mut store = state.store.lock().await;
-    store.put_entry(&dn, &entry, &iron_kdc::index_spec()).await.map_err(|e| format!("write of {dn} failed: {e}"))?;
-    Ok((return_credential, principal))
+    store.put_entry(dn, &entry, &iron_kdc::index_spec()).await.map_err(|e| format!("write of {dn} failed: {e}"))?;
+    Ok(principal)
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {

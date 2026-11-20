@@ -9,35 +9,33 @@
 //! [impacket](https://github.com/fortra/impacket)'s independent
 //! implementation of these same three interfaces.
 //!
-//! **Transport**: unauthenticated `ncacn_ip_tcp` only (a plain TCP
-//! listener speaking DCE/RPC directly) -- not the `ncacn_np` (SMB named
-//! pipe) transport a real Windows `Add-Computer` actually uses. Hosting
-//! `\PIPE\samr`/`\PIPE\lsarpc`/`\PIPE\netlogon` over SMB is `rocketsmbd`'s
-//! territory (the sister project's "SMB half" role); this crate exposes
-//! its dispatch as an ordinary `&[u8] -> Vec<u8>` PDU-in/PDU-out function
-//! so a future SMB-hosted transport can reuse it without depending on
-//! this crate's own TCP listener. `ncacn_ip_tcp` is genuinely useful on
-//! its own, though: it's exactly what Samba's `rpcclient`/`net rpc`
-//! (real, independent DCE-RPC clients) can point straight at with `-p
-//! <port>`, giving a real interop verification path without needing SMB
-//! or a real Windows machine at all.
+//! **Transports**: `ncacn_ip_tcp` ([`server::serve`], a TCP listener speaking
+//! DCE/RPC directly: what Samba's `rpcclient`/`net rpc` reach with `-p
+//! <port>`, and what `iron-simulate` uses), and `ncacn_np` ([`pipe`], #53):
+//! SMB named pipes (`\PIPE\samr`, `\PIPE\lsarpc`, `\PIPE\netlogon` on
+//! `IPC$`), which rocketsmbd serves and forwards to a Unix socket here, one
+//! connection per pipe, after a preamble naming the SMB session's user (with
+//! the Kerberos PAC's SIDs) and its session key. Windows reaches these
+//! interfaces only over `ncacn_np`. Both run the same PDU loop
+//! ([`server::handle_connection`]).
 //!
-//! **Authentication**: the Netlogon secure channel only ([`schannel`],
-//! `auth_type` 68, #20) -- what a joining computer uses to set its own
-//! password with `NetrServerPasswordSet2`. SAMR calls that create/modify
-//! accounts are implemented unauthenticated; real Windows/Samba gate them
-//! behind an NTLMSSP or Kerberos RPC bind, which is not built (NTLMSSP
-//! needs HMAC-MD5 and SAMR's password buffers RC4, both outside D4).
-//! NETLOGON's `NetrServerReqChallenge`/`NetrServerAuthenticate3` are
-//! implemented in full including the real secure-channel cryptography
-//! (by design unauthenticated at the RPC-bind layer -- that's the whole
-//! point, authentication happens *through* these calls) -- see
-//! [`netlogon`] for the MD4/NTOWF exception this required (D4).
+//! **Authentication**: no RPC-level bind authentication except the Netlogon
+//! secure channel ([`schannel`], `auth_type` 68, #20) -- what a joining
+//! computer uses to set its own password with `NetrServerPasswordSet2`.
+//! Over a pipe, the caller is the SMB session's user: SAMR lets a Domain
+//! Admin create accounts and set their passwords
+//! (`SamrSetInformationUser2`, AES: [`samr_aes`]). Over TCP there is no
+//! caller and no session key: SAMR creates accounts unauthenticated (#76)
+//! and sets no passwords. NETLOGON's `NetrServerReqChallenge`/
+//! `NetrServerAuthenticate3` are unauthenticated at the bind by design
+//! (authentication happens *through* them) -- see [`netlogon`] for the
+//! MD4/NTOWF exception this required (D4).
 
 pub mod lsarpc;
 pub mod ndr;
 pub mod netlogon;
 pub mod pdu;
+pub mod pipe;
 pub mod samr;
 pub mod samr_aes;
 pub mod schannel;

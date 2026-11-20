@@ -1,8 +1,7 @@
-//! iron-rpcd: a minimal `ncacn_ip_tcp` DCE/RPC daemon serving SAMR,
-//! LSARPC, and NETLOGON (#19) -- see `iron_rpc`'s crate docs for scope
-//! (Netlogon secure channel auth only, no `ncacn_np`/SMB transport, no
-//! `SamrSetInformationUser2`; a computer sets its password with
-//! `NetrServerPasswordSet2` over its secure channel, #20).
+//! iron-rpcd: a DCE/RPC daemon serving SAMR, LSARPC and NETLOGON (#19)
+//! over `ncacn_ip_tcp` and, with `IRON_RPC_PIPE_SOCKET`, over SMB named
+//! pipes forwarded by rocketsmbd (`ncacn_np`, #53) -- see `iron_rpc`'s
+//! crate docs.
 //!
 //! Required:
 //!   IRON_RPC_FASTETCD_ENDPOINT   e.g. http://etcd.g8.lo:2379
@@ -15,8 +14,14 @@
 //!   IRON_RPC_REALM               Kerberos realm (default: IRON_RPC_DNS_DOMAIN
 //!                                upper-cased) -- NetrServerPasswordSet2 names a
 //!                                computer's principal <account>@<realm>
-//!   IRON_RPC_LISTEN=0.0.0.0:445  (bind address; 445 needs root, use a
-//!                                 high port for testing, e.g. 13445)
+//!   IRON_RPC_LISTEN=0.0.0.0:445  (ncacn_ip_tcp bind address; 445 needs
+//!                                 root, use a high port for testing, e.g.
+//!                                 13445)
+//!   IRON_RPC_PIPE_SOCKET         path of the Unix stream socket rocketsmbd's
+//!                                `[ipc] backend` names (#53). Created 0660
+//!                                (an existing socket file there is replaced);
+//!                                give rocketsmbd the group, nobody else: the
+//!                                preamble carries the SMB session key.
 //!
 //! Needs OPENSSL_CONF pointing at a config that activates fips.so (see
 //! docs/FIPS.md) -- NETLOGON's session-key/credential crypto refuses to
@@ -25,9 +30,10 @@
 use iron_partition::{Dn, ForestId, Partition, PartitionRegistry, Sid};
 use iron_rpc::server::{AppState, DomainInfo};
 use iron_rpc::{netlogon, samr};
-use iron_store::index::IndexSpec;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+
 use iron_store::store::Store;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UnixListener};
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -48,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
     let dns_domain = require_env("IRON_RPC_DNS_DOMAIN")?;
     let realm = env("IRON_RPC_REALM").unwrap_or_else(|| dns_domain.to_uppercase());
     let listen_addr = env("IRON_RPC_LISTEN").unwrap_or_else(|| "0.0.0.0:445".to_string());
+    let pipe_socket = env("IRON_RPC_PIPE_SOCKET");
 
     let cluster = iron_store::cluster_from_env(&endpoint, "IRON_RPC_FASTETCD")?;
     let forest = ForestId::new(pid.clone())?;
@@ -56,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
     let mut registry = PartitionRegistry::new();
     registry.insert(partition)?;
 
-    let index_spec = IndexSpec::new(["cn", "member"]);
+    let index_spec = iron_kdc::index_spec();
     let store_for_samr = Store::connect(registry.clone()).await?;
     let store_for_netlogon = Store::connect(registry).await?;
     let fips = iron_crypto::FipsContext::new()?;
@@ -66,6 +73,25 @@ async fn main() -> anyhow::Result<()> {
         samr: samr::SamrState { store: tokio::sync::Mutex::new(store_for_samr), base_dn: base_dn_parsed.clone(), index_spec },
         netlogon: netlogon::NetlogonState::new(store_for_netlogon, base_dn_parsed, fips, realm),
     });
+
+    if let Some(path) = pipe_socket {
+        // A stale socket from a previous run would make bind fail.
+        match std::fs::symlink_metadata(&path) {
+            Ok(m) if m.file_type().is_socket() => std::fs::remove_file(&path)?,
+            Ok(_) => anyhow::bail!("IRON_RPC_PIPE_SOCKET {path} exists and is not a socket"),
+            Err(_) => {}
+        }
+        let unix = UnixListener::bind(&path)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))?;
+        tracing::info!(%path, "iron-rpcd listening (ncacn_np via rocketsmbd: SAMR/LSARPC/NETLOGON)");
+        let app = app.clone();
+        tokio::spawn(async move {
+            if let Err(e) = iron_rpc::pipe::serve(unix, app).await {
+                tracing::error!("pipe listener failed: {e}");
+                std::process::exit(1);
+            }
+        });
+    }
 
     let listener = TcpListener::bind(&listen_addr).await?;
     tracing::info!(%listen_addr, "iron-rpcd listening (ncacn_ip_tcp: SAMR/LSARPC/NETLOGON)");
