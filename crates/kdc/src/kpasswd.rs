@@ -33,8 +33,14 @@
 //! nothing. A KRB-PRIV carrying a timestamp must be within the clock
 //! skew too.
 //!
-//! The password policy is a minimum length of 8 bytes (the FIPS PBKDF2
-//! minimum); a shorter one is a SOFTERROR.
+//! The new password is checked against the domain's password policy
+//! ([`crate::policy`], #70): a change of one's own password as
+//! [`crate::policy::Mode::Change`] (length, complexity, minimum age,
+//! history), a set by an administrator as [`crate::policy::Mode::Reset`]
+//! (length, complexity). A refusal is a SOFTERROR whose result string is
+//! the 30-byte AD policy record ([`crate::policy::Policy::blob`]), as AD
+//! sends it: MIT `kpasswd` and impacket decode it into the policy's
+//! terms; the specific reason goes to the KDC's log.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -108,10 +114,12 @@ pub struct ChgPwdData {
 struct Refusal {
     code: u16,
     text: String,
+    /// The result string sent instead of `text` (the policy record).
+    data: Option<Vec<u8>>,
 }
 
 fn refuse(code: u16, text: impl Into<String>) -> Refusal {
-    Refusal { code, text: text.into() }
+    Refusal { code, text: text.into(), data: None }
 }
 
 /// What a verified AP-REQ establishes.
@@ -168,11 +176,11 @@ async fn handle_inner(app: &AppState, request: &[u8], local: IpAddr) -> Result<V
     let (code, text) = match outcome {
         Ok(target) => {
             tracing::info!(requester = %format!("{}@{}", auth.client, auth.client_realm), %target, "kpasswd: password set");
-            (result::SUCCESS, "Password changed".to_string())
+            (result::SUCCESS, b"Password changed".to_vec())
         }
         Err(r) => {
             tracing::warn!(requester = %format!("{}@{}", auth.client, auth.client_realm), code = r.code, "kpasswd: refused: {}", r.text);
-            (r.code, r.text)
+            (r.code, r.data.unwrap_or_else(|| r.text.into_bytes()))
         }
     };
     sealed_reply(app, &auth, seq, local, code, &text).map_err(|e| refuse(result::HARDERROR, e))
@@ -286,8 +294,12 @@ async fn change(app: &AppState, auth: &Authenticated, version: u16, user_data: &
     // An entry created over LDAP has no principal name yet: it becomes
     // the name the client asked for (`<sAMAccountName>@REALM`).
     let principal = crate::principal::principal_name(&entry).map(str::to_string).unwrap_or_else(|_| target.clone());
-    if new_password.len() < 8 {
-        return Err(refuse(result::SOFTERROR, "password must be at least 8 characters"));
+    let policy = crate::policy::Policy::load(&mut store, &app.base_dn).await.map_err(|e| refuse(result::HARDERROR, format!("reading the password policy: {e}")))?;
+    let mode = if is_self { crate::policy::Mode::Change } else { crate::policy::Mode::Reset };
+    match crate::policy::check(&app.fips, &policy, &entry, &new_password, mode, crate::policy::filetime_now()) {
+        Ok(()) => {}
+        Err(v) if v.is_policy() => return Err(Refusal { code: result::SOFTERROR, text: format!("{principal}: {v}"), data: Some(policy.blob().to_vec()) }),
+        Err(v) => return Err(refuse(result::HARDERROR, v.to_string())),
     }
     crate::principal::set_password(&app.fips, &mut entry, &principal, &new_password).map_err(|e| refuse(result::SOFTERROR, e.to_string()))?;
     store.put_entry(&dn, &entry, &app.index_spec).await.map_err(|e| refuse(result::HARDERROR, e.to_string()))?;
@@ -338,9 +350,9 @@ fn host_address(ip: IpAddr) -> HostAddress {
     }
 }
 
-fn result_data(code: u16, text: &str) -> Vec<u8> {
+fn result_data(code: u16, text: &[u8]) -> Vec<u8> {
     let mut d = code.to_be_bytes().to_vec();
-    d.extend_from_slice(text.as_bytes());
+    d.extend_from_slice(text);
     d
 }
 
@@ -357,7 +369,7 @@ fn frame(ap_rep: &[u8], body: &[u8]) -> Vec<u8> {
 
 /// AP-REP (ticket session key, echoing the client's ctime/cusec) plus a
 /// KRB-PRIV under the authenticator's key carrying the result.
-fn sealed_reply(app: &AppState, auth: &Authenticated, seq: u32, local: IpAddr, code: u16, text: &str) -> Result<Vec<u8>, String> {
+fn sealed_reply(app: &AppState, auth: &Authenticated, seq: u32, local: IpAddr, code: u16, text: &[u8]) -> Result<Vec<u8>, String> {
     let rep_part = EncApRepPart { ctime: auth.authenticator.ctime.clone(), cusec: auth.authenticator.cusec.clone(), subkey: None, seq_number: Some(seq) };
     let rep_bytes = rasn::der::encode(&rep_part).map_err(|e| e.to_string())?;
     let rep_cipher = kerberos::encrypt(&app.fips, auth.ticket_enctype, &auth.ticket_session_key, USAGE_AP_REP, &rep_bytes).map_err(|e| e.to_string())?;
@@ -383,7 +395,7 @@ fn sealed_reply(app: &AppState, auth: &Authenticated, seq: u32, local: IpAddr, c
 /// A refusal before the client is authenticated: no AP-REP, a KRB-ERROR
 /// whose e-data is the result code and text (RFC 3244 §2).
 fn error_reply(app: &AppState, code: u16, text: &str) -> Vec<u8> {
-    let err = krberror::build(krberror::KRB_ERR_GENERIC, &app.realm, crate::string_to_principal_name("kadmin/changepw"), Some(text.to_string()), Some(result_data(code, text)));
+    let err = krberror::build(krberror::KRB_ERR_GENERIC, &app.realm, crate::string_to_principal_name("kadmin/changepw"), Some(text.to_string()), Some(result_data(code, text.as_bytes())));
     frame(&[], &rasn::der::encode(&err).unwrap_or_default())
 }
 
@@ -455,7 +467,7 @@ mod tests {
 
     #[test]
     fn result_data_is_big_endian_code_then_text() {
-        assert_eq!(result_data(result::ACCESSDENIED, "no"), vec![0x00, 0x05, b'n', b'o']);
+        assert_eq!(result_data(result::ACCESSDENIED, b"no"), vec![0x00, 0x05, b'n', b'o']);
     }
 
     #[test]

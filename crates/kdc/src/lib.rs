@@ -19,6 +19,7 @@ pub mod keytab;
 pub mod kpasswd;
 pub mod krberror;
 pub mod pac;
+pub mod policy;
 pub mod principal;
 pub mod replay;
 pub mod server;

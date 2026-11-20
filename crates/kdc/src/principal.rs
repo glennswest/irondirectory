@@ -70,7 +70,11 @@ fn from_hex(s: &str) -> Option<Vec<u8>> {
 /// Derives and stores fresh Kerberos keys (for [`DEFAULT_ENCTYPES`]) from
 /// `password`, generating a new random salt (>= the FIPS minimum) and
 /// resetting `kvno` to 1. Overwrites any existing `krbsalt`/`krbkey`
-/// attributes -- there is no key history/rollover in this pass.
+/// attributes (no kvno rollover), stamps `pwdLastSet` with the current
+/// time and puts the new password's key at the front of the password
+/// history (`krbpwdhistory`, #70) -- what [`crate::policy::check`] reads.
+/// It checks no policy itself: callers acting for a person run
+/// [`crate::policy::check`] first.
 ///
 /// The salt is a hex string of random bytes, not the raw random bytes
 /// themselves: it's sent to clients over the wire inside PA-ETYPE-INFO2's
@@ -85,11 +89,15 @@ pub fn set_password(ctx: &FipsContext, entry: &mut Entry, principal_name: &str, 
     let mut key_values = Vec::with_capacity(DEFAULT_ENCTYPES.len());
     for enctype in DEFAULT_ENCTYPES {
         let key = kerberos::string_to_key(ctx, enctype, password, salt.as_bytes(), None)?;
+        if enctype == crate::policy::HISTORY_ENCTYPE {
+            crate::policy::push_history(entry, &salt, &key);
+        }
         key_values.push(format!("{}:1:{}", enctype.etype_number(), to_hex(&key)));
     }
     entry.set(ATTR_PRINCIPAL_NAME, [principal_name.to_string()]);
     entry.set(ATTR_SALT, [salt]);
     entry.set(ATTR_KEY, key_values);
+    entry.set(crate::policy::ATTR_PWD_LAST_SET, [crate::policy::filetime_now().to_string()]);
     Ok(())
 }
 

@@ -116,6 +116,21 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
         return krberror::build(KRB_AP_ERR_SKEW, &realm_str, kdc_sname, Some("clock skew too great".into()), None).into();
     }
 
+    // An expired password (#70: older than the domain's maxPwdAge, or
+    // pwdLastSet 0) gets no TGT -- only, as on AD and MIT, the
+    // kadmin/changepw ticket that lets its holder set a new one. Checked
+    // after pre-auth, so it tells nothing to someone without the password.
+    if !changepw {
+        let policy = match crate::policy::Policy::load(&mut store, &app.base_dn).await {
+            Ok(p) => p,
+            Err(e) => return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some(format!("reading the password policy: {e}")), None).into(),
+        };
+        if crate::policy::password_expired(&policy, &client_entry, crate::policy::filetime_now()) {
+            tracing::info!(client = %client_principal, "AS-REQ refused: password expired");
+            return krberror::build(krberror::KDC_ERR_KEY_EXPIRED, &realm_str, kdc_sname, Some("password has expired".into()), None).into();
+        }
+    }
+
     // Server (krbtgt) key: encrypts the issued Ticket.
     let krbtgt_dn = match store
         .lookup_by_index(&app.base_dn, crate::principal::ATTR_PRINCIPAL_NAME, &format!("{}@{}", principal_name_to_string(&kdc_sname), crate::realm_to_string(realm)))

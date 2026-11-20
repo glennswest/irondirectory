@@ -1062,7 +1062,10 @@ fn principal_fqn_for(entry: &Entry, realm: &str) -> Option<String> {
 /// by an `AddRequest` won't). Refused to an anonymous connection; no
 /// fine-grained ACL check yet (D8/#4 scope) -- any authenticated bind may
 /// reset any entry's password, matching this project's current
-/// single-tier trust model.
+/// single-tier trust model. The new password is checked against the
+/// domain's password policy (`iron_kdc::policy`, #70): as a change of
+/// one's own password when the target is the bound DN, else as a reset;
+/// a refusal is `constraintViolation`, as on AD.
 async fn handle_password_modify(
     store: &mut Store,
     fips: Option<&iron_crypto::FipsContext>,
@@ -1109,6 +1112,24 @@ async fn handle_password_modify(
     let Some(principal_fqn) = principal_fqn_for(&entry, &realm) else {
         return Err(PasswordModifyError::new(ResultCode::UnwillingToPerform, "entry has no sAMAccountName/cn to derive a principal name from"));
     };
+    let Some(domain) = store.registry().iter().map(|p| p.base_dn.clone()).find(|base| dn.is_within(base)) else {
+        return Err(PasswordModifyError::new(ResultCode::Other, "no partition holds the target entry"));
+    };
+    let policy = iron_kdc::policy::Policy::load(store, &domain)
+        .await
+        .map_err(|e| PasswordModifyError::new(ResultCode::OperationsError, format!("reading the password policy: {e}")))?;
+    // Bound as the target: by DN (simple bind), or by its Kerberos
+    // principal (GSSAPI, `u:<principal>`).
+    let is_self = match bound_identity {
+        Some(b) if b.starts_with("u:") => iron_kdc::principal::principal_name(&entry).is_ok_and(|p| p.eq_ignore_ascii_case(&b[2..])),
+        Some(b) => Dn::parse(b.strip_prefix("dn:").unwrap_or(b)).is_ok_and(|b| b == dn),
+        None => false,
+    };
+    let mode = if is_self { iron_kdc::policy::Mode::Change } else { iron_kdc::policy::Mode::Reset };
+    if let Err(v) = iron_kdc::policy::check(fips, &policy, &entry, &new_passwd, mode, iron_kdc::policy::filetime_now()) {
+        let code = if v.is_policy() { ResultCode::ConstraintViolation } else { ResultCode::OperationsError };
+        return Err(PasswordModifyError::new(code, v.to_string()));
+    }
     iron_kdc::principal::set_password(fips, &mut entry, &principal_fqn, &new_passwd)
         .map_err(|e| PasswordModifyError::new(ResultCode::OperationsError, e.to_string()))?;
     store.put_entry(&dn, &entry, spec).await.map_err(|e| PasswordModifyError::new(ResultCode::OperationsError, e.to_string()))?;

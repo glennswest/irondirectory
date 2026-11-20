@@ -9,6 +9,8 @@ use crate::time::now;
 pub const KDC_ERR_C_PRINCIPAL_UNKNOWN: i32 = 6;
 pub const KDC_ERR_S_PRINCIPAL_UNKNOWN: i32 = 7;
 pub const KDC_ERR_ETYPE_NOSUPP: i32 = 14;
+/// RFC 4120 §7.5.9: "Password has expired - change password to reset".
+pub const KDC_ERR_KEY_EXPIRED: i32 = 23;
 pub const KDC_ERR_PREAUTH_FAILED: i32 = 24;
 pub const KDC_ERR_PREAUTH_REQUIRED: i32 = 25;
 pub const KRB_AP_ERR_TKT_EXPIRED: i32 = 32;

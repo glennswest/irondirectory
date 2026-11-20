@@ -401,6 +401,12 @@ async fn password_set2(state: &NetlogonState, binding: Option<&Binding>, account
     let units: Vec<u16> = utf16.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
     let password = String::from_utf16_lossy(&units);
     let principal = iron_kdc::principal::principal_name(&entry).map(str::to_string).unwrap_or_else(|_| format!("{account_name}@{}", state.realm));
+    // The domain's password policy (#70) as for any reset; a machine
+    // account is held only to its length.
+    let mut store = state.store.lock().await;
+    let policy = iron_kdc::policy::Policy::load(&mut store, &state.base_dn).await.map_err(|e| format!("reading the password policy: {e}"))?;
+    drop(store);
+    iron_kdc::policy::check(&state.fips, &policy, &entry, password.as_bytes(), iron_kdc::policy::Mode::Reset, iron_kdc::policy::filetime_now()).map_err(|v| v.to_string())?;
     iron_kdc::principal::set_password(&state.fips, &mut entry, &principal, password.as_bytes()).map_err(|e| format!("Kerberos keys: {e}"))?;
     entry.set(NTOWF_ATTR, [ntowf.iter().map(|b| format!("{b:02x}")).collect::<String>()]);
     if entry.get("samaccountname").is_none() {
