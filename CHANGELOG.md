@@ -6,6 +6,9 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-20
+- **fix:** test/federation-scale-e2e.sh: the helper that adds each naming
+  context's head was named `head`, shadowing coreutils `head` in Suite C
+  (forest id "fCould") -- renamed `add_head` (#71).
 - **feat:** iron-rpcd serves SAMR/LSARPC/NETLOGON over SMB named pipes (#53):
   `IRON_RPC_PIPE_SOCKET` is the Unix socket rocketsmbd's `[ipc] backend`
   forwards each `IPC$` pipe to, with a preamble naming the SMB session's
