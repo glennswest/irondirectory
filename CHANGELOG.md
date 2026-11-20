@@ -6,6 +6,20 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-20
+- **feat:** domain password policy, as Active Directory's (#70): `minPwdLength`,
+  `pwdHistoryLength`, `pwdProperties` (complexity), `minPwdAge` and
+  `maxPwdAge` on the domain head, checked by one `iron_kdc::policy::check`
+  in kpasswd, LDAP Password Modify and `NetrServerPasswordSet2`. History and
+  minimum age apply to one's own change, not to an administrator's reset;
+  machine accounts are held to the length only. kpasswd's SOFTERROR carries
+  AD's 30-byte policy record (decoded by MIT kpasswd and impacket); LDAP
+  answers `constraintViolation`. Every password set records `pwdLastSet` and
+  `krbpwdhistory` (past keys with their salts, at most 24). An AS-REQ for a
+  TGT with an expired password gets `KDC_ERR_KEY_EXPIRED`; a kadmin/changepw
+  ticket is still issued so the password can be changed. Absent attributes
+  are not enforced (the 8-character FIPS floor stays). `docs/PASSWORD-POLICY.md`.
+- **test:** `test/password-policy-e2e.sh`: MIT kpasswd/kinit, impacket and
+  ldappasswd against each rule, including kinit changing an expired password.
 - **fix:** iron-kdcd's TGS accepted any ticket it could decrypt as a TGT
   (finding 366e637ff815, #73, critical): it looked up the key of whatever
   service the presented ticket named, so a service ticket (e.g. for
