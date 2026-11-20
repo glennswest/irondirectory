@@ -54,6 +54,7 @@ const SAMR_CONNECT_FEATURE_USE_AES: u32 = 0x10;
 
 const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
 const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
+const STATUS_INVALID_PARAMETER: u32 = 0xC000_000D;
 const STATUS_WRONG_PASSWORD: u32 = 0xC000_006A; // the AES buffer did not authenticate or decrypt
 const STATUS_PASSWORD_RESTRICTION: u32 = 0xC000_006C;
 const STATUS_NO_SUCH_USER: u32 = 0xC000_0064;
@@ -425,8 +426,12 @@ async fn create_user2_in_domain(state: &SamrState, domain_sid: &Sid, stub: &[u8]
     let (_len, referent) = r.unicode_string_header().ok()?;
     let name = if referent != 0 { r.unicode_string_deferred().ok()? } else { return None };
     r.pad_to_4(); // AccountType (a plain ULONG) needs 4-byte alignment
-    let _account_type = r.u32().ok()?;
+    let account_type = r.u32().ok()?;
     let _desired_access = r.u32().ok()?;
+    let Some((classes, uac)) = account_shape(account_type) else {
+        tracing::warn!(%name, account_type, "SamrCreateUser2InDomain: AccountType is not one of USER_NORMAL/WORKSTATION_TRUST/SERVER_TRUST/INTERDOMAIN_TRUST_ACCOUNT");
+        return Some(create_user2_response(0, STATUS_INVALID_PARAMETER));
+    };
 
     let dn = Dn::parse(&format!("cn={name},{}", state.base_dn)).ok()?;
     let mut store = state.store.lock().await;
@@ -440,9 +445,10 @@ async fn create_user2_in_domain(state: &SamrState, domain_sid: &Sid, stub: &[u8]
     let object_sid = domain_sid.with_sub_authority(rid);
 
     let mut entry = Entry::new();
-    entry.set("objectclass", ["top", "computer"]);
+    entry.set("objectclass", classes.iter().copied());
     entry.set("cn", [name.clone()]);
     entry.set("samaccountname", [name.clone()]);
+    entry.set("useraccountcontrol", [uac.to_string()]);
     entry.set(OBJECT_SID_ATTR, [encode_binary_attr(&object_sid.encode())]);
     let descriptor = iron_partition::security_descriptor::default_descriptor(domain_sid);
     entry.set(iron_store::binary_attrs::NT_SECURITY_DESCRIPTOR_ATTR, [encode_binary_attr(&descriptor)]);
@@ -463,6 +469,20 @@ async fn create_user2_in_domain(state: &SamrState, domain_sid: &Sid, stub: &[u8]
     };
     drop(store);
     Some(create_user2_response(if status == ntstatus::SUCCESS { rid } else { 0 }, status))
+}
+
+/// MS-SAMR 2.2.1.12 `AccountType` -> the objectClasses and
+/// `userAccountControl` AD gives the new object (MS-ADTS 2.2.16).
+fn account_shape(account_type: u32) -> Option<(&'static [&'static str], u32)> {
+    const USER: &[&str] = &["top", "person", "organizationalPerson", "user"];
+    const COMPUTER: &[&str] = &["top", "person", "organizationalPerson", "user", "computer"];
+    match account_type {
+        0x0000_0010 => Some((USER, 0x0200)),       // USER_NORMAL_ACCOUNT -> UF_NORMAL_ACCOUNT
+        0x0000_0040 => Some((USER, 0x0800)),       // USER_INTERDOMAIN_TRUST_ACCOUNT
+        0x0000_0080 => Some((COMPUTER, 0x1000)),   // USER_WORKSTATION_TRUST_ACCOUNT
+        0x0000_0100 => Some((COMPUTER, 0x2000)),   // USER_SERVER_TRUST_ACCOUNT
+        _ => None,
+    }
 }
 
 fn create_user2_response(rid: u32, status: u32) -> Vec<u8> {
@@ -517,6 +537,65 @@ mod tests {
     #[test]
     fn foreign_handle_bytes_dont_parse_as_a_user_handle() {
         assert_eq!(rid_from_user_handle(&SERVER_HANDLE), None);
+    }
+
+    #[test]
+    fn account_type_decides_the_object() {
+        assert_eq!(account_shape(0x80).unwrap().0.last(), Some(&"computer"));
+        assert_eq!(account_shape(0x80).unwrap().1, 0x1000);
+        assert_eq!(account_shape(0x10).unwrap().0.last(), Some(&"user"));
+        assert_eq!(account_shape(0x10).unwrap().1, 0x200);
+        assert!(account_shape(0x1).is_none()); // USER_ACCOUNT_DISABLED is a flag, not a type
+    }
+
+    /// A level-31 `SamrSetInformationUser2` stub as Samba's NDR lays it
+    /// out: handle, level, the union's discriminant, the 8-aligned
+    /// `SAMPR_USER_INTERNAL7_INFORMATION`, then the deferred Cipher.
+    fn level31_stub(cipher: &[u8], expired: u8) -> Vec<u8> {
+        let mut w = NdrWriter::new();
+        w.handle(&user_handle(1104));
+        w.u16(31);
+        w.u16(31);
+        w.align(8);
+        w.bytes(&[0xaa; 64]);
+        w.bytes(&[0xbb; 16]);
+        w.u32(cipher.len() as u32);
+        w.referent_id();
+        w.align(8);
+        w.u64(0);
+        w.u8(expired);
+        w.align(4);
+        w.u32(cipher.len() as u32);
+        w.bytes(cipher);
+        w.buf
+    }
+
+    #[test]
+    fn parses_a_level31_set_information() {
+        let (handle, level, pw) = parse_set_information(&level31_stub(&[1, 2, 3, 4], 1)).unwrap();
+        assert_eq!(rid_from_user_handle(&handle), Some(1104));
+        assert_eq!(level, 31);
+        let (enc, expired) = pw.unwrap();
+        assert_eq!(enc.auth_data, [0xaa; 64]);
+        assert_eq!(enc.salt, [0xbb; 16]);
+        assert_eq!(enc.cipher, vec![1, 2, 3, 4]);
+        assert!(expired);
+        // A conformant count that disagrees with cipher_len does not decode.
+        let mut bad = level31_stub(&[1, 2, 3, 4], 0);
+        let n = bad.len();
+        bad[n - 8] = 9;
+        assert!(parse_set_information(&bad).is_none());
+    }
+
+    #[test]
+    fn other_levels_are_named_without_reading_a_buffer() {
+        let mut w = NdrWriter::new();
+        w.handle(&user_handle(7));
+        w.u16(25);
+        w.u16(25);
+        let (_, level, pw) = parse_set_information(&w.buf).unwrap();
+        assert_eq!(level, 25);
+        assert!(pw.is_none());
     }
 
     #[test]

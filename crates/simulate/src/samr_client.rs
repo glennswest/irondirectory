@@ -86,12 +86,13 @@ pub async fn create_user2_in_domain(client: &mut RpcClient, domain_handle: &[u8;
     let mut w = NdrWriter::new();
     w.handle(domain_handle);
     let s = w.unicode_string_header(Some(account_name));
-    // AccountType: USER_WORKSTATION_TRUST_ACCOUNT (0x00000001 per MS-SAMR).
+    // AccountType: USER_WORKSTATION_TRUST_ACCOUNT (MS-SAMR 2.2.1.12: 0x80;
+    // this sent 0x1, USER_ACCOUNT_DISABLED, until iron-rpcd checked it, #53).
     // DesiredAccess follows in the fixed part, per SamrCreateUser2InDomain.
     if let Some(s) = &s {
         w.unicode_string_deferred(s);
     }
-    w.u32(0x0000_0001); // AccountType
+    w.u32(0x0000_0080); // AccountType
     w.u32(0); // DesiredAccess
     let resp = client.call(samr::OPNUM_CREATE_USER2_IN_DOMAIN, &w.buf).await?;
 
