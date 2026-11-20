@@ -115,12 +115,12 @@ n=$(verified)
 whoami "$LDAPS" tls-endpoint || fail "1. ldapwhoami -Y GSSAPI with tls-endpoint bindings over LDAPS"
 grep -qx "$WANT" "$W/out" || fail "1. LDAPS: Who am I is not $WANT"
 [ "$(verified)" -gt "$n" ] || fail "1. LDAPS: iron-ldapd did not verify any bindings (did the client send them?)"
-echo "ok: 1. LDAPS, tls-endpoint bindings: $(cat "$W/out"), bindings verified"
+echo "ok: 1. LDAPS, tls-endpoint bindings: $(grep -x "$WANT" "$W/out"), bindings verified"
 n=$(verified)
 whoami "$LDAP" tls-endpoint -ZZ || fail "1. ldapwhoami -ZZ -Y GSSAPI with tls-endpoint bindings (StartTLS)"
 grep -qx "$WANT" "$W/out" || fail "1. StartTLS: Who am I is not $WANT"
 [ "$(verified)" -gt "$n" ] || fail "1. StartTLS: iron-ldapd did not verify any bindings"
-echo "ok: 1. StartTLS, tls-endpoint bindings: $(cat "$W/out"), bindings verified"
+echo "ok: 1. StartTLS, tls-endpoint bindings: $(grep -x "$WANT" "$W/out"), bindings verified"
 
 # 2. A TLS-terminating relay with its own certificate.
 python3 -I "$PWD/test/tls_relay.py" $((P + 9)) $((P + 8)) "$W/relay.crt" "$W/relay.key" > "$W/relay.log" 2>&1 & pids+=($!)
@@ -131,7 +131,7 @@ if whoami "$RELAY" tls-endpoint; then fail "2. a bind relayed through another ce
 echo "ok: 2. relayed bind with bindings refused: $(grep -m1 -o 'channel bindings do not match[^"]*' "$W/ldapd.log")"
 whoami "$RELAY" none || fail "2. a relayed bind without bindings (when-supported accepts it)"
 grep -qx "$WANT" "$W/out" || fail "2. relayed bind without bindings: Who am I is not $WANT"
-echo "ok: 2. relayed bind without bindings accepted under when-supported: $(cat "$W/out")"
+echo "ok: 2. relayed bind without bindings accepted under when-supported: $(grep -x "$WANT" "$W/out")"
 
 # 3. Plain LDAP, tokens built with impacket.
 python3 -m venv "$W/venv" && "$W/venv/bin/pip" install -q impacket==0.13.1 > "$W/pip.out" 2>&1 || { tail -5 "$W/pip.out"; fail "pip install impacket"; }
@@ -151,10 +151,10 @@ if whoami "$LDAPS" none; then fail "4. always: a bind over LDAPS without binding
 echo "ok: 4. always: LDAPS bind without bindings refused"
 whoami "$LDAPS" tls-endpoint || fail "4. always: LDAPS bind with bindings"
 grep -qx "$WANT" "$W/out" || fail "4. always: Who am I is not $WANT"
-echo "ok: 4. always: LDAPS bind with bindings: $(cat "$W/out")"
+echo "ok: 4. always: LDAPS bind with bindings: $(grep -x "$WANT" "$W/out")"
 whoami "$LDAP" none || fail "4. always: GSSAPI bind on plain LDAP"
 grep -qx "$WANT" "$W/out" || fail "4. always: plain LDAP Who am I is not $WANT"
-echo "ok: 4. always: GSSAPI bind on plain LDAP unaffected: $(cat "$W/out")"
+echo "ok: 4. always: GSSAPI bind on plain LDAP unaffected: $(grep -x "$WANT" "$W/out")"
 kill "$ldapd" 2>/dev/null || true; wait "$ldapd" 2>/dev/null || true; ldapd=
 rc=0; IRON_LDAP_CHANNEL_BINDING=never timeout 20 $B/iron-ldapd > "$W/out" 2>&1 || rc=$?
 [ "$rc" != 0 ] && [ "$rc" != 124 ] && grep -q 'IRON_LDAP_CHANNEL_BINDING: unknown channel binding policy "never"' "$W/out" \
