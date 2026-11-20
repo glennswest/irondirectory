@@ -242,6 +242,18 @@ collision). sc-build clean with clippy -D warnings at e24bf13;
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
 
+## In progress (2026-11-20): #70 password policy: history, complexity, ages
+
+AD shape on the domain head (`minPwdLength`, `pwdHistoryLength`,
+`pwdProperties`, `minPwdAge`, `maxPwdAge`); absent = not enforced (8-byte
+FIPS floor only). `iron_kdc::policy::check` used by kpasswd, LDAP Password
+Modify and NetrServerPasswordSet2; `set_password` stamps `pwdLastSet` and
+keeps `krbpwdhistory` (salt + aes256-sha384 key per past password, max 24);
+kpasswd SOFTERROR carries the 30-byte AD policy blob; AS-REQ refuses an
+expired password (KDC_ERR_KEY_EXPIRED) except for kadmin/changepw.
+Machine accounts exempt from complexity/history/ages. Test:
+`test/password-policy-e2e.sh` (MIT kpasswd/kinit, impacket, ldappasswd).
+
 ## Done (2026-11-20): #73 P0 finding 366e637ff815 (TGS took service tickets)
 
 `tgs_exchange::is_our_tgs`: only krbtgt/<our realm> is a TGT, else
