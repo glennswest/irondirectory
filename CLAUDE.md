@@ -246,19 +246,21 @@ Rewritten to the current behavior; check-stubs.sh clean for the file.
 
 rocketsmbd (rocketsmbd#83, on its main) forwards each IPC$ pipe to a Unix
 socket with a preamble (docs/IPC-PIPES.md there: user, PAC SIDs, SMB app
-key). Plan:
-- [ ] `iron_crypto::aead::aes256_cbc_pkcs7` + `iron_rpc::samr_aes` (MS-SAMR
-      3.2.2.4; KAT = Samba's Windows Server 2022 trace vectors).
-- [ ] `iron_rpc::pipe`: Unix listener (`IRON_RPC_PIPE_SOCKET`), preamble v1,
-      same PDU loop as TCP (generic stream), identity per connection.
-- [ ] SAMR: EnumerateDomains (6), LookupDomain/OpenDomain check the name/SID,
-      OpenUser checks the RID, SetInformationUser/2 (37/58) at level 31
-      (AES): Domain Admins (Kerberos PAC: RID 500 or group 512) on a pipe
-      only; NTOWF + Kerberos keys + #70 policy as NetrServerPasswordSet2.
-      Create over a pipe: Domain Admins. Connect5 advertises USE_AES (0x10).
-- [ ] e2e: Samba rpcclient (Kerberos SMB) -> rocketsmbd built from its main
-      -> iron-rpcd: setuserinfo2 31, then kinit with the new password;
-      non-admin refused. (Build VM tool probe pending.)
+key).
+- [x] `iron_crypto::aead::aes256_cbc_pkcs7` + `iron_rpc::samr_aes` (MS-SAMR
+      3.2.2.4; KAT = Samba's Windows Server 2022 trace vectors). 8654ee1
+- [x] `iron_rpc::pipe` (`IRON_RPC_PIPE_SOCKET`, preamble v1, 0660), same PDU
+      loop as TCP. 3fd0a12
+- [x] SAMR: EnumerateDomains, LookupDomain/OpenDomain/OpenUser check
+      name/SID/RID, Set(Information)User(2) level 31 for Domain Admins on a
+      pipe, create on a pipe for Domain Admins, AccountType honoured
+      (iron-simulate sent 0x1). 3fd0a12, d481e29
+- [x] Docs/CHANGELOG. 8b401f8. Filed #76 (TCP SAMR create unauthenticated).
+- [ ] `test/rpc-pipe-e2e.sh` (6bb994c): rpcclient (Kerberos SMB) ->
+      rocketsmbd@036a59e642a4 built with kerberos -> iron-rpcd. Never run
+      yet: rpcclient on the build VM, rocketsmbd's GSS build and its PAC
+      reading of iron-kdc tickets are all unverified. One sc-build with
+      clippy, unit tests, this, netlogon-schannel and rpc-concurrency e2e.
 
 ## Done (2026-11-20): #74 review of finding 366e637ff815 (same as #73)
 
