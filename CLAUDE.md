@@ -242,17 +242,17 @@ collision). sc-build clean with clippy -D warnings at e24bf13;
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
 
-## In progress (2026-11-20): #70 password policy: history, complexity, ages
+## Done (2026-11-20): #70 password policy: history, complexity, ages
 
 AD shape on the domain head (`minPwdLength`, `pwdHistoryLength`,
-`pwdProperties`, `minPwdAge`, `maxPwdAge`); absent = not enforced (8-byte
-FIPS floor only). `iron_kdc::policy::check` used by kpasswd, LDAP Password
-Modify and NetrServerPasswordSet2; `set_password` stamps `pwdLastSet` and
-keeps `krbpwdhistory` (salt + aes256-sha384 key per past password, max 24);
-kpasswd SOFTERROR carries the 30-byte AD policy blob; AS-REQ refuses an
-expired password (KDC_ERR_KEY_EXPIRED) except for kadmin/changepw.
-Machine accounts exempt from complexity/history/ages. Test:
-`test/password-policy-e2e.sh` (MIT kpasswd/kinit, impacket, ldappasswd).
+`pwdProperties`, `minPwdAge`, `maxPwdAge`); absent = not enforced (8-char
+FIPS floor). `iron_kdc::policy::check` in kpasswd (SOFTERROR = AD's 30-byte
+record), LDAP Password Modify (constraintViolation), NetrServerPasswordSet2.
+`set_password` stamps `pwdLastSet`, keeps `krbpwdhistory` (max 24); AS-REQ
+gives KDC_ERR_KEY_EXPIRED except for kadmin/changepw. `docs/PASSWORD-POLICY.md`.
+sc-build at 03bbedb: clippy -D warnings, unit tests, `test/password-policy-e2e.sh`
+PASS, and kpasswd/netlogon-schannel/ldap-exop e2e still PASS. `krbpwdhistory`
+must join #60's hidden attributes.
 
 ## Done (2026-11-20): #73 P0 finding 366e637ff815 (TGS took service tickets)
 
