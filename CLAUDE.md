@@ -242,6 +242,24 @@ collision). sc-build clean with clippy -D warnings at e24bf13;
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
 
+## In progress (2026-11-20): #53 iron-rpcd behind SMB named pipes + SAMR AES
+
+rocketsmbd (rocketsmbd#83, on its main) forwards each IPC$ pipe to a Unix
+socket with a preamble (docs/IPC-PIPES.md there: user, PAC SIDs, SMB app
+key). Plan:
+- [ ] `iron_crypto::aead::aes256_cbc_pkcs7` + `iron_rpc::samr_aes` (MS-SAMR
+      3.2.2.4; KAT = Samba's Windows Server 2022 trace vectors).
+- [ ] `iron_rpc::pipe`: Unix listener (`IRON_RPC_PIPE_SOCKET`), preamble v1,
+      same PDU loop as TCP (generic stream), identity per connection.
+- [ ] SAMR: EnumerateDomains (6), LookupDomain/OpenDomain check the name/SID,
+      OpenUser checks the RID, SetInformationUser/2 (37/58) at level 31
+      (AES): Domain Admins (Kerberos PAC: RID 500 or group 512) on a pipe
+      only; NTOWF + Kerberos keys + #70 policy as NetrServerPasswordSet2.
+      Create over a pipe: Domain Admins. Connect5 advertises USE_AES (0x10).
+- [ ] e2e: Samba rpcclient (Kerberos SMB) -> rocketsmbd built from its main
+      -> iron-rpcd: setuserinfo2 31, then kinit with the new password;
+      non-admin refused. (Build VM tool probe pending.)
+
 ## Done (2026-11-20): #74 review of finding 366e637ff815 (same as #73)
 
 Reviewed at 60ceb1b (2026-11-13), before #73's fix (0607a84). No new code:

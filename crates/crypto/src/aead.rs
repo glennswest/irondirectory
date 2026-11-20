@@ -30,6 +30,20 @@ pub fn aes128_cfb8(ctx: &FipsContext, key: &[u8; 16], iv: &[u8; 16], data: &[u8]
     Ok(out)
 }
 
+/// AES-256-CBC with PKCS#7 padding, encrypting or decrypting -- the cipher
+/// of MS-SAMR 3.2.2.4's AEAD-AES-256-CBC-HMAC-SHA512 (`SamrSetInformationUser2`
+/// with `SAMPR_ENCRYPTED_PASSWORD_AES`, #53). Not authenticated by itself:
+/// the caller checks the HMAC first. A decrypt whose padding is wrong fails.
+pub fn aes256_cbc_pkcs7(ctx: &FipsContext, key: &[u8; 32], iv: &[u8; 16], data: &[u8], encrypt: bool) -> Result<Vec<u8>, Error> {
+    let mut cipher = OsslCipher::new(ctx.inner(), EncAlg::AesCbc(AesSize::Aes256), encrypt, OsslSecret::from_slice(key), Some(iv.to_vec()), None)?;
+    cipher.set_padding(true)?;
+    let mut out = vec![0u8; data.len() + 32];
+    let mut n = cipher.update(data, &mut out)?;
+    n += cipher.finalize(&mut out[n..])?;
+    out.truncate(n);
+    Ok(out)
+}
+
 /// AES-256-GCM encrypt. `out` must be `plaintext.len() + TAG_LEN` bytes;
 /// the tag is appended after the ciphertext.
 pub fn aes256_gcm_encrypt(
@@ -103,6 +117,25 @@ mod tests {
 
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    // NIST SP 800-38A F.2.5/F.2.6 (CBC-AES256), plus the PKCS#7 block a
+    // block-aligned input gains (and loses again on decrypt).
+    #[test]
+    fn aes256_cbc_matches_sp800_38a() {
+        let ctx = FipsContext::new().unwrap();
+        let key: [u8; 32] = hex("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4").try_into().unwrap();
+        let iv: [u8; 16] = hex("000102030405060708090a0b0c0d0e0f").try_into().unwrap();
+        let pt = hex("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51");
+        let ct = aes256_cbc_pkcs7(&ctx, &key, &iv, &pt, true).unwrap();
+        assert_eq!(&ct[..32], &hex("f58c4c04d6e5f1ba779eabfb5f7bfbd69cfc4e967edb808d679f777bc6702c7d")[..]);
+        assert_eq!(ct.len(), 48);
+        assert_eq!(aes256_cbc_pkcs7(&ctx, &key, &iv, &ct, false).unwrap(), pt);
+        // Flipping the previous block's last byte flips the padding byte
+        // (0x10 -> 0x11): bad padding, deterministically.
+        let mut bad = ct.clone();
+        bad[31] ^= 1;
+        assert!(aes256_cbc_pkcs7(&ctx, &key, &iv, &bad, false).is_err());
     }
 
     // NIST SP 800-38A, F.3.7/F.3.8 (CFB8-AES128).
