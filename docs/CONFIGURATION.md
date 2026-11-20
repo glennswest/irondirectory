@@ -56,9 +56,11 @@ settings are environment variables. An empty value counts as unset.
 | `iron-gcd` | `0.0.0.0:8080` | HTTP `/health` | `IRON_GC_HEALTH_LISTEN` |
 | `iron-oidcd` | `0.0.0.0:8080` | HTTP (OIDC endpoints, no TLS, no `/health`) | `IRON_OIDC_LISTEN` |
 | `iron-rpcd` | `0.0.0.0:445` | DCE/RPC `ncacn_ip_tcp`; Netlogon secure channel auth | `IRON_RPC_LISTEN` |
+| `iron-rpcd` | unset (off) | DCE/RPC `ncacn_np`: a Unix socket rocketsmbd forwards SMB named pipes to (#53) | `IRON_RPC_PIPE_SOCKET` |
 
-Not served: `ncacn_np` over SMB, and a DNS
-server (SRV records are published into MicroDNS by `iron-dns-ctl`).
+SMB itself is rocketsmbd's (it forwards `ncacn_np` pipes to `IRON_RPC_PIPE_SOCKET`).
+Not served: a DNS server (SRV records are published into MicroDNS by
+`iron-dns-ctl`).
 
 **Three daemons default to 8080** (`iron-ldapd` health, `iron-gcd` health and
 `iron-oidcd`). On one host, move all but one of them.
@@ -178,6 +180,25 @@ tokens and there is one replica only. See
 | `IRON_RPC_DNS_DOMAIN` | required | e.g. `g19rpc.lo` |
 | `IRON_RPC_REALM` | `IRON_RPC_DNS_DOMAIN` upper-cased | Kerberos realm: a computer's principal is `<account>@<realm>` |
 | `IRON_RPC_LISTEN` | `0.0.0.0:445` | TCP listener |
+| `IRON_RPC_PIPE_SOCKET` | unset (off) | path of the Unix stream socket for rocketsmbd's `[ipc] backend` (#53). Created mode 0660 (a stale socket there is replaced; any other file there is an error): give rocketsmbd its group and nobody else, since each pipe's preamble carries the SMB session key. |
+
+**Named pipes (#53).** Windows reaches SAMR, LSARPC and NETLOGON over SMB
+named pipes (`ncacn_np`, `\PIPE\samr` etc. on `IPC$`). rocketsmbd serves
+SMB and forwards each opened pipe to `IRON_RPC_PIPE_SOCKET` with a preamble
+(rocketsmbd `docs/IPC-PIPES.md`): the session's user, the SIDs from its
+Kerberos PAC, and its session key. The same RPC is then served as over TCP,
+with that user as the caller. A Domain Admin (a Kerberos session whose PAC
+names RID 500 or the Domain Admins group, RID 512) may create accounts with
+`SamrCreateUser2InDomain` (a `user` or a `computer` by `AccountType`) and set
+a password with `SamrSetInformationUser2`/`SamrSetInformationUser` at level
+31 (`UserInternal7InformationNew`, `SAMPR_ENCRYPTED_PASSWORD_AES`: AES-256-CBC
+and HMAC-SHA-512 keyed from the SMB session key, MS-SAMR 3.2.2.4). The
+account gets its NTOWF and Kerberos keys as from `NetrServerPasswordSet2`,
+after the domain password policy (#70, as a reset); PasswordExpired sets
+`pwdLastSet` to 0. Anyone else, an NTLM session included (no PAC), gets
+`STATUS_ACCESS_DENIED`. The RC4 levels (23-26) answer
+`STATUS_INVALID_INFO_CLASS` (D4). `SamrConnect5` advertises AES support.
+`test/rpc-pipe-e2e.sh` runs Samba's `rpcclient` through rocketsmbd.
 
 Binds are unauthenticated, or authenticated with the Netlogon secure
 channel (auth type 68, `PKT_INTEGRITY` or `PKT_PRIVACY`, AES only) for a
@@ -186,11 +207,10 @@ computer that has run `NetrServerAuthenticate3`. Over that binding,
 Kerberos keys, so it can `kinit` (#20, `test/netlogon-schannel-e2e.sh`).
 It is refused on an unauthenticated binding (Zerologon). Secure channels
 live in the process's memory: a restart drops them, and clients set up a
-new one. NTLMSSP and Kerberos RPC auth are not built, so SAMR has no
-`SamrSetInformationUser2` and its calls are unauthenticated; a computer's
-first secret still comes from `iron-rpc-ctl set-computer-secret`. Windows
-reaches these interfaces over SMB named pipes (`ncacn_np`), which
-`iron-rpcd` does not serve.
+new one. NTLMSSP and Kerberos RPC auth are not built. Over TCP, SAMR has no
+caller and no session key: it sets no passwords, and its
+`SamrCreateUser2InDomain` is still unauthenticated (#76); a computer's first
+secret for a TCP-only setup comes from `iron-rpc-ctl set-computer-secret`.
 
 ## iron-bootstrap (first-boot provisioning, #25)
 

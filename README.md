@@ -25,9 +25,10 @@ or Samba domain controller.
 > confidentiality for macOS `dsconfigad` bind, a kpasswd service on port
 > 464 (RFC 3244), Netlogon Schannel authentication with
 > `NetrServerPasswordSet2`, AD-style `uSNCreated`/`uSNChanged`/
-> `highestCommittedUSN` from etcd revisions; the Windows `Add-Computer`
-> path still lacks SMB named-pipe transport and a CLDAP ping, see #20,
-> #52, #53; macOS awaits the operator golden, #22). Phase 1.5's
+> `highestCommittedUSN` from etcd revisions, SAMR/LSARPC/NETLOGON over
+> SMB named pipes forwarded by rocketsmbd with a Domain Admin's AES
+> `SamrSetInformationUser2` (#53); the Windows `Add-Computer` path still
+> lacks a CLDAP ping, see #20, #52; macOS awaits the operator golden, #22). Phase 1.5's
 > OpenShift LDAP identity provider and SPNEGO desktop→console SSO also
 > ship, docs-only — see `docs/OPENSHIFT-LDAP-IDP.md` and
 > `docs/OPENSHIFT-SPNEGO-SSO.md`). `iron-partition`

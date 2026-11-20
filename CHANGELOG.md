@@ -6,6 +6,31 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-20
+- **feat:** iron-rpcd serves SAMR/LSARPC/NETLOGON over SMB named pipes (#53):
+  `IRON_RPC_PIPE_SOCKET` is the Unix socket rocketsmbd's `[ipc] backend`
+  forwards each `IPC$` pipe to, with a preamble naming the SMB session's
+  user, its Kerberos PAC SIDs and its session key (rocketsmbd#83).
+- **feat:** SAMR `SamrSetInformationUser2`/`SamrSetInformationUser` at level
+  31 (`SAMPR_ENCRYPTED_PASSWORD_AES`, MS-SAMR 3.2.2.4: AES-256-CBC +
+  HMAC-SHA-512 keyed from the SMB session key, checked against Windows
+  Server 2022 trace vectors) for a Domain Admin over a pipe: NTOWF, Kerberos
+  keys and the #70 policy as `NetrServerPasswordSet2`; PasswordExpired sets
+  `pwdLastSet` 0. RC4 levels answer `STATUS_INVALID_INFO_CLASS` (D4). Over a
+  pipe only a Domain Admin may `SamrCreateUser2InDomain`.
+- **feat:** SAMR `SamrEnumerateDomainsInSamServer`; `SamrConnect5`
+  advertises AES. `iron_crypto::aead::aes256_cbc_pkcs7`.
+- **fix:** SAMR `SamrLookupDomainInSamServer`/`SamrOpenDomain` answered with
+  this domain for any name or SID, and `SamrOpenUser` gave a handle for any
+  RID; they now answer `STATUS_NO_SUCH_DOMAIN`/`STATUS_NO_SUCH_USER`.
+  `SamrCreateUser2InDomain` honours `AccountType` (a `user` or a `computer`,
+  with its `userAccountControl`, and `sAMAccountName`) and refuses an
+  unknown one; iron-simulate sent 0x1 (`USER_ACCOUNT_DISABLED`) instead of
+  `USER_WORKSTATION_TRUST_ACCOUNT` (0x80). iron-rpcd and iron-rpc-ctl index
+  entries as the KDC does (`sAMAccountName`, `krbPrincipalName`, ...).
+- **test:** `test/rpc-pipe-e2e.sh`: Samba `rpcclient` over a Kerberos SMB
+  session to rocketsmbd (built from its repository), which forwards
+  `\PIPE\samr` to iron-rpcd: create, AES password set + kinit,
+  PasswordExpired, and the refusals (RC4 level, policy, non-admin).
 - **fix:** an LDAP Add of an existing DN replaced the entry (its attributes,
   objectSid, Kerberos keys) instead of answering `entryAlreadyExists` (#71,
   RFC 4511 §4.7). Add now writes create-only, checks before a SID/RID is
