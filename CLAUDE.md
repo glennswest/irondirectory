@@ -271,14 +271,15 @@ Re-verified at 8f4ed07: unit test + `test/tgs-service-ticket-e2e.sh` PASS.
 That trust check is only as good as LDAP's refusal to write key attributes:
 filed #75 (P1, proposed).
 
-## In progress (2026-11-20): #71 LDAP Add overwrote an existing entry
+## Done (2026-11-20): #71 LDAP Add overwrote an existing entry
 
 `handle_add`: existing DN -> entryAlreadyExists (68) before a SID is
 stamped, write via `Store::create_entry` (race-safe), parent must exist
 (noSuchObject + matchedDN) unless the DN is a partition's base.
-federation-scale-e2e adds the child heads first (create-child makes none).
-Test: a step in `test/ldap-rebind-moddn-e2e.sh` (ldapadd exit 68, entry
-unchanged; orphan exit 32 with matchedDN).
+federation-scale-e2e adds the child heads first (create-child makes none;
+helper `add_head`, not `head`, which shadowed coreutils). sc-build at
+35c07fd: clippy -D warnings, iron-ldap unit tests, ldap-rebind-moddn-e2e
+step 4, federation-scale, usn, ldap-filters, macos-ldap, kpasswd e2e PASS.
 
 ## Done (2026-11-20): #70 password policy: history, complexity, ages
 
