@@ -252,6 +252,18 @@ workspace unit tests, ldap-rebind-moddn + ldap-filters e2e PASS; step 5 of
 ldapsearch) PASS at 8d7218a, failed as expected on the old encoding. Names
 already stored with one of those characters are not migrated.
 
+## Done (2026-11-24): #75 LDAP writes of KDC credential attributes
+
+`iron_kdc::secret::LDAP_WRITE_PROTECTED_ATTRS` (krbkey, krbsalt,
+krbpwdhistory, netlogonntowf, krbprincipalname, pwdlastset): handle_add
+(attrs + RDN), handle_modify (before the read), handle_moddn (new RDN) answer
+unwillingToPerform. `KEY_ATTRS` is the subset for #60's read deny-list.
+`test/ldap-secret-write-e2e.sh` failed as expected at bb61e1c
+(SC_BUILD_EXPECT_FAIL: the planted trust was stored), PASS at 23c6d45 with
+clippy -D warnings, 264 unit tests and ldap-exop, kpasswd, password-policy,
+macos-ldap, ldap-rebind-moddn, netlogon-schannel, usn, ldap-filters e2e.
+No LDAP way to set pwdLastSet 0/-1 as AD admins can (noted in PASSWORD-POLICY.md).
+
 ## Done (2026-11-24): #52 CLDAP LDAP ping
 
 `iron_ldap::cldap`: MS-ADTS 6.3.3 ping on UDP (`IRON_LDAP_CLDAP_LISTEN`,

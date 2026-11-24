@@ -100,3 +100,11 @@ writes on the principal's entry:
 
 `krbpwdhistory` is key material like `krbkey` and must be hidden from
 searches with it (#60).
+
+None of these is writable over LDAP (#75): an Add, Modify or ModDN naming
+`pwdLastSet`, `krbpwdhistory`, `krbkey`, `krbsalt`, `krbPrincipalName` or
+`netlogonNTOWF` is refused with `unwillingToPerform`, whoever is bound, so
+nobody steps around the ages or the history by rewriting them. Unlike AD,
+which lets an administrator write `pwdLastSet` to `0` (must change) or `-1`
+(now), there is no LDAP way to force a change at next logon yet; SAMR's
+PasswordExpired (#53) sets `pwdLastSet` to `0`.

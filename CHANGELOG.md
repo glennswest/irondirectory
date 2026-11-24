@@ -6,6 +6,18 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-24
+- **fix:** LDAP Add/Modify/ModDN could write the KDC's credential attributes
+  (#75): any bind (anonymous too, #45) could add `krbPrincipalName:
+  krbtgt/<REALM>@ANY.REALM` with a `krbKey` of its choice -- a cross-realm
+  trust `tgs_exchange` accepts, so a forged TGT for any client -- or replace
+  `krbtgt`'s or a user's `krbKey`, or rewrite `pwdLastSet`/`krbpwdhistory`
+  around the password policy. iron-ldapd now refuses any Add (attributes or
+  RDN), Modify or ModDN naming `krbKey`, `krbSalt`, `krbPwdHistory`,
+  `netlogonNTOWF`, `krbPrincipalName` or `pwdLastSet` with
+  `unwillingToPerform`, whoever is bound. One list, `iron_kdc::secret`
+  (iron-rpc's `NTOWF_ATTR` comes from it). Password Modify, kpasswd,
+  NetrServerPasswordSet2 and the operator tools are unchanged.
+  `test/ldap-secret-write-e2e.sh` failed as expected at bb61e1c and passes.
 - **feat:** the LDAP ping (#52, MS-ADTS 6.3.3), how Windows finds a DC
   before it joins (#20). iron-ldapd answers it on CLDAP (UDP, by default
   `IRON_LDAP_LISTEN`'s address; `IRON_LDAP_CLDAP_LISTEN`) and over TCP with a

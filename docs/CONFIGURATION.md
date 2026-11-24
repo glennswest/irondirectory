@@ -141,6 +141,19 @@ under the entry (`unwillingToPerform`), and a move out of the naming context
 or of a subtree holding a naming context's head (`affectsMultipleDSAs`).
 `test/ldap-rebind-moddn-e2e.sh` checks both.
 
+The KDC's credential attributes are never written over LDAP (#75): an Add
+(attributes or RDN), a Modify (any operation) or a ModDN whose new RDN names
+`krbKey`, `krbSalt`, `krbPwdHistory`, `netlogonNTOWF`, `krbPrincipalName` or
+`pwdLastSet` (any case, any attribute option) is refused with
+`unwillingToPerform` (53), naming the attribute, whoever is bound, and
+nothing of it is applied. Keys and principal names are set only by Password
+Modify (which derives `krbPrincipalName` from `sAMAccountName`), kpasswd,
+`NetrServerPasswordSet2`/SAMR, and the operator tools and iron-bootstrap,
+which write the store directly; an inter-realm trust key only by
+`iron-kdc-ctl set-cross-realm-key`. The list is `iron_kdc::secret`
+(`KEY_ATTRS` is the key-material subset #60 is to hide from searches).
+`test/ldap-secret-write-e2e.sh`.
+
 Known gaps (open issues): searches never return `userPassword` (#58), but
 `iron-ldapd` and `iron-gcd` still return `krbkey`, `krbsalt` and
 `netlogonntowf` to any bind (#60); add/delete/modify/modify-DN are accepted
