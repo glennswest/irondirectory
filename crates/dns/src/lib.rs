@@ -6,6 +6,8 @@
 //! domain/realm and a list of target hosts, compute the right
 //! `_ldap._tcp`/`_kerberos._udp`/`_kerberos._tcp` SRV records (RFC 2782,
 //! RFC 4120 §7.2.3.2) and push them into MicroDNS's management API.
+//! `publish_dc` writes the whole DC-locator set Windows looks for
+//! (`_ldap._tcp.dc._msdcs` and the rest, MS-ADTS 6.3.2.3, #87).
 
 pub mod microdns;
 pub mod srv;
@@ -50,6 +52,36 @@ pub async fn publish_kerberos(microdns_url: &str, realm: &str, targets: &[Target
     publish(microdns_url, &domain, srv::KERBEROS_UDP_SRV_NAME, targets).await?;
     publish(microdns_url, &domain, srv::KERBEROS_TCP_SRV_NAME, targets).await?;
     Ok(())
+}
+
+/// The ports a DC's services listen on.
+#[derive(Debug, Clone, Copy)]
+pub struct DcPorts {
+    pub ldap: u16,
+    pub kerberos: u16,
+    pub kpasswd: u16,
+}
+
+impl Default for DcPorts {
+    fn default() -> Self {
+        DcPorts { ldap: 389, kerberos: 88, kpasswd: 464 }
+    }
+}
+
+/// Publishes every DC-locator SRV record ([`srv::dc_records`], #87) for
+/// one DC, `host`. Returns the records written, as `<name>.<zone>`.
+pub async fn publish_dc(microdns_url: &str, domain: &str, forest: &str, domain_guid: &str, host: &str, ports: DcPorts) -> Result<Vec<String>, Error> {
+    let mut written = Vec::new();
+    for r in srv::dc_records(domain, forest, domain_guid, srv::DEFAULT_SITE) {
+        let port = match r.service {
+            srv::Service::Ldap => ports.ldap,
+            srv::Service::Kerberos => ports.kerberos,
+            srv::Service::Kpasswd => ports.kpasswd,
+        };
+        publish(microdns_url, &r.zone, &r.name, &[Target::new(host, port)]).await?;
+        written.push(format!("{}.{}", r.name, r.zone));
+    }
+    Ok(written)
 }
 
 async fn publish(microdns_url: &str, zone_name: &str, record_name: &str, targets: &[Target]) -> Result<(), Error> {

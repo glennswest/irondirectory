@@ -7,6 +7,14 @@
 //! Usage:
 //!   iron-dns-ctl ldap <microdns-url> <domain> <host:port> [<host:port> ...]
 //!   iron-dns-ctl kerberos <microdns-url> <realm> <host:port> [<host:port> ...]
+//!   iron-dns-ctl dc <microdns-url> <domain> <forest> <domain-guid> <dc-host> [ldap-port kdc-port kpasswd-port]
+//!
+//! `dc` publishes the DC-locator SRV records a writable, non-GC DC
+//! registers (#87, MS-ADTS 6.3.2.3) -- what Windows' DsGetDcName looks
+//! up before its LDAP ping: `_ldap._tcp.dc._msdcs.<domain>`, the site,
+//! PDC and domain-GUID forms, `_kerberos.*` and `_kpasswd.*`. The domain
+//! GUID is the one `iron-config-ctl show` prints. Ports default to 389,
+//! 88 and 464. Re-running is harmless: MicroDNS keeps an identical record once.
 //!
 //! Example:
 //!   iron-dns-ctl ldap http://192.168.8.252:8080/api/v1 g8.lo il1.g8.lo:389 il2.g8.lo:389 il3.g8.lo:389
@@ -20,11 +28,32 @@ fn parse_target(s: &str) -> anyhow::Result<Target> {
     Ok(Target::new(host, port))
 }
 
+async fn dc(args: &[String]) -> anyhow::Result<()> {
+    let [url, domain, forest, guid, host, rest @ ..] = args else {
+        anyhow::bail!("usage: iron-dns-ctl dc <microdns-url> <domain> <forest> <domain-guid> <dc-host> [ldap-port kdc-port kpasswd-port]");
+    };
+    let mut ports = iron_dns::DcPorts::default();
+    match rest {
+        [] => {}
+        [l, k, p] => ports = iron_dns::DcPorts { ldap: l.parse()?, kerberos: k.parse()?, kpasswd: p.parse()? },
+        _ => anyhow::bail!("give all three ports (ldap kdc kpasswd) or none"),
+    }
+    let written = iron_dns::publish_dc(url, domain, forest, guid, host, ports).await?;
+    for name in &written {
+        println!("published {name} -> {host}");
+    }
+    println!("{} DC-locator SRV records for {host}", written.len());
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("dc") {
+        return dc(&args[2..]).await;
+    }
     let (Some(kind), Some(microdns_url), Some(name)) = (args.get(1), args.get(2), args.get(3)) else {
         anyhow::bail!(
             "usage: iron-dns-ctl <ldap|kerberos> <microdns-url> <domain-or-realm> <host:port> [<host:port> ...]"
