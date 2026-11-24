@@ -90,6 +90,15 @@ The systemd units for `iron-ldapd`, `iron-kdcd` and `iron-gcd` grant
 
 TLS is pinned to groups P-256/P-384/P-521.
 
+Frame limits (finding 6bbcf7596b07), for iron-ldapd and iron-gcd alike: an
+LDAP message is at most 10 MiB (AD's `MaxReceiveBuffer` default) and a SASL
+security-layer buffer at most 10 MiB + 1 KiB, the receive size the GSSAPI
+security-layer challenge advertises. A larger declared length closes the
+connection as soon as its header arrives, before the payload is buffered. A
+message that has started must be complete within 120 s, or the connection
+is closed; a connection between messages may stay idle. These are constants
+(`iron_ldap::framing`), not settings. `test/ldap-frame-limits-e2e.sh`.
+
 The LDAP ping (#52, MS-ADTS 6.3.3) is how Windows finds a DC before it joins
 or logs on: a search with base `""`, a filter of `DnsDomain`/`Host`/`User`/
 `AAC`/`DomainSid`/`DomainGuid`/`NtVer` terms and the attribute `Netlogon`.

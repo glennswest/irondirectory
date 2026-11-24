@@ -252,6 +252,15 @@ workspace unit tests, ldap-rebind-moddn + ldap-filters e2e PASS; step 5 of
 ldapsearch) PASS at 8d7218a, failed as expected on the old encoding. Names
 already stored with one of those characters are not migrated.
 
+## Done (2026-11-24): #78 finding 6bbcf7596b07 (LDAP frame lengths)
+
+`iron_ldap::framing::Limits`: 10 MiB LDAP / +1 KiB SASL (advertised in the
+security-layer challenge), checked from the header; 120 s per started frame,
+idle kept; >8-octet BER lengths are TooLarge (used to wrap). e2e failed as
+expected on the unfixed server (64 MiB taken, never closed), PASS at 144bb9a
+with rebind, channel-binding, filters (gc), exop, cldap-ping, macos-ldap;
+clippy -D warnings + 270 unit tests at df26df6.
+
 ## Done (2026-11-24): #75 LDAP writes of KDC credential attributes
 
 `iron_kdc::secret::LDAP_WRITE_PROTECTED_ATTRS` (krbkey, krbsalt,

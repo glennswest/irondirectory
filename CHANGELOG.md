@@ -6,6 +6,16 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-24
+- **fix:** iron-ldapd and iron-gcd buffered whatever length a client's BER
+  header declared, with no deadline (finding 6bbcf7596b07, #78): one
+  connection declaring 2 GiB and trickling bytes grew one buffer without end.
+  An LDAP message is now capped at 10 MiB (AD's `MaxReceiveBuffer`) and a SASL
+  security-layer buffer at that plus 1 KiB, refused from the header before the
+  payload is buffered; the GSSAPI security-layer challenge advertises that
+  receive size (it said 16 MiB). A frame that has started must arrive within
+  120 s; an idle connection is kept. A BER length of more than 8 octets is
+  too large instead of silently losing its high bits. `test/ldap-frame-limits-e2e.sh`
+  failed as expected on the unfixed server and passes.
 - **fix:** LDAP Add/Modify/ModDN could write the KDC's credential attributes
   (#75): any bind (anonymous too, #45) could add `krbPrincipalName:
   krbtgt/<REALM>@ANY.REALM` with a `krbKey` of its choice -- a cross-realm
