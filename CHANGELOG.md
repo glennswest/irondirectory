@@ -5,6 +5,19 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-24
+- **fix:** iron-rpcd's bind kept only the last presentation context it
+  accepted and never checked the transfer syntax. Samba's rpcclient offers
+  SAMR as NDR 2.0 (ctx 0) and NDR64 (ctx 1) plus a bind-time feature
+  context, then calls on ctx 0, which was refused (`FAULT_UNK_IF`). Now
+  only NDR 2.0 contexts are accepted (others: "proposed transfer syntaxes
+  not supported"), every accepted context is kept, and an unknown interface
+  is refused with the right reason (abstract syntax not supported) (#53).
+- **fix:** test/rpc-pipe-e2e.sh: rocketsmbd is built as its own workspace;
+  the SMB server has a name (`smb.<realm>`, with rpcclient sent to
+  127.0.0.1 by `-I`), since Samba will not use Kerberos to `localhost`;
+  a failed rpcclient call is repeated at `-d 5` into the failure log (#53).
+
 ### 2026-11-20
 - **fix:** test/federation-scale-e2e.sh: the helper that adds each naming
   context's head was named `head`, shadowing coreutils `head` in Suite C

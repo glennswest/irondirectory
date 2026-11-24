@@ -154,8 +154,10 @@ fn frame_with_auth(ptype: u8, call_id: u32, mut body: Vec<u8>, auth: Option<(Sec
 
 /// A single accepted-or-rejected presentation context result for `bind_ack`.
 pub struct CtxResult {
-    /// 0 = acceptance, 2 = provider rejection (used for "syntax not supported").
+    /// 0 = acceptance, 2 = provider rejection.
     pub result: u16,
+    /// For a rejection (C706 `p_provider_reason_t`): 1 = abstract syntax
+    /// not supported, 2 = proposed transfer syntaxes not supported.
     pub reason: u16,
 }
 
@@ -163,7 +165,13 @@ impl CtxResult {
     pub fn accept() -> Self {
         CtxResult { result: 0, reason: 0 }
     }
+    /// An interface this server does not serve.
     pub fn reject_abstract_syntax_not_supported() -> Self {
+        CtxResult { result: 2, reason: 1 }
+    }
+    /// A known interface offered in a transfer syntax other than NDR 2.0
+    /// (NDR64, or MS-RPCE bind-time feature negotiation).
+    pub fn reject_transfer_syntax_not_supported() -> Self {
         CtxResult { result: 2, reason: 2 }
     }
 }
@@ -197,7 +205,13 @@ pub fn build_bind_ack_auth(call_id: u32, max_frag: u16, assoc_group: u32, result
     for r in results {
         body.extend_from_slice(&r.result.to_le_bytes());
         body.extend_from_slice(&r.reason.to_le_bytes());
-        body.extend_from_slice(&*NDR_TRANSFER_SYNTAX);
+        // An accepted context names the transfer syntax it took; a
+        // rejected one carries the null syntax, as Windows sends.
+        if r.result == 0 {
+            body.extend_from_slice(&*NDR_TRANSFER_SYNTAX);
+        } else {
+            body.extend_from_slice(&[0u8; 20]);
+        }
     }
     // ctx items are 24 bytes each after a 4-aligned ctx_num: the trailer
     // that may follow is already 4-aligned.
@@ -266,12 +280,13 @@ pub fn build_fault(call_id: u32, ctx_id: u16, status: u32) -> Vec<u8> {
 pub struct BindCtxItem {
     pub ctx_id: u16,
     pub abstract_syntax: [u8; 20],
+    pub transfer_syntax: [u8; 20],
 }
 
 /// Parses a `bind` PDU's body (everything after the 16-byte common
-/// header) into its presentation contexts. Only the abstract syntax is
-/// returned -- the transfer syntax is validated (must be NDR 2.0) but
-/// not surfaced, since this server offers nothing else.
+/// header) into its presentation contexts. The caller accepts only NDR 2.0
+/// (`uuid::NDR_TRANSFER_SYNTAX`): Samba, for one, offers each interface
+/// twice (NDR 2.0 and NDR64) plus a bind-time feature negotiation context.
 pub fn parse_bind_body(body: &[u8]) -> Option<Vec<BindCtxItem>> {
     if body.len() < 12 {
         return None;
@@ -292,8 +307,9 @@ pub fn parse_bind_body(body: &[u8]) -> Option<Vec<BindCtxItem>> {
             return None; // only single-transfer-syntax contexts are modeled
         }
         let abstract_syntax: [u8; 20] = body[pos..pos + 20].try_into().unwrap();
+        let transfer_syntax: [u8; 20] = body[pos + 20..pos + 40].try_into().unwrap();
         pos += 40; // abstract syntax (20) + transfer syntax (20)
-        items.push(BindCtxItem { ctx_id, abstract_syntax });
+        items.push(BindCtxItem { ctx_id, abstract_syntax, transfer_syntax });
     }
     Some(items)
 }
@@ -497,6 +513,7 @@ mod tests {
         let items = parse_bind_body(&body).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].abstract_syntax, *crate::uuid::SAMR_SYNTAX);
+        assert_eq!(items[0].transfer_syntax, *crate::uuid::NDR_TRANSFER_SYNTAX);
     }
 
     #[test]
@@ -534,6 +551,10 @@ mod tests {
 
         let rejected = build_bind_ack(1, 4280, 1, &[CtxResult::accept(), CtxResult::reject_abstract_syntax_not_supported()]);
         assert_eq!(parse_bind_ack_all_accepted(&rejected[16..]), Some(false));
+        // The rejected item: result 2, reason 1, null transfer syntax.
+        let item = &rejected[16 + 12 + 4 + 24..16 + 12 + 4 + 48];
+        assert_eq!(&item[0..4], &[2, 0, 1, 0]);
+        assert_eq!(&item[4..24], &[0u8; 20]);
     }
 
     #[test]

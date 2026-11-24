@@ -22,7 +22,7 @@ use tokio::net::TcpListener;
 use crate::pdu::{self, CtxResult, PduError, SecTrailer};
 use crate::pipe::PipeIdentity;
 use crate::schannel::{self, AUTH_LEVEL_INTEGRITY, AUTH_LEVEL_PRIVACY, AUTH_TYPE_NETLOGON};
-use crate::uuid::{LSARPC_SYNTAX, NETLOGON_SYNTAX, SAMR_SYNTAX};
+use crate::uuid::{LSARPC_SYNTAX, NDR_TRANSFER_SYNTAX, NETLOGON_SYNTAX, SAMR_SYNTAX};
 use crate::{lsarpc, netlogon, samr, CallError};
 
 /// What this server tells clients about the domain it's serving.
@@ -44,6 +44,38 @@ enum BoundInterface {
     Lsarpc,
     Samr,
     Netlogon,
+}
+
+/// Answers each presentation context of a bind: an interface this server
+/// serves, in NDR 2.0, is accepted; an unknown interface is refused
+/// (abstract syntax not supported); any other transfer syntax -- NDR64, or
+/// MS-RPCE 3.3.1.5.3 bind-time feature negotiation -- is refused (transfer
+/// syntaxes not supported). Samba's rpcclient offers SAMR as both NDR 2.0
+/// and NDR64 plus a feature context, then calls on the NDR 2.0 one, so
+/// every accepted context is kept, not just one.
+fn negotiate_contexts(items: &[pdu::BindCtxItem]) -> (Vec<CtxResult>, Vec<(u16, BoundInterface)>) {
+    let mut results = Vec::with_capacity(items.len());
+    let mut accepted = Vec::new();
+    for item in items {
+        let iface = if item.abstract_syntax == *LSARPC_SYNTAX {
+            Some(BoundInterface::Lsarpc)
+        } else if item.abstract_syntax == *SAMR_SYNTAX {
+            Some(BoundInterface::Samr)
+        } else if item.abstract_syntax == *NETLOGON_SYNTAX {
+            Some(BoundInterface::Netlogon)
+        } else {
+            None
+        };
+        if item.transfer_syntax != *NDR_TRANSFER_SYNTAX {
+            results.push(CtxResult::reject_transfer_syntax_not_supported());
+        } else if let Some(iface) = iface {
+            accepted.push((item.ctx_id, iface));
+            results.push(CtxResult::accept());
+        } else {
+            results.push(CtxResult::reject_abstract_syntax_not_supported());
+        }
+    }
+    (results, accepted)
 }
 
 pub async fn serve(listener: TcpListener, app: Arc<AppState>) -> std::io::Result<()> {
@@ -116,7 +148,8 @@ const NL_AUTH_MESSAGE_RESPONSE: [u8; 12] = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 /// Serves one connection until it closes. `identity` is the SMB session's
 /// when the connection is a forwarded pipe, `None` over TCP.
 pub async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, peer: &str, app: Arc<AppState>, identity: Option<PipeIdentity>) -> std::io::Result<()> {
-    let mut bound: Option<(u16, BoundInterface)> = None;
+    // Every presentation context the last bind accepted.
+    let mut bound: Vec<(u16, BoundInterface)> = Vec::new();
     let mut netlogon_session = netlogon::Session::default();
     let mut auth: Option<SchannelAuth> = None;
 
@@ -152,25 +185,8 @@ pub async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S,
                         }
                     }
                 }
-                let mut results = Vec::with_capacity(items.len());
-                for item in &items {
-                    let iface = if item.abstract_syntax == *LSARPC_SYNTAX {
-                        Some(BoundInterface::Lsarpc)
-                    } else if item.abstract_syntax == *SAMR_SYNTAX {
-                        Some(BoundInterface::Samr)
-                    } else if item.abstract_syntax == *NETLOGON_SYNTAX {
-                        Some(BoundInterface::Netlogon)
-                    } else {
-                        None
-                    };
-                    match iface {
-                        Some(iface) => {
-                            bound = Some((item.ctx_id, iface));
-                            results.push(CtxResult::accept());
-                        }
-                        None => results.push(CtxResult::reject_abstract_syntax_not_supported()),
-                    }
-                }
+                let (results, accepted) = negotiate_contexts(&items);
+                bound = accepted;
                 let ack = pdu::build_bind_ack_auth(header.call_id, 4280, 1, &results, ack_auth.as_ref().map(|t| (*t, &NL_AUTH_MESSAGE_RESPONSE[..])));
                 stream.write_all(&ack).await?;
             }
@@ -200,8 +216,8 @@ pub async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S,
                     }
                 };
                 let binding = auth.as_ref().map(|a| netlogon::Binding { computer: a.computer.clone(), auth_level: a.level });
-                let status = match bound {
-                    Some((ctx_id, iface)) if ctx_id == req.ctx_id => match dispatch(&app, &mut netlogon_session, binding.as_ref(), identity.as_ref(), iface, req.opnum, &stub).await {
+                let status = match bound.iter().find(|(ctx_id, _)| *ctx_id == req.ctx_id).map(|(_, iface)| *iface) {
+                    Some(iface) => match dispatch(&app, &mut netlogon_session, binding.as_ref(), identity.as_ref(), iface, req.opnum, &stub).await {
                         Ok(stub) => Ok(stub),
                         Err(e) => {
                             tracing::warn!(%peer, ?iface, opnum = req.opnum, "RPC call faulted: {e:?}");
@@ -271,5 +287,39 @@ async fn dispatch(app: &AppState, netlogon_session: &mut netlogon::Session, bind
         },
         BoundInterface::Samr => samr::dispatch(app, identity, opnum, stub).await,
         BoundInterface::Netlogon => netlogon::dispatch(&app.netlogon, netlogon_session, binding, opnum, stub).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::uuid::syntax_id;
+
+    fn item(ctx_id: u16, abstract_syntax: [u8; 20], transfer_syntax: [u8; 20]) -> pdu::BindCtxItem {
+        pdu::BindCtxItem { ctx_id, abstract_syntax, transfer_syntax }
+    }
+
+    /// The bind Samba's rpcclient sends for \PIPE\samr: SAMR in NDR 2.0
+    /// (ctx 0) and NDR64 (ctx 1), then bind-time feature negotiation (ctx 2).
+    /// It then calls on ctx 0, which the server took for ctx 1 before.
+    #[test]
+    fn samba_shaped_bind_accepts_only_the_ndr20_context() {
+        let ndr64 = syntax_id("71710533-beba-4937-8319-b5dbef9ccc36", 1, 0);
+        let features = syntax_id("6cb71c2c-9812-4540-0300-000000000000", 1, 0);
+        let items = [item(0, *SAMR_SYNTAX, *NDR_TRANSFER_SYNTAX), item(1, *SAMR_SYNTAX, ndr64), item(2, *SAMR_SYNTAX, features)];
+        let (results, accepted) = negotiate_contexts(&items);
+        assert_eq!(accepted, vec![(0, BoundInterface::Samr)]);
+        let got: Vec<(u16, u16)> = results.iter().map(|r| (r.result, r.reason)).collect();
+        assert_eq!(got, vec![(0, 0), (2, 2), (2, 2)]);
+    }
+
+    #[test]
+    fn every_known_ndr20_context_is_kept_and_unknown_interfaces_are_refused() {
+        let unknown = syntax_id("4b324fc8-1670-01d3-1278-5a47bf6ee188", 3, 0); // srvsvc: not served here
+        let items = [item(0, *LSARPC_SYNTAX, *NDR_TRANSFER_SYNTAX), item(1, unknown, *NDR_TRANSFER_SYNTAX), item(2, *NETLOGON_SYNTAX, *NDR_TRANSFER_SYNTAX)];
+        let (results, accepted) = negotiate_contexts(&items);
+        assert_eq!(accepted, vec![(0, BoundInterface::Lsarpc), (2, BoundInterface::Netlogon)]);
+        let got: Vec<(u16, u16)> = results.iter().map(|r| (r.result, r.reason)).collect();
+        assert_eq!(got, vec![(0, 0), (2, 1), (0, 0)]);
     }
 }
