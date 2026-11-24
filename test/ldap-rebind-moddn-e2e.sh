@@ -205,4 +205,36 @@ cn: dave
 LDIF
 echo "ok: 4. an add under an existing parent works"
 
-echo "PASS: re-binds keep or replace the SASL layer as RFC 4513/4422 say; subtree modDN moves every descendant; Add refuses existing DNs and orphans"
+# 5. Key escaping (#77, finding 0c66d8e55849): a '/' in a value is one key
+# segment, so a subtree search under it returns its child at the right DN;
+# cn=x\+sn=y (one AVA) and cn=x+sn=y (two AVAs) are two entries, not one key.
+add <<LDIF || fail "add entries whose values hold '/' and '+': $(cat "$W/out")"
+dn: ou=a/b,$NEW
+objectClass: organizationalUnit
+ou: a/b
+
+dn: cn=c,ou=a/b,$NEW
+objectClass: person
+cn: c
+sn: Slash
+
+dn: cn=x\+sn=y,$NEW
+objectClass: person
+cn: x+sn=y
+sn: OneAva
+
+dn: cn=x+sn=y,$NEW
+objectClass: person
+cn: x
+sn: y
+LDIF
+ldapsearch -x -LLL -o ldif-wrap=no -H "$H" -b "ou=a/b,$NEW" -s sub '(objectClass=*)' dn > "$W/out" 2>&1 || fail "subtree search under ou=a/b"
+[ "$(grep -c '^dn:' "$W/out")" = 2 ] || fail "subtree under ou=a/b should hold 2 entries: $(cat "$W/out")"
+grep -qix "dn: cn=c,ou=a/b,$NEW" "$W/out" || fail "cn=c came back at the wrong DN: $(cat "$W/out")"
+ldapsearch -x -LLL -o ldif-wrap=no -H "$H" -b "$NEW" -s one '(sn=*)' dn sn > "$W/out" 2>&1 || fail "one-level search under $NEW"
+grep -qx 'sn: OneAva' "$W/out" || fail "cn=x\\+sn=y is missing: $(cat "$W/out")"
+grep -qx 'sn: y' "$W/out" || fail "cn=x+sn=y is missing: $(cat "$W/out")"
+grep -qi 'dn: cn=x\\+sn' "$W/out" || fail "cn=x\\+sn=y came back at the wrong DN: $(cat "$W/out")"
+echo "ok: 5. '/' and an escaped '+' in RDN values keep their own keys and DNs"
+
+echo "PASS: re-binds keep or replace the SASL layer as RFC 4513/4422 say; subtree modDN moves every descendant; Add refuses existing DNs and orphans; RDN delimiters are escaped in keys"
