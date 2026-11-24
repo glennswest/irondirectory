@@ -242,12 +242,15 @@ collision). sc-build clean with clippy -D warnings at e24bf13;
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
 
-## In progress (2026-11-24): #77 finding 0c66d8e55849 (DN keys unescaped)
+## Done (2026-11-24): #77 finding 0c66d8e55849 (DN keys unescaped)
 
 Tree key segments percent-escape `% / + = , \` per attribute type and value
 (`Rdn::normalized_string`); `dn_from_tree_key` decodes them
-(`Dn::from_reversed_components`). Unit tests in dn.rs, key.rs, entry.rs.
-- [ ] sc-build: clippy -D warnings, unit tests, an LDAP e2e.
+(`Dn::from_reversed_components`). sc-build at 625e8b2: clippy -D warnings,
+workspace unit tests, ldap-rebind-moddn + ldap-filters e2e PASS; step 5 of
+`test/ldap-rebind-moddn-e2e.sh` (a `/` and an escaped `+` via real ldapadd/
+ldapsearch) PASS at 8d7218a, failed as expected on the old encoding. Names
+already stored with one of those characters are not migrated.
 
 ## Done (2026-11-24): #53 iron-rpcd behind SMB named pipes + SAMR AES
 
