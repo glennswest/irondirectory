@@ -6,6 +6,23 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-24
+- **feat:** the LDAP ping (#52, MS-ADTS 6.3.3), how Windows finds a DC
+  before it joins (#20). iron-ldapd answers it on CLDAP (UDP, by default
+  `IRON_LDAP_LISTEN`'s address; `IRON_LDAP_CLDAP_LISTEN`) and over TCP with a
+  `NETLOGON_SAM_LOGON_RESPONSE_EX` built from its partition's registry record:
+  flags (PDC, LDAP, DS, KDC, writable, closest; never GC or time server), the
+  domain GUID, forest/domain/DC DNS names (`IRON_LDAP_DC_HOSTNAME`), NetBIOS
+  names, `Default-First-Site-Name`, `DcSockAddr` for `_WITH_IP`
+  (`IRON_LDAP_DC_ADDRESS`). `User`/`AAC` give opcode 23 or 25 (unknown,
+  disabled, wrong type); a ping for another domain gets no entry. rootDSE's
+  `dnsHostName`/`ldapServiceName` name the same DC. `test/cldap-ping-e2e.sh`.
+- **feat:** a domain GUID on each domain's registry record
+  (`Partition::domain_guid`, `iron_partition::Guid`): `iron-bootstrap` stores
+  one (and fills it into an older record), `iron-config-ctl init-forest`/
+  `create-child` generate one, `show` prints it. `init-forest` re-run on an
+  existing root keeps its GUID and NetBIOS name (it dropped the NetBIOS name).
+- **feat:** iron-rpcd's `LsarQueryInformationPolicy2` reports the domain GUID
+  from `IRON_RPC_DOMAIN_GUID` (was always zero).
 - **fix:** DN storage keys escape RDN delimiters (#77, finding
   0c66d8e55849). Each attribute type and normalized value in a tree key
   segment is percent-escaped (`%`, `/`, `+`, `=`, `,`, `\`), and

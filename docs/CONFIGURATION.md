@@ -47,6 +47,7 @@ settings are environment variables. An empty value counts as unset.
 | Binary | Default | Protocol | Setting |
 |---|---|---|---|
 | `iron-ldapd` | `0.0.0.0:389` | LDAP (+ StartTLS when a cert is set) | `IRON_LDAP_LISTEN` |
+| `iron-ldapd` | `IRON_LDAP_LISTEN`'s address, UDP | CLDAP: the LDAP ping only (#52) | `IRON_LDAP_CLDAP_LISTEN` |
 | `iron-ldapd` | off (e.g. `:636`) | LDAPS (implicit TLS) | `IRON_LDAP_LDAPS_LISTEN` |
 | `iron-ldapd` | `0.0.0.0:8080` | HTTP `/health` (live fastetcd `Status` check) | `IRON_LDAP_HEALTH_LISTEN` |
 | `iron-kdcd` | `0.0.0.0:88` | Kerberos, UDP and TCP | `IRON_KDC_LISTEN` |
@@ -82,9 +83,31 @@ The systemd units for `iron-ldapd`, `iron-kdcd` and `iron-gcd` grant
 | `IRON_LDAP_TLS_CERT`, `IRON_LDAP_TLS_KEY` | unset | set both or neither; enables StartTLS on the plaintext port |
 | `IRON_LDAP_LDAPS_LISTEN` | unset | also opens an implicit-TLS port (needs cert and key) |
 | `IRON_LDAP_REFERRALS` | unset | static referrals, `;`-separated `base-dn\|ldap-url` |
-| `IRON_LDAP_CONFIG_FASTETCD_ENDPOINT`, `_CONFIG_PARTITION_ID`, `_CONFIG_BASE_DN` | unset | all three load the forest registry once at startup for registry-driven referrals (checked before `IRON_LDAP_REFERRALS`) and multi-partition rootDSE |
+| `IRON_LDAP_CONFIG_FASTETCD_ENDPOINT`, `_CONFIG_PARTITION_ID`, `_CONFIG_BASE_DN` | unset | all three load the forest registry once at startup for registry-driven referrals (checked before `IRON_LDAP_REFERRALS`), multi-partition rootDSE and the LDAP ping |
+| `IRON_LDAP_CLDAP_LISTEN` | `IRON_LDAP_LISTEN`'s address and port, on UDP | CLDAP listener for the LDAP ping; `off` opens none |
+| `IRON_LDAP_DC_HOSTNAME` | the kernel host name | this DC's DNS name in the ping and rootDSE `dnsHostName`; a name with no dot is taken as a host in the domain; its first label (upper case, 15 characters) is the DC's NetBIOS name |
+| `IRON_LDAP_DC_ADDRESS` | the address each ping reached | IPv4 address a `_WITH_IP` ping answer carries |
 
 TLS is pinned to groups P-256/P-384/P-521.
+
+The LDAP ping (#52, MS-ADTS 6.3.3) is how Windows finds a DC before it joins
+or logs on: a search with base `""`, a filter of `DnsDomain`/`Host`/`User`/
+`AAC`/`DomainSid`/`DomainGuid`/`NtVer` terms and the attribute `Netlogon`.
+iron-ldapd answers it on CLDAP (UDP; the entry and the done in one datagram)
+and over TCP with a `NETLOGON_SAM_LOGON_RESPONSE_EX`: flags PDC, LDAP, DS,
+KDC, writable, closest, full-secret, DS_8/9/10 and the DNS-name bits (never
+GC or time server), the domain GUID, the forest/domain/DC DNS names, the
+NetBIOS names and `Default-First-Site-Name` (there are no sites yet). It is
+built from this partition's record in the forest registry, so it needs
+`IRON_LDAP_CONFIG_*` and a record with a domain GUID (`iron-bootstrap`
+stores one; an older record gets one on its next run). Without them no
+CLDAP port opens and a TCP ping is `unwillingToPerform`. A ping naming
+another domain gets a done with no entry; a `User` that is unknown,
+disabled, or not of a type `AAC` names gets opcode 25 (user unknown). Only
+the `_EX` response form is built (`NtVer` with 5EX or 5EX_WITH_IP, which
+Windows XP and later and Samba send). CLDAP answers nothing else
+(`unwillingToPerform`). `test/cldap-ping-e2e.sh` checks it with Samba's
+`net ads lookup` and a decoder written from the spec.
 
 Extended operations (#63), each listed in rootDSE `supportedExtension` only
 when it can run: StartTLS (RFC 4511 §4.14, needs the cert/key), Who am I
@@ -179,6 +202,7 @@ tokens and there is one replica only. See
 | `IRON_RPC_NETBIOS_NAME` | required | e.g. `G19RPC` |
 | `IRON_RPC_DNS_DOMAIN` | required | e.g. `g19rpc.lo` |
 | `IRON_RPC_REALM` | `IRON_RPC_DNS_DOMAIN` upper-cased | Kerberos realm: a computer's principal is `<account>@<realm>` |
+| `IRON_RPC_DOMAIN_GUID` | unset (all zero) | the domain GUID (`iron-config-ctl show`): `LsarQueryInformationPolicy2`'s `DomainGuid`, the one the LDAP ping answers with (#52) |
 | `IRON_RPC_LISTEN` | `0.0.0.0:445` | TCP listener |
 | `IRON_RPC_PIPE_SOCKET` | unset (off) | path of the Unix stream socket for rocketsmbd's `[ipc] backend` (#53). Created mode 0660 (a stale socket there is replaced; any other file there is an error): give rocketsmbd its group and nobody else, since each pipe's preamble carries the SMB session key. |
 
@@ -236,7 +260,7 @@ It needs `OPENSSL_CONF` (FIPS) like the daemons. What it creates, if absent:
 |---|---|
 | configuration partition `<pid>-config` | `cn=configuration,<base>` (the forest registry, as `iron-config-ctl init-forest` writes it) |
 | schema partition `<pid>-schema` | `cn=schema,cn=configuration,<base>` |
-| root domain record `<pid>` | realm, NetBIOS name, a fresh `S-1-5-21-…` domain SID |
+| root domain record `<pid>` | realm, NetBIOS name, a fresh `S-1-5-21-…` domain SID and a fresh domain GUID (#52; a record without one gets one) |
 | base entry | `<base>`, `domainDNS`, `objectSid` = the domain SID |
 | `krbtgt/<REALM>@<REALM>` | `cn=krbtgt,<base>`, random key, RID 502 |
 | `administrator@<REALM>` | `cn=administrator,<base>`, RID 500, `userPassword` (LDAP bind) and Kerberos keys from the password file |

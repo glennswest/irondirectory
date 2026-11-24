@@ -252,6 +252,15 @@ workspace unit tests, ldap-rebind-moddn + ldap-filters e2e PASS; step 5 of
 ldapsearch) PASS at 8d7218a, failed as expected on the old encoding. Names
 already stored with one of those characters are not migrated.
 
+## Done (2026-11-24): #52 CLDAP LDAP ping
+
+`iron_ldap::cldap`: MS-ADTS 6.3.3 ping on UDP (`IRON_LDAP_CLDAP_LISTEN`,
+default `IRON_LDAP_LISTEN`'s address) and TCP, `NETLOGON_SAM_LOGON_RESPONSE_EX`
+from the partition's registry record; `Partition::domain_guid` (bootstrap,
+config-ctl), iron-rpcd `IRON_RPC_DOMAIN_GUID` for LSARPC. Verified: see the
+#52 closing comment. Gotcha: Samba 4.24 has no `cldap port`; the e2e runs
+in `unshare -rn` to bind UDP 389 unprivileged.
+
 ## Done (2026-11-24): #53 iron-rpcd behind SMB named pipes + SAMR AES
 
 rocketsmbd (rocketsmbd#83) forwards each IPC$ pipe to `IRON_RPC_PIPE_SOCKET`
@@ -384,6 +393,14 @@ recv calls; MIT krb5.conf needs `REALM = {` on its own line.
 Filed for the rest (2026-11-10): #52 CLDAP LDAP ping; #53 iron-rpcd behind
 ncacn_np + authenticated SAMR AES password set; rocketsmbd#83 IPC$ pipe
 forwarding. Windows VM: stormcentral#465. macOS: after #25.
+2026-11-24: #53 done, #52 done (below). Every piece buildable here is in.
+Left, neither changeable from this repo: the real `Add-Computer` run needs
+wintest11/wintest2025 (stormcentral#465: built, but the master has not added
+the DHCP reservations/records or run `windows install`; `stormcentral
+windows credential wintest11` says "no such Windows test machine"); macOS
+`dsconfigad` needs #25's stack. Before the Windows run: give iron-rpcd
+`IRON_RPC_DOMAIN_GUID` (same GUID as the ping) and run iron-ldapd with
+`IRON_LDAP_CONFIG_*`, `IRON_LDAP_DC_HOSTNAME` on UDP+TCP 389.
 
 ## Done (2026-10-06): #24 concurrency failures under `iron-simulate join 25`
 
