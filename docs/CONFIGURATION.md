@@ -298,8 +298,21 @@ does not change the stored password.
 | `iron-kdc-ctl` | `IRON_KDC_FASTETCD_ENDPOINT`, `_PARTITION_ID`, `_BASE_DN`, `_REALM` (all required) | `set-password`, `export-keytab`, `set-cross-realm-key` |
 | `iron-config-ctl` | `IRON_CONFIG_FASTETCD_ENDPOINT` (always); `IRON_CONFIG_PARTITION_ID`, `IRON_CONFIG_BASE_DN` (every command except `init-forest`); optional `IRON_CONFIG_ROOT_LDAP_URL` (`init-forest`), `IRON_CONFIG_LDAP_URL` and `IRON_CHILD_FASTETCD_ENDPOINT` (`create-child`) | `init-forest`, `create-child`, `show`, `set-ldap-url`, `set-kdc-url`, `add-subordinate`, `set-domain-sid` |
 | `iron-rpc-ctl` | `IRON_RPC_FASTETCD_ENDPOINT`, `_PARTITION_ID`, `_BASE_DN` | `set-computer-secret` (test stand-in for real password-setting) |
-| `iron-dns-ctl` | none (arguments only) | `ldap\|kerberos <microdns-url> <domain-or-realm> <host:port>...` |
+| `iron-dns-ctl` | none (arguments only) | `ldap\|kerberos <microdns-url> <domain-or-realm> <host:port>...`; `dc <microdns-url> <domain> <forest> <domain-guid> <dc-host> [ldap kdc kpasswd ports]` |
 | `iron-simulate` | `IRON_SIM_RPC_ADDR`, `_KDC_ADDR`, `_PARTITION_ID`, `_BASE_DN`, `_REALM`, `_FASTETCD_ENDPOINT`, `_SERVICE_PRINCIPAL` (all required) | `join <count> [prefix]`, `login <count> <user> <pass>` |
+
+`iron-dns-ctl dc` (#87) publishes the DC-locator SRV records a writable,
+non-GC DC registers (MS-ADTS 6.3.2.3), which Windows' DsGetDcName looks up
+before its LDAP ping: in the domain zone `_ldap._tcp`, `_ldap._tcp.<site>._sites`,
+`_ldap._tcp.dc._msdcs`, `_ldap._tcp.<site>._sites.dc._msdcs`,
+`_ldap._tcp.pdc._msdcs`, `_kerberos._tcp`/`_udp`, `_kerberos._tcp.<site>._sites`,
+`_kerberos._tcp.dc._msdcs`, `_kerberos._tcp.<site>._sites.dc._msdcs`,
+`_kpasswd._tcp`/`_udp`; in the forest zone `_ldap._tcp.<domain-guid>.domains._msdcs`.
+The site is `Default-First-Site-Name` (the LDAP ping's). Names are published
+lower-case. No GC records, and no A record for the DC host (that is the
+network's DHCP or the operator's). The domain GUID is `iron-config-ctl show`'s.
+`ldap`/`kerberos` alone are not enough for a Windows client (or Samba's
+locator): `test/dc-locator-dns-e2e.sh`.
 
 `iron-store`'s ignored mTLS test reads `IRON_STORE_MTLS_ENDPOINT`/`_CA`/`_CERT`/`_KEY`
 (`test/mtls-e2e.sh` sets them).

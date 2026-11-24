@@ -252,6 +252,15 @@ workspace unit tests, ldap-rebind-moddn + ldap-filters e2e PASS; step 5 of
 ldapsearch) PASS at 8d7218a, failed as expected on the old encoding. Names
 already stored with one of those characters are not migrated.
 
+## Done (2026-11-24): #87 DC-locator DNS records (for #20)
+
+`iron_dns::srv::dc_records` + `iron-dns-ctl dc`: 13 SRV records (MS-ADTS
+6.3.2.3, non-GC, lower-cased). `test/dc-locator-dns-e2e.sh` builds MicroDNS
+(MICRODNS_REF), runs in `unshare -rnm` (resolv.conf bind-mounted, MicroDNS
+on :53, CLDAP on :389); Samba's `net ads lookup` finds no DC with the old
+ldap/kerberos records, finds it with these. Gotchas: build VM has no dig
+(dnspython is there); `find` on a missing dir + pipefail exits silently.
+
 ## Done (2026-11-24): #78 finding 6bbcf7596b07 (LDAP frame lengths)
 
 `iron_ldap::framing::Limits`: 10 MiB LDAP / +1 KiB SASL (advertised in the
@@ -414,7 +423,9 @@ recv calls; MIT krb5.conf needs `REALM = {` on its own line.
 Filed for the rest (2026-11-10): #52 CLDAP LDAP ping; #53 iron-rpcd behind
 ncacn_np + authenticated SAMR AES password set; rocketsmbd#83 IPC$ pipe
 forwarding. Windows VM: stormcentral#465. macOS: after #25.
-2026-11-24: #53 done, #52 done (below). Every piece buildable here is in.
+2026-11-24: #53 done, #52 done (below). Later the same day two more gaps a
+real join would hit first were found and filed: #87 DC-locator DNS records
+(done) and #88 GSS-SPNEGO SASL bind (rootDSE advertised it, unimplemented).
 Left, neither changeable from this repo: the real `Add-Computer` run needs
 wintest11/wintest2025 (stormcentral#465: built, but the master has not added
 the DHCP reservations/records or run `windows install`; `stormcentral

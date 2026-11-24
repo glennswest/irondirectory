@@ -6,6 +6,15 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-24
+- **feat:** `iron-dns-ctl dc <microdns-url> <domain> <forest> <domain-guid>
+  <dc-host>` publishes the DC-locator SRV records (#87, for #20): the
+  `_ldap._tcp.dc._msdcs`, site, PDC and domain-GUID names, `_kerberos.*` and
+  `_kpasswd.*` (MS-ADTS 6.3.2.3, non-GC). Windows' DsGetDcName and Samba's
+  locator look these up; the `_ldap._tcp`/`_kerberos` records `ldap` and
+  `kerberos` publish are not enough. Record names are published lower-case:
+  MicroDNS answered a mixed-case name only when stored lower-case.
+  `test/dc-locator-dns-e2e.sh` (MicroDNS built from its repository, Samba's
+  `net ads lookup` finding the DC by DNS alone).
 - **fix:** iron-ldapd and iron-gcd buffered whatever length a client's BER
   header declared, with no deadline (finding 6bbcf7596b07, #78): one
   connection declaring 2 GiB and trickling bytes grew one buffer without end.
