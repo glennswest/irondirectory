@@ -837,7 +837,9 @@ async fn handle_sasl_bind(
 /// then continues the acceptor's send sequence from 1.
 fn security_layer_challenge(fips: &iron_crypto::FipsContext, enctype: Enctype, session_key: &[u8]) -> Result<Vec<u8>, crate::gssapi::wrap::Error> {
     const OFFERED_LAYERS: u8 = 0x01 | 0x02 | 0x04;
-    const MAX_BUFFER: u32 = 0x00FF_FFFF; // 3-octet field -- largest representable value
+    // The receive size read_sized_buffer enforces (finding 6bbcf7596b07);
+    // a 3-octet field.
+    const MAX_BUFFER: u32 = crate::framing::MAX_SASL_BUFFER as u32;
     let mut challenge = [0u8; 4];
     challenge[0] = OFFERED_LAYERS;
     challenge[1..4].copy_from_slice(&MAX_BUFFER.to_be_bytes()[1..4]);
