@@ -6,6 +6,15 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-24
+- **fix:** DN storage keys escape RDN delimiters (#77, finding
+  0c66d8e55849). Each attribute type and normalized value in a tree key
+  segment is percent-escaped (`%`, `/`, `+`, `=`, `,`, `\`), and
+  `dn_from_tree_key` decodes segments directly (`Dn::from_reversed_components`)
+  instead of re-parsing a comma join. Before, `cn=a/b` added a key path
+  component, `cn=a\+sn=b` and `cn=a+sn=b` shared one key (one overwrote
+  the other), and `cn=Doe\, Jane` came back from a scan as two RDNs. Keys
+  of names without those characters are unchanged; an entry already stored
+  under a name containing one of them is no longer found at its old key.
 - **fix:** iron-rpcd's bind kept only the last presentation context it
   accepted and never checked the transfer syntax. Samba's rpcclient offers
   SAMR as NDR 2.0 (ctx 0) and NDR64 (ctx 1) plus a bind-time feature

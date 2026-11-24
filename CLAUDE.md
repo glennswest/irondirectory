@@ -242,6 +242,13 @@ collision). sc-build clean with clippy -D warnings at e24bf13;
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
 
+## In progress (2026-11-24): #77 finding 0c66d8e55849 (DN keys unescaped)
+
+Tree key segments percent-escape `% / + = , \` per attribute type and value
+(`Rdn::normalized_string`); `dn_from_tree_key` decodes them
+(`Dn::from_reversed_components`). Unit tests in dn.rs, key.rs, entry.rs.
+- [ ] sc-build: clippy -D warnings, unit tests, an LDAP e2e.
+
 ## Done (2026-11-24): #53 iron-rpcd behind SMB named pipes + SAMR AES
 
 rocketsmbd (rocketsmbd#83) forwards each IPC$ pipe to `IRON_RPC_PIPE_SOCKET`

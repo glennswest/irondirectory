@@ -7,6 +7,8 @@
 //!
 //! Layout:
 //! - entry:        `/iron/<pid>/tree/<dc=lo/dc=g10/ou=users/cn=alice>`
+//!   (each segment percent-escapes `%`, `/`, `+`, `=`, `,` and `\` in its
+//!   types and values, so `cn=a/b` is the one segment `cn=a%2Fb`)
 //! - subtree scan: prefix `/iron/<pid>/tree/<…base…>/`
 //! - index:        `/iron/<pid>/idx/<attr>/<value>/<dn>`
 
@@ -104,6 +106,12 @@ mod tests {
     fn base_entry_is_just_below_root() {
         let base = Dn::parse("dc=g10,dc=lo").unwrap();
         assert_eq!(entry_key(&pid(), &base), "/iron/g10/tree/dc=lo/dc=g10");
+    }
+
+    #[test]
+    fn entry_key_escapes_value_delimiters() {
+        let dn = Dn::parse(r"cn=a/b\+c,dc=lo").unwrap();
+        assert_eq!(entry_key(&pid(), &dn), "/iron/g10/tree/dc=lo/cn=a%2Fb%2Bc");
     }
 
     #[test]

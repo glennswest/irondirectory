@@ -21,8 +21,9 @@ pub fn dn_from_tree_key(pid: &PartitionId, raw_key: &str) -> Result<Dn, StoreErr
             reason: "key is not under this partition's tree root".into(),
         })
     })?;
-    let comma_form: String = suffix.split('/').rev().collect::<Vec<_>>().join(",");
-    Dn::parse(&comma_form).map_err(StoreError::Partition)
+    // Each segment is an escaped key segment (finding 0c66d8e55849), not
+    // RFC 4514 text: decode it as such rather than re-parsing a comma join.
+    Dn::from_reversed_components(suffix.split('/')).map_err(StoreError::Partition)
 }
 
 /// Writes the raw entry value at `dn` within partition `pid`.
@@ -187,4 +188,36 @@ pub async fn next_entry_change(
             entry: crate::model::Entry::decode(&event.value)?,
         },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Finding 0c66d8e55849: a DN whose values hold `/`, `+`, `,` or `\\`
+    /// comes back from its tree key as the same DN, and DNs that differ only
+    /// in an escaped `+` get different keys.
+    #[test]
+    fn tree_key_round_trips_delimiter_values() {
+        let pid = PartitionId::new("g10").unwrap();
+        for s in [
+            "cn=alice,ou=users,dc=g10,dc=lo",
+            "cn=a/b,ou=x/y,dc=g10,dc=lo",
+            r"cn=a\+sn=b,dc=g10,dc=lo",
+            "cn=a+sn=b,dc=g10,dc=lo",
+            r"cn=Doe\, Jane,dc=g10,dc=lo",
+            r"cn=back\\slash%25,dc=g10,dc=lo",
+        ] {
+            let dn = Dn::parse(s).unwrap();
+            let k = key::entry_key(&pid, &dn);
+            assert_eq!(dn_from_tree_key(&pid, &k).unwrap(), dn, "{s} via {k}");
+        }
+        let a = Dn::parse(r"cn=a\+sn=b,dc=g10,dc=lo").unwrap();
+        let b = Dn::parse("cn=a+sn=b,dc=g10,dc=lo").unwrap();
+        assert_ne!(key::entry_key(&pid, &a), key::entry_key(&pid, &b));
+        // A '/' in a value stays inside its own subtree prefix.
+        let parent = Dn::parse("ou=x/y,dc=g10,dc=lo").unwrap();
+        let other = Dn::parse("cn=y,ou=x,dc=g10,dc=lo").unwrap();
+        assert!(!key::entry_key(&pid, &other).starts_with(&key::subtree_prefix(&pid, &parent)));
+    }
 }

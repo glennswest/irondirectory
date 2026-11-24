@@ -69,15 +69,73 @@ impl Rdn {
         &self.avas
     }
 
-    /// Canonical, normalized string form (`attr=normvalue[+attr=normvalue]`),
-    /// used to build storage keys so keys are case-insensitive-consistent.
+    /// Canonical, normalized storage-key segment (`attr=normvalue[+attr=normvalue]`),
+    /// so keys are case-insensitive-consistent. Each attribute type and value
+    /// is percent-escaped ([`escape_key_part`]) so that a `/`, `+`, `=`, `,`,
+    /// `\` or `%` inside a value can neither add a key path component nor
+    /// collide with a multi-valued RDN (finding 0c66d8e55849: `cn=a\+sn=b`
+    /// and `cn=a+sn=b` used to share a key). [`Rdn::from_key_segment`] is the
+    /// exact inverse.
     fn normalized_string(&self) -> String {
         self.avas
             .iter()
-            .map(|a| format!("{}={}", a.attr, a.norm_value))
+            .map(|a| format!("{}={}", escape_key_part(&a.attr), escape_key_part(&a.norm_value)))
             .collect::<Vec<_>>()
             .join("+")
     }
+
+    /// Decode one storage-key segment written by [`Dn::reversed_components`].
+    /// The AVAs carry the normalized (case-folded) value as their display
+    /// value: keys do not keep display case.
+    pub fn from_key_segment(seg: &str) -> Result<Rdn, PartitionError> {
+        let bad = |reason: String| PartitionError::InvalidDn { input: seg.to_string(), reason };
+        let mut avas = Vec::new();
+        for part in seg.split('+') {
+            let (attr, value) = part
+                .split_once('=')
+                .ok_or_else(|| bad(format!("key segment AVA {part:?} has no '='")))?;
+            let attr = unescape_key_part(attr).ok_or_else(|| bad("bad %-escape in attribute".into()))?;
+            let value = unescape_key_part(value).ok_or_else(|| bad("bad %-escape in value".into()))?;
+            if attr.is_empty() {
+                return Err(bad("empty attribute type".into()));
+            }
+            avas.push(Ava { attr, norm_value: value.clone(), value });
+        }
+        avas.sort_by(|a, b| (&a.attr, &a.norm_value).cmp(&(&b.attr, &b.norm_value)));
+        Ok(Rdn { avas })
+    }
+}
+
+/// Percent-escape the characters that delimit storage keys (`/` between RDNs,
+/// `+` between AVAs, `=` between type and value), plus `%` itself, `,` and
+/// `\` so a key segment never reads as RFC 4514 syntax either.
+fn escape_key_part(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '%' | '/' | '+' | '=' | ',' | '\\' => out.push_str(&format!("%{:02X}", c as u32)),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Inverse of [`escape_key_part`]; `None` on a malformed escape.
+fn unescape_key_part(s: &str) -> Option<String> {
+    let mut out = Vec::with_capacity(s.len());
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = s.get(i + 1..i + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 impl fmt::Display for Rdn {
@@ -180,6 +238,15 @@ impl Dn {
             .rev()
             .map(|r| r.normalized_string())
             .collect()
+    }
+
+    /// Inverse of [`Dn::reversed_components`]: rebuild a DN from root-first
+    /// storage-key segments.
+    pub fn from_reversed_components<'a>(
+        segs: impl DoubleEndedIterator<Item = &'a str>,
+    ) -> Result<Dn, PartitionError> {
+        let rdns = segs.rev().map(Rdn::from_key_segment).collect::<Result<Vec<_>, _>>()?;
+        Ok(Dn { rdns })
     }
 }
 
@@ -395,6 +462,44 @@ mod tests {
         let a = Dn::parse("cn=alice+uid=a1,dc=lo").unwrap();
         let b = Dn::parse("uid=a1+cn=alice,dc=lo").unwrap();
         assert_eq!(a, b);
+    }
+
+    /// Finding 0c66d8e55849: values holding key delimiters must stay one key
+    /// segment, and an escaped `+` must not collide with a two-AVA RDN.
+    #[test]
+    fn key_segments_escape_delimiters_and_round_trip() {
+        let slash = Dn::parse("cn=a/b,dc=lo").unwrap();
+        let comps = slash.reversed_components();
+        assert_eq!(comps, vec!["dc=lo".to_string(), "cn=a%2Fb".into()]);
+        assert!(comps.iter().all(|c| !c.contains('/')));
+
+        let escaped_plus = Dn::parse(r"cn=a\+sn=b,dc=lo").unwrap();
+        let two_avas = Dn::parse("cn=a+sn=b,dc=lo").unwrap();
+        assert_ne!(escaped_plus, two_avas);
+        assert_ne!(escaped_plus.reversed_components(), two_avas.reversed_components());
+
+        for s in [
+            "cn=a/b,dc=lo",
+            r"cn=a\+sn=b,dc=lo",
+            "cn=a+sn=b,dc=lo",
+            r"cn=Doe\, Jane,ou=x\\y,dc=lo",
+            r"cn=50%2F off\=x,dc=lo",
+            "cn=caf\u{e9},dc=lo",
+        ] {
+            let dn = Dn::parse(s).unwrap();
+            let comps = dn.reversed_components();
+            let back = Dn::from_reversed_components(comps.iter().map(String::as_str)).unwrap();
+            assert_eq!(back, dn, "{s}");
+            assert_eq!(back.depth(), dn.depth(), "{s}");
+        }
+    }
+
+    #[test]
+    fn bad_key_segments_are_refused() {
+        assert!(Rdn::from_key_segment("cn").is_err());
+        assert!(Rdn::from_key_segment("cn=a%2").is_err());
+        assert!(Rdn::from_key_segment("cn=a%zz").is_err());
+        assert!(Rdn::from_key_segment("=a").is_err());
     }
 
     #[test]
