@@ -9,7 +9,7 @@
 # registry, so tickets carry a PAC) and iron-rpcd with IRON_RPC_PIPE_SOCKET,
 # builds rocketsmbd from its repository at ROCKETSMBD_REF with the kerberos
 # feature and runs it on a high port with an iron-kdc keytab for
-# cifs/localhost and [ipc] backend = iron-rpcd's socket. Then, with Samba's
+# cifs/$SMBHOST and [ipc] backend = iron-rpcd's socket. Then, with Samba's
 # rpcclient over a Kerberos SMB session (signing required):
 #  1. administrator (RID 500 in the PAC) creates the users carol and bob
 #     over \PIPE\samr (createdomuser: USER_NORMAL_ACCOUNT);
@@ -87,14 +87,18 @@ for _ in $(seq 50); do [ -S "$SOCK" ] && break; sleep 0.2; done
 [ -S "$SOCK" ] || fail "iron-rpcd made no pipe socket"
 [ "$(stat -c %a "$SOCK")" = 660 ] || fail "the pipe socket is mode $(stat -c %a "$SOCK"), not 660"
 
-$B/iron-kdc-ctl set-password cifs/localhost "$(head -c 24 /dev/urandom | base64)" > /dev/null
-$B/iron-kdc-ctl export-keytab cifs/localhost "$W/smb.keytab" > /dev/null
+# Samba will not use Kerberos to "localhost" or to an IP address
+# (gensec_kerberos_possible), so the server gets a name and rpcclient is
+# sent to 127.0.0.1 with -I.
+SMBHOST="smb.$(echo "$REALM" | tr A-Z a-z)"
+$B/iron-kdc-ctl set-password "cifs/$SMBHOST" "$(head -c 24 /dev/urandom | base64)" > /dev/null
+$B/iron-kdc-ctl export-keytab "cifs/$SMBHOST" "$W/smb.keytab" > /dev/null
 $B/iron-kdc-ctl set-password alice 'AlicePass123!' > /dev/null
 mkdir -p "$W/share"
 cat > "$W/rocketsmbd.toml" <<EOF
 listen = "127.0.0.1:$((P + 6))"
 workers = 1
-server_name = "localhost"
+server_name = "$SMBHOST"
 log_level = 1
 core_pinning = false
 require_signing = true
@@ -103,7 +107,7 @@ auth = "kerberos"
 
 [kerberos]
 keytab = "$W/smb.keytab"
-spn = "cifs/localhost"
+spn = "cifs/$SMBHOST"
 realm = "$REALM"
 
 [ipc]
@@ -128,7 +132,7 @@ cat > "$W/krb5.conf" <<EOF
         kpasswd_server = 127.0.0.1:$((P + 7))
     }
 [domain_realm]
-    localhost = $REALM
+    $SMBHOST = $REALM
 EOF
 export KRB5_CONFIG=$W/krb5.conf
 "$RSMB" --config "$W/rocketsmbd.toml" --check > "$W/rsmbcheck.log" 2>&1 || fail "rocketsmbd --check refused the config"
@@ -153,13 +157,17 @@ client() { env -u OPENSSL_CONF KRB5_TRACE="$W/trace.log" "$@"; }
 login() { echo "$2" | client kinit -c "$W/cc.$1" "$1@$REALM" > /dev/null 2>&1; }
 can_kinit() { echo "$2" | client kinit -c "$W/cc.probe" "$1@$REALM" > "$W/kinit.out" 2>&1; }
 rpc() { # <user> <command>: rpcclient over \PIPE\samr as <user>'s ticket
+  RPC_USER=$1 RPC_CMD=$2
   client rpcclient -s "$W/smb.conf" --port=$((P + 6)) --use-kerberos=required --use-krb5-ccache="$W/cc.$1" \
-    -c "$2" localhost > "$W/rpc.out" 2>&1
+    -I 127.0.0.1 -c "$2" "$SMBHOST" > "$W/rpc.out" 2>&1
 }
-saw() { grep -q -- "$1" "$W/rpc.out" || fail "rpcclient output lacks '$1': $(cat "$W/rpc.out")"; }
+# On a failure, the same call again at debug level 5 (fail prints the log).
+rpc_debug() { client rpcclient -d 5 -s "$W/smb.conf" --port=$((P + 6)) --use-kerberos=required --use-krb5-ccache="$W/cc.$1" \
+    -I 127.0.0.1 -c "$2" "$SMBHOST" 2>&1 | grep -v '^\s*$' | tail -60 > "$W/rpc-debug.log" || true; }
+saw() { grep -q -- "$1" "$W/rpc.out" || { rpc_debug "$RPC_USER" "$RPC_CMD"; fail "rpcclient output lacks '$1': $(cat "$W/rpc.out")"; }; }
 # Judged by the output, not rpcclient's exit status: a failed command prints
 # its NTSTATUS ("result was NT_STATUS_...").
-rpc_ok() { rpc "$1" "$2" || true; grep -q "NT_STATUS_\|result was\|Cannot connect\|failed" "$W/rpc.out" && fail "$1: rpcclient '$2': $(cat "$W/rpc.out")"; return 0; }
+rpc_ok() { rpc "$1" "$2" || true; grep -q "NT_STATUS_\|result was\|Cannot connect\|failed" "$W/rpc.out" && { rpc_debug "$1" "$2"; fail "$1: rpcclient '$2': $(cat "$W/rpc.out")"; }; return 0; }
 rpc_refused() { rpc "$1" "$2" || true; saw "$3"; }
 
 login administrator 'AdminPass123!' || fail "kinit administrator"
