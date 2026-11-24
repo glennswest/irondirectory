@@ -60,6 +60,21 @@
 //! change requires restarting this process (a later issue, not #10's
 //! happy-path scope).
 //!
+//!   IRON_LDAP_CLDAP_LISTEN=       (unset = UDP on IRON_LDAP_LISTEN's address; `off` = none)
+//!   IRON_LDAP_DC_HOSTNAME=        (unset = the kernel host name; no dot = a host in the domain)
+//!   IRON_LDAP_DC_ADDRESS=         (unset = the address each ping reached)
+//!
+//! The LDAP ping (#52, MS-ADTS 6.3.3): how Windows finds a DC before it
+//! joins. Answered on CLDAP (UDP, by default the same address and port as
+//! the plaintext TCP listener, as AD serves CLDAP on UDP 389) and on TCP,
+//! from this partition's record in the forest registry, so it needs
+//! `IRON_LDAP_CONFIG_*` below and a record with a domain GUID
+//! (`iron-bootstrap` fills one in). Without them iron-ldapd still starts,
+//! warns, opens no CLDAP port and refuses a ping over TCP.
+//! `IRON_LDAP_DC_HOSTNAME` is the DC's DNS name the ping answers with (and
+//! rootDSE's `dnsHostName`); its first label is the DC's NetBIOS name.
+//! `IRON_LDAP_DC_ADDRESS` is the IPv4 address a `_WITH_IP` answer carries.
+//!
 //! Authenticated simple bind (D4: PBKDF2 via the OpenSSL FIPS provider)
 //! needs OPENSSL_CONF pointing at a config that activates fips.so (see
 //! docs/FIPS.md) -- without it, iron-ldapd still starts and serves
@@ -119,6 +134,28 @@ async fn load_topology() -> anyhow::Result<Option<PartitionRegistry>> {
     Ok(Some(registry))
 }
 
+/// What the LDAP ping answers with (#52), or `None` (warned about by the
+/// caller) when there is no topology or this partition's record lacks
+/// what the answer needs. A malformed `IRON_LDAP_DC_ADDRESS` is an error.
+fn dc_info(topology: Option<&PartitionRegistry>, own: &iron_partition::PartitionId) -> anyhow::Result<Option<iron_ldap::cldap::DcInfo>> {
+    let address = match env("IRON_LDAP_DC_ADDRESS") {
+        Some(a) => Some(a.parse().map_err(|e| anyhow::anyhow!("IRON_LDAP_DC_ADDRESS {a:?}: {e}"))?),
+        None => None,
+    };
+    let Some(topology) = topology else { return Ok(None) };
+    let host = match env("IRON_LDAP_DC_HOSTNAME") {
+        Some(h) => h,
+        None => std::fs::read_to_string("/proc/sys/kernel/hostname").map(|h| h.trim().to_string()).unwrap_or_default(),
+    };
+    match iron_ldap::cldap::DcInfo::from_topology(topology, own, &host, address) {
+        Ok(info) => Ok(Some(info)),
+        Err(e) => {
+            tracing::warn!("LDAP ping disabled: {e}");
+            Ok(None)
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -170,7 +207,13 @@ async fn main() -> anyhow::Result<()> {
         (None, None) => None,
         _ => anyhow::bail!("IRON_LDAP_TLS_CERT and IRON_LDAP_TLS_KEY must be set together"),
     };
-    let app = AppState::new(store, index_spec, tls_acceptor.clone(), referrals, topology, Some(own_partition_id), channel_binding);
+    let dc_info = dc_info(topology.as_ref(), &own_partition_id)?;
+    let cldap_addr = match env("IRON_LDAP_CLDAP_LISTEN").as_deref() {
+        Some("off") => None,
+        Some(a) => Some(a.to_string()),
+        None => Some(listen_addr.clone()),
+    };
+    let app = AppState::new(store, index_spec, tls_acceptor.clone(), referrals, topology, Some(own_partition_id), channel_binding, dc_info);
 
     let mut tasks = Vec::new();
 
@@ -181,6 +224,16 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&listen_addr).await?;
     tracing::info!(%listen_addr, starttls = tls_acceptor.is_some(), "iron-ldapd listening (plaintext)");
     tasks.push(tokio::spawn(iron_ldap::serve(listener, app.clone())));
+
+    match (cldap_addr, &app.dc_info) {
+        (Some(addr), Some(info)) => {
+            let socket = tokio::net::UdpSocket::bind(&addr).await?;
+            tracing::info!(cldap_addr = %addr, dc = %info.host_dns, domain = %info.domain_dns, "iron-ldapd listening (CLDAP, LDAP ping)");
+            tasks.push(tokio::spawn(iron_ldap::cldap::serve(socket, app.clone())));
+        }
+        (Some(_), None) => tracing::warn!("no CLDAP listener: the LDAP ping needs IRON_LDAP_CONFIG_* and a domain record with a domain GUID (#52)"),
+        (None, _) => {}
+    }
 
     if let Some(ldaps_addr) = ldaps_addr {
         let acceptor = tls_acceptor

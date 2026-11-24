@@ -199,6 +199,13 @@ pub struct Partition {
     /// partitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub netbios_name: Option<String>,
+    /// The domain's GUID (MS-DTYP §2.3.4 text form), present for domain
+    /// partitions once provisioned -- AD's domain head `objectGUID`. The
+    /// CLDAP LDAP ping (#52) answers with it, and a Windows client keeps
+    /// it once joined, so it is permanent like `domain_sid`. Set by
+    /// `iron-bootstrap` and `iron-config-ctl`; `None` for older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_guid: Option<String>,
 }
 
 impl Partition {
@@ -224,6 +231,7 @@ impl Partition {
             kdc_url: None,
             domain_sid: None,
             netbios_name: None,
+            domain_guid: None,
         })
     }
 
@@ -246,6 +254,7 @@ impl Partition {
             kdc_url: None,
             domain_sid: None,
             netbios_name: None,
+            domain_guid: None,
         })
     }
 
@@ -270,6 +279,7 @@ impl Partition {
             kdc_url: None,
             domain_sid: None,
             netbios_name: None,
+            domain_guid: None,
         })
     }
 
@@ -301,6 +311,12 @@ impl Partition {
     /// form, #17).
     pub fn with_domain_sid(mut self, sid: impl Into<String>) -> Self {
         self.domain_sid = Some(sid.into());
+        self
+    }
+
+    /// Builder: set this domain's GUID (text form, #52).
+    pub fn with_domain_guid(mut self, guid: impl Into<String>) -> Self {
+        self.domain_guid = Some(guid.into());
         self
     }
 

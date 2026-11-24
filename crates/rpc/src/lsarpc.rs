@@ -28,6 +28,9 @@ pub struct DomainInfo<'a> {
     pub dns_domain_name: &'a str,
     pub dns_forest_name: &'a str,
     pub domain_sid: &'a Sid,
+    /// The domain GUID, in wire order (MS-DTYP §2.3.4.2): the same one
+    /// the LDAP ping answers with (#52). All zero when not configured.
+    pub domain_guid: [u8; 16],
 }
 
 /// `LsarOpenPolicy2`: ignores its request entirely (see module docs) and
@@ -65,11 +68,11 @@ pub fn query_information_policy2(stub_data: &[u8], info: &DomainInfo) -> Option<
     w.u16(0); // pad to 4-byte align before the struct body
 
     // LSAPR_POLICY_DNS_DOMAIN_INFO fixed part: three RPC_UNICODE_STRING
-    // headers, then a 16-byte GUID (all zero -- not modeled), then a SID pointer.
+    // headers, then the 16-byte domain GUID, then a SID pointer.
     let name = w.unicode_string_header(Some(info.netbios_name));
     let dns_name = w.unicode_string_header(Some(info.dns_domain_name));
     let dns_forest = w.unicode_string_header(Some(info.dns_forest_name));
-    w.bytes(&[0u8; 16]); // DomainGuid -- not modeled
+    w.bytes(&info.domain_guid);
     w.referent_id(); // Sid
 
     if let Some(s) = name {
@@ -98,6 +101,7 @@ mod tests {
             dns_domain_name: "iron.lo",
             dns_forest_name: "iron.lo",
             domain_sid: Box::leak(Box::new(sid.clone())),
+            domain_guid: [7; 16],
         };
         (sid, info)
     }
@@ -136,7 +140,7 @@ mod tests {
         assert_eq!(name_len, ("IRONLO".len() * 2) as u16);
         let (_, dns_ref) = r.unicode_string_header().unwrap();
         let (_, forest_ref) = r.unicode_string_header().unwrap();
-        let _guid = r.bytes(16).unwrap();
+        assert_eq!(r.bytes(16).unwrap(), &[7u8; 16][..]);
         let sid_referent = r.u32().unwrap();
         assert_ne!(sid_referent, 0);
 

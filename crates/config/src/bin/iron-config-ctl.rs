@@ -131,7 +131,7 @@ async fn show() -> anyhow::Result<()> {
     let (_store, _config_dn, registry) = connect_and_load().await?;
     for p in registry.iter() {
         println!(
-            "{:<20} kind={:<13} base_dn={:<40} realm={:<20} superior={:<20} ldap_url={:<30} kdc_url={:<20} domain_sid={:<45} subordinates={:?}",
+            "{:<20} kind={:<13} base_dn={:<40} realm={:<20} superior={:<20} ldap_url={:<30} kdc_url={:<20} domain_sid={:<45} domain_guid={:<36} subordinates={:?}",
             p.id.as_str(),
             format!("{:?}", p.kind),
             p.base_dn.to_string(),
@@ -140,6 +140,7 @@ async fn show() -> anyhow::Result<()> {
             p.ldap_url.as_deref().unwrap_or("-"),
             p.kdc_url.as_deref().unwrap_or("-"),
             p.domain_sid.as_deref().unwrap_or("-"),
+            p.domain_guid.as_deref().unwrap_or("-"),
             p.subordinates.iter().map(|s| s.as_str()).collect::<Vec<_>>()
         );
     }
@@ -280,9 +281,14 @@ async fn init_forest(args: &[String]) -> anyhow::Result<()> {
         // Never regenerate/overwrite an already-assigned domain SID --
         // it's meant to be permanent, exactly like a real domain's (#17).
         root.domain_sid = prior.domain_sid.clone();
+        root.domain_guid = prior.domain_guid.clone();
+        root.netbios_name = prior.netbios_name.clone();
     }
     if root.domain_sid.is_none() {
         root = root.with_domain_sid(iron_config::generate_domain_sid()?);
+    }
+    if root.domain_guid.is_none() {
+        root = root.with_domain_guid(iron_config::generate_domain_guid()?);
     }
     iron_config::put_partition(&mut store, &config_dn, &index_spec, &root).await?;
 
@@ -317,7 +323,8 @@ async fn create_child(args: &[String]) -> anyhow::Result<()> {
     let new_dn = Dn::parse(new_base_dn)?;
     let mut child = Partition::domain(new_id.clone(), parent.forest.clone(), new_dn, child_cluster)?
         .with_superior(parent_pid.clone())
-        .with_domain_sid(iron_config::generate_domain_sid()?);
+        .with_domain_sid(iron_config::generate_domain_sid()?)
+        .with_domain_guid(iron_config::generate_domain_guid()?);
     if let Some(realm) = realm_override {
         child = child.with_realm(realm.clone());
     }

@@ -31,6 +31,8 @@ pub struct DomainInfo {
     pub dns_domain_name: String,
     pub dns_forest_name: String,
     pub domain_sid: Sid,
+    /// `IRON_RPC_DOMAIN_GUID`, wire order; all zero when unset.
+    pub domain_guid: [u8; 16],
 }
 
 pub struct AppState {
@@ -280,6 +282,7 @@ async fn dispatch(app: &AppState, netlogon_session: &mut netlogon::Session, bind
                     dns_domain_name: &app.domain_info.dns_domain_name,
                     dns_forest_name: &app.domain_info.dns_forest_name,
                     domain_sid: &app.domain_info.domain_sid,
+                    domain_guid: app.domain_info.domain_guid,
                 };
                 lsarpc::query_information_policy2(stub, &info).ok_or(CallError::Malformed)
             }

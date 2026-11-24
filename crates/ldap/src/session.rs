@@ -376,9 +376,15 @@ where
                 }
             }
             ProtocolOp::SearchRequest(req) => {
-                let mut store = app.store.lock().await;
-                let ops = handle_search(&mut store, &req, &app.referral_config(), app.fips.is_some(), tls_acceptor.is_some() && matches!(conn, Conn::Plain(_))).await;
-                drop(store);
+                // The LDAP ping over TCP (#52, MS-ADTS 6.3.3): same answer
+                // as CLDAP's.
+                let ops = match crate::cldap::answer(&app, &req, None).await {
+                    Some(ops) => ops,
+                    None => {
+                        let mut store = app.store.lock().await;
+                        handle_search(&mut store, &req, &app.referral_config(), app.fips.is_some(), tls_acceptor.is_some() && matches!(conn, Conn::Plain(_)), app.dc_info.as_ref().map(|i| i.host_dns.as_str())).await
+                    }
+                };
                 for op in ops {
                     let resp = LdapMessage::new(message_id, op);
                     if send_response(&mut conn, app.fips.as_ref(), &sasl_state, &resp).await.is_err() {
@@ -1477,7 +1483,7 @@ fn moddn_crosses_naming_contexts(
     None
 }
 
-async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Referrals<'_>, fips_active: bool, starttls: bool) -> Vec<ProtocolOp> {
+async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Referrals<'_>, fips_active: bool, starttls: bool, dc_host: Option<&str>) -> Vec<ProtocolOp> {
     let base_dn = match Dn::parse(&req.base_object) {
         Ok(dn) => dn,
         Err(_) => return done(ResultCode::InvalidDnSyntax, "invalid base DN"),
@@ -1503,7 +1509,7 @@ async fn handle_search(store: &mut Store, req: &SearchRequest, referrals: &Refer
             None => None,
         };
         let registry = referrals.topology.unwrap_or_else(|| store.registry());
-        let mut entry = rootdse::build(registry, fips_active, usn);
+        let mut entry = rootdse::build(registry, fips_active, usn, dc_host);
         entry.attributes.push(PartialAttribute::new(
             "supportedExtension".into(),
             SetOf::from_vec(supported_extensions(fips_active, starttls).into_iter().map(|v| v.into_bytes().into()).collect()),

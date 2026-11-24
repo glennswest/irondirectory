@@ -7,7 +7,8 @@
 //! 1. the forest registry (what `iron-config-ctl init-forest` writes): a
 //!    configuration partition `<pid>-config` at `cn=configuration,<base>`, a
 //!    schema partition `<pid>-schema` under it, and the root domain `<pid>`
-//!    with its realm, NetBIOS name and a freshly generated domain SID;
+//!    with its realm, NetBIOS name and a freshly generated domain SID and
+//!    domain GUID (#52);
 //! 2. the domain's base entry (`objectSid` = the domain SID);
 //! 3. `krbtgt/<REALM>`, with a random key (RID 502);
 //! 4. `cn=administrator,<base>` (RID 500), whose `userPassword` (PBKDF2, for
@@ -22,7 +23,7 @@
 //! derive keys for the administrator, but only one entry is stored.
 //!
 //! The one exception to "never rewrites": a root-domain record that exists
-//! but predates a field (no domain SID, no NetBIOS name) gets that field
+//! but predates a field (no domain SID, GUID or NetBIOS name) gets that field
 //! filled in. A realm or base DN that disagrees with the stored record is an
 //! error, not something to overwrite.
 
@@ -126,6 +127,7 @@ pub fn password_from_file(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
 pub struct Report {
     pub created: Vec<String>,
     pub domain_sid: String,
+    pub domain_guid: String,
 }
 
 /// Connects to fastetcd, retrying every `retry` until a `Status` round trip
@@ -171,7 +173,8 @@ pub async fn provision(store: &mut Store, s: &Settings) -> anyhow::Result<Report
     let root = Partition::domain(s.partition_id.clone(), forest, s.base_dn.clone(), cluster)?
         .with_realm(s.realm.clone())
         .with_netbios_name(s.netbios_name.clone())
-        .with_domain_sid(iron_config::generate_domain_sid()?);
+        .with_domain_sid(iron_config::generate_domain_sid()?)
+        .with_domain_guid(iron_config::generate_domain_guid()?);
     for p in [&config, &schema, &root] {
         if iron_config::create_partition(store, &config_dn, &config_spec, p).await? {
             report.created.push(format!("partition {}", p.id.as_str()));
@@ -186,6 +189,9 @@ pub async fn provision(store: &mut Store, s: &Settings) -> anyhow::Result<Report
     if filled.domain_sid.is_none() {
         filled = filled.with_domain_sid(iron_config::generate_domain_sid()?);
     }
+    if filled.domain_guid.is_none() {
+        filled = filled.with_domain_guid(iron_config::generate_domain_guid()?);
+    }
     if filled.netbios_name.is_none() {
         filled = filled.with_netbios_name(s.netbios_name.clone());
     }
@@ -196,6 +202,7 @@ pub async fn provision(store: &mut Store, s: &Settings) -> anyhow::Result<Report
     let domain_sid_str = filled.domain_sid.clone().unwrap_or_default();
     let domain_sid = Sid::parse(&domain_sid_str).with_context(|| format!("stored domain SID {domain_sid_str:?} does not parse"))?;
     report.domain_sid = domain_sid_str;
+    report.domain_guid = filled.domain_guid.clone().unwrap_or_default();
 
     // 2-4. The entries, all indexed the way iron-kdc looks them up.
     let spec = iron_kdc::index_spec();

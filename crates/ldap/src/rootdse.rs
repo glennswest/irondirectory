@@ -33,8 +33,10 @@ fn single_domain_partition(registry: &PartitionRegistry) -> Option<&Partition> {
 }
 
 /// `highest_committed_usn`: the store's current revision (D2/#28), when the
-/// caller has a store to ask; the GC passes `None`.
-pub fn build(registry: &PartitionRegistry, fips_active: bool, highest_committed_usn: Option<i64>) -> SearchResultEntry {
+/// caller has a store to ask; the GC passes `None`. `dc_host`: this DC's
+/// DNS name, as the LDAP ping (#52) gives it, for `dnsHostName` and
+/// `ldapServiceName`; `None` keeps the `iron-ldapd.<realm>` placeholder.
+pub fn build(registry: &PartitionRegistry, fips_active: bool, highest_committed_usn: Option<i64>, dc_host: Option<&str>) -> SearchResultEntry {
     let mut attrs = vec![
         attr("objectClass", ["top".to_string()]),
         attr("supportedLDAPVersion", ["3".to_string()]),
@@ -99,8 +101,19 @@ pub fn build(registry: &PartitionRegistry, fips_active: bool, highest_committed_
         attrs.push(attr("domainControllerFunctionality", ["10".to_string()]));
         attrs.push(attr("isSynchronized", ["TRUE".to_string()]));
         if let Some(realm) = &domain.realm {
-            attrs.push(attr("dnsHostName", [format!("iron-ldapd.{}", realm.to_ascii_lowercase())]));
-            attrs.push(attr("ldapServiceName", [format!("{}:iron-ldapd@{realm}", realm.to_ascii_lowercase())]));
+            let domain_dns = realm.to_ascii_lowercase();
+            match dc_host {
+                // AD's form: `<domain>:<host>$@<REALM>`.
+                Some(host) => {
+                    let short = host.split('.').next().unwrap_or(host);
+                    attrs.push(attr("dnsHostName", [host.to_string()]));
+                    attrs.push(attr("ldapServiceName", [format!("{domain_dns}:{short}$@{realm}")]));
+                }
+                None => {
+                    attrs.push(attr("dnsHostName", [format!("iron-ldapd.{domain_dns}")]));
+                    attrs.push(attr("ldapServiceName", [format!("{domain_dns}:iron-ldapd@{realm}")]));
+                }
+            }
             attrs.push(attr("serverName", [format!("cn=iron-ldapd,{}", domain.base_dn)]));
             attrs.push(attr("dsServiceName", [format!("cn=iron-ldapd,{}", domain.base_dn)]));
         }

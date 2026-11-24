@@ -24,6 +24,7 @@
 
 pub mod dn;
 pub mod error;
+pub mod guid;
 pub mod key;
 pub mod partition;
 pub mod registry;
@@ -32,6 +33,7 @@ pub mod sid;
 
 pub use dn::{Ava, Dn, Rdn};
 pub use error::{PartitionError, Result};
+pub use guid::Guid;
 pub use partition::{
     realm_from_dn, ClusterRef, ForestId, Partition, PartitionId, PartitionKind, TlsRef,
 };

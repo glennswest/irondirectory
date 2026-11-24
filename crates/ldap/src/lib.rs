@@ -15,8 +15,10 @@
 //! has a provisioned domain SID (`security` module, #17). Not yet:
 //! subtree rename, other extended ops, full schema-subentry publishing
 //! (`cn=subschema`), ACE-based authorization enforcement (the
-//! descriptor is stored, not yet evaluated to gate anything).
+//! descriptor is stored, not yet evaluated to gate anything). The LDAP
+//! ping (MS-ADTS 6.3.3) on UDP (CLDAP) and TCP: `cldap` (#52).
 
+pub mod cldap;
 pub mod conn;
 pub mod filter;
 pub mod framing;
@@ -86,9 +88,17 @@ pub struct AppState {
     /// `IRON_LDAP_CHANNEL_BINDING`); bindings a client sends are always
     /// checked.
     pub channel_binding: gssapi::accept::ChannelBindingPolicy,
+    /// What the LDAP ping (#52, `cldap`) answers with: this DC's names and
+    /// its domain's GUID/SID, from its own record in `topology`. `None`
+    /// when there is no topology or the record has no domain GUID; a ping
+    /// is then refused (`unwillingToPerform`).
+    pub dc_info: Option<cldap::DcInfo>,
 }
 
 impl AppState {
+    // One argument per independent piece of deployment config (iron-ldapd's
+    // env vars); bundling them would only move the list.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         store: Store,
         index_spec: IndexSpec,
@@ -97,6 +107,7 @@ impl AppState {
         topology: Option<PartitionRegistry>,
         own_partition_id: Option<iron_partition::PartitionId>,
         channel_binding: gssapi::accept::ChannelBindingPolicy,
+        dc_info: Option<cldap::DcInfo>,
     ) -> Arc<Self> {
         let fips = match FipsContext::new() {
             Ok(f) => Some(f),
@@ -118,6 +129,7 @@ impl AppState {
             topology,
             own_partition_id,
             channel_binding,
+            dc_info,
         })
     }
 

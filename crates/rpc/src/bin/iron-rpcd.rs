@@ -14,6 +14,9 @@
 //!   IRON_RPC_REALM               Kerberos realm (default: IRON_RPC_DNS_DOMAIN
 //!                                upper-cased) -- NetrServerPasswordSet2 names a
 //!                                computer's principal <account>@<realm>
+//!   IRON_RPC_DOMAIN_GUID         the domain GUID (`iron-config-ctl show`), which
+//!                                LsarQueryInformationPolicy2 reports and the
+//!                                LDAP ping answers with (#52); unset = all zero
 //!   IRON_RPC_LISTEN=0.0.0.0:445  (ncacn_ip_tcp bind address; 445 needs
 //!                                 root, use a high port for testing, e.g.
 //!                                 13445)
@@ -27,7 +30,7 @@
 //! docs/FIPS.md) -- NETLOGON's session-key/credential crypto refuses to
 //! start without it, same posture as iron-kdcd.
 
-use iron_partition::{Dn, ForestId, Partition, PartitionRegistry, Sid};
+use iron_partition::{Dn, ForestId, Guid, Partition, PartitionRegistry, Sid};
 use iron_rpc::server::{AppState, DomainInfo};
 use iron_rpc::{netlogon, samr};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -52,6 +55,10 @@ async fn main() -> anyhow::Result<()> {
     let domain_sid = Sid::parse(&require_env("IRON_RPC_DOMAIN_SID")?).ok_or_else(|| anyhow::anyhow!("IRON_RPC_DOMAIN_SID is not a valid SID"))?;
     let netbios_name = require_env("IRON_RPC_NETBIOS_NAME")?;
     let dns_domain = require_env("IRON_RPC_DNS_DOMAIN")?;
+    let domain_guid = match env("IRON_RPC_DOMAIN_GUID") {
+        Some(g) => Guid::parse(&g).ok_or_else(|| anyhow::anyhow!("IRON_RPC_DOMAIN_GUID {g:?} is not a GUID"))?.to_wire(),
+        None => [0; 16],
+    };
     let realm = env("IRON_RPC_REALM").unwrap_or_else(|| dns_domain.to_uppercase());
     let listen_addr = env("IRON_RPC_LISTEN").unwrap_or_else(|| "0.0.0.0:445".to_string());
     let pipe_socket = env("IRON_RPC_PIPE_SOCKET");
@@ -69,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     let fips = iron_crypto::FipsContext::new()?;
 
     let app = std::sync::Arc::new(AppState {
-        domain_info: DomainInfo { netbios_name, dns_domain_name: dns_domain.clone(), dns_forest_name: dns_domain, domain_sid },
+        domain_info: DomainInfo { netbios_name, dns_domain_name: dns_domain.clone(), dns_forest_name: dns_domain, domain_sid, domain_guid },
         samr: samr::SamrState { store: tokio::sync::Mutex::new(store_for_samr), base_dn: base_dn_parsed.clone(), index_spec },
         netlogon: netlogon::NetlogonState::new(store_for_netlogon, base_dn_parsed, fips, realm),
     });

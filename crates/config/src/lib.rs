@@ -113,6 +113,14 @@ pub fn generate_domain_sid() -> anyhow::Result<String> {
     Ok(iron_partition::Sid::new(iron_partition::Sid::NT_AUTHORITY, [21, subs[0], subs[1], subs[2]]).to_string())
 }
 
+/// Generates a fresh domain GUID (#52): a version-4 GUID from the FIPS
+/// DRBG, in MS-DTYP text form.
+pub fn generate_domain_guid() -> anyhow::Result<String> {
+    let fips = iron_crypto::FipsContext::new()?;
+    let bytes: [u8; 16] = iron_crypto::kerberos::random_bytes(&fips, 16)?.try_into().map_err(|_| anyhow::anyhow!("DRBG returned the wrong length"))?;
+    Ok(iron_partition::Guid::from_random(bytes).to_string())
+}
+
 /// Index spec for the configuration partition (just `cn`, matching every
 /// other partition's minimal indexing convention).
 pub fn index_spec() -> iron_store::index::IndexSpec {

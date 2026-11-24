@@ -31,9 +31,9 @@ async fn run() -> anyhow::Result<()> {
     let mut store = iron_bootstrap::wait_for_store(&settings, Duration::from_secs(2)).await?;
     let report = iron_bootstrap::provision(&mut store, &settings).await?;
     if report.created.is_empty() {
-        tracing::info!(domain_sid = %report.domain_sid, "already provisioned; nothing to do");
+        tracing::info!(domain_sid = %report.domain_sid, domain_guid = %report.domain_guid, "already provisioned; nothing to do");
     } else {
-        tracing::info!(domain_sid = %report.domain_sid, created = ?report.created, "provisioned");
+        tracing::info!(domain_sid = %report.domain_sid, domain_guid = %report.domain_guid, created = ?report.created, "provisioned");
     }
     drop(store);
 
