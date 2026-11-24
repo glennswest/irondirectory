@@ -33,6 +33,8 @@ pub const MAX_LDAP_MESSAGE: usize = 10 * 1024 * 1024;
 /// [`MAX_LDAP_MESSAGE`] plus the GSS token's header, confounder, padding
 /// and checksum (well under 1 KiB for every AES enctype).
 pub const MAX_SASL_BUFFER: usize = MAX_LDAP_MESSAGE + 1024;
+// The security-layer challenge advertises it in a 3-octet field.
+const _: () = assert!(MAX_SASL_BUFFER <= 0x00FF_FFFF);
 
 /// How long a frame may take to arrive once its first byte has.
 pub const FRAME_TIMEOUT: Duration = Duration::from_secs(120);
@@ -321,9 +323,6 @@ mod tests {
         let mut buf = Vec::new();
         client.write_all(&[0, 0, 0, 10, 1, 2]).await.unwrap();
         assert!(matches!(read_sized_buffer_with(&mut server, &mut buf, &SHORT).await, Err(FramingError::Timeout(_))));
-        // The default SASL cap is what the security-layer challenge advertises
-        // (a 3-octet field).
-        assert!(MAX_SASL_BUFFER <= 0x00FF_FFFF);
     }
 
     #[test]
