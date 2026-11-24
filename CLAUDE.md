@@ -242,25 +242,22 @@ collision). sc-build clean with clippy -D warnings at e24bf13;
 
 Rewritten to the current behavior; check-stubs.sh clean for the file.
 
-## In progress (2026-11-20): #53 iron-rpcd behind SMB named pipes + SAMR AES
+## Done (2026-11-24): #53 iron-rpcd behind SMB named pipes + SAMR AES
 
-rocketsmbd (rocketsmbd#83, on its main) forwards each IPC$ pipe to a Unix
-socket with a preamble (docs/IPC-PIPES.md there: user, PAC SIDs, SMB app
-key).
-- [x] `iron_crypto::aead::aes256_cbc_pkcs7` + `iron_rpc::samr_aes` (MS-SAMR
-      3.2.2.4; KAT = Samba's Windows Server 2022 trace vectors). 8654ee1
-- [x] `iron_rpc::pipe` (`IRON_RPC_PIPE_SOCKET`, preamble v1, 0660), same PDU
-      loop as TCP. 3fd0a12
-- [x] SAMR: EnumerateDomains, LookupDomain/OpenDomain/OpenUser check
-      name/SID/RID, Set(Information)User(2) level 31 for Domain Admins on a
-      pipe, create on a pipe for Domain Admins, AccountType honoured
-      (iron-simulate sent 0x1). 3fd0a12, d481e29
-- [x] Docs/CHANGELOG. 8b401f8. Filed #76 (TCP SAMR create unauthenticated).
-- [ ] `test/rpc-pipe-e2e.sh` (6bb994c): rpcclient (Kerberos SMB) ->
-      rocketsmbd@036a59e642a4 built with kerberos -> iron-rpcd. Never run
-      yet: rpcclient on the build VM, rocketsmbd's GSS build and its PAC
-      reading of iron-kdc tickets are all unverified. One sc-build with
-      clippy, unit tests, this, netlogon-schannel and rpc-concurrency e2e.
+rocketsmbd (rocketsmbd#83) forwards each IPC$ pipe to `IRON_RPC_PIPE_SOCKET`
+with a preamble (user, PAC SIDs, SMB session key); `iron_rpc::pipe` runs the
+same PDU loop as TCP. SAMR: EnumerateDomains, name/SID/RID checks,
+SetInformationUser(2) level 31 (MS-SAMR 3.2.2.4 AEAD-AES-256-CBC-HMAC-SHA512,
+`iron_rpc::samr_aes`, Samba's WS2022 vectors) and create, both for Domain
+Admins on a pipe only; AccountType honoured. The first rpcclient run found
+the bind bug: only the last accepted presentation context was kept and the
+transfer syntax was never checked (Samba offers NDR20 + NDR64 + features).
+sc-build at ad3785a: clippy -D warnings, unit tests, `test/rpc-pipe-e2e.sh`
+(rpcclient Kerberos -> rocketsmbd@036a59e642a4 -> iron-rpcd), netlogon-
+schannel and rpc-concurrency e2e PASS. Gotchas: Samba won't use Kerberos to
+`localhost` or an IP (name the host, `-I 127.0.0.1`); a cloned crate under
+the checkout needs its own `[workspace]`. Filed #76 (TCP SAMR create
+unauthenticated).
 
 ## Done (2026-11-20): #74 review of finding 366e637ff815 (same as #73)
 
