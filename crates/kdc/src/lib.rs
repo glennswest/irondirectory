@@ -22,6 +22,7 @@ pub mod pac;
 pub mod policy;
 pub mod principal;
 pub mod replay;
+pub mod secret;
 pub mod server;
 pub mod tgs_exchange;
 pub mod time;

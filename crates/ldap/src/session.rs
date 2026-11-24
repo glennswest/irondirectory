@@ -986,6 +986,9 @@ async fn handle_add(
     if let Some(result) = proactive_referral(referrals, &dn) {
         return AddResponse(result);
     }
+    if let Some(result) = protected_attribute(req.attributes.iter().map(|a| a.r#type.to_string()).chain(rdn_attrs(&dn))) {
+        return AddResponse(result);
+    }
     let mut entry = match entry_from_attributes(&req.attributes, fips) {
         Ok(e) => e,
         Err(e) => return AddResponse(password_error_result(&e)),
@@ -1018,6 +1021,28 @@ async fn handle_add(
         Err(e) => store_error_result(&e, referrals, &dn),
     };
     AddResponse(result)
+}
+
+/// #75: LDAP never writes the KDC's credential attributes
+/// (`iron_kdc::secret::LDAP_WRITE_PROTECTED_ATTRS`), whoever is bound --
+/// they are set only by the password operations and the operator tools.
+/// `unwillingToPerform`, naming the attribute, as AD refuses its secret
+/// attributes.
+fn protected_attribute(names: impl IntoIterator<Item = impl AsRef<str>>) -> Option<LdapResult> {
+    let name = names.into_iter().find(|n| iron_kdc::secret::is_ldap_write_protected(n.as_ref()))?;
+    Some(LdapResult::new(
+        ResultCode::UnwillingToPerform,
+        String::new().into(),
+        format!(
+            "{} is not writable over LDAP: Kerberos keys and principal names are set only by Password Modify (RFC 3062), kpasswd or NetrServerPasswordSet2",
+            name.as_ref()
+        )
+        .into(),
+    ))
+}
+
+fn rdn_attrs(dn: &Dn) -> Vec<String> {
+    dn.rdns().first().map(|r| r.avas().iter().map(|a| a.attr().to_string()).collect()).unwrap_or_default()
 }
 
 fn already_exists(dn: &Dn) -> LdapResult {
@@ -1200,6 +1225,11 @@ async fn handle_modify(
     if let Some(result) = proactive_referral(referrals, &dn) {
         return ModifyResponse(result);
     }
+    // Checked before the entry is read or any change applied: a modify is
+    // all or nothing, and the refusal says nothing about the entry.
+    if let Some(result) = protected_attribute(req.changes.iter().map(|c| c.modification.r#type.to_string())) {
+        return ModifyResponse(result);
+    }
     let mut entry = match store.get_entry(&dn).await {
         Ok(Some(e)) => e,
         Ok(None) => return ModifyResponse(LdapResult::new(ResultCode::NoSuchObject, String::new().into(), "".into())),
@@ -1319,6 +1349,10 @@ async fn handle_moddn(
         }
     };
     let new_rdn = &new_rdn_dn.rdns()[0];
+    // A new RDN's value becomes an attribute value of the entry.
+    if let Some(result) = protected_attribute(rdn_attrs(&new_rdn_dn)) {
+        return ModifyDnResponse(result);
+    }
 
     let new_parent = match &req.new_superior {
         Some(sup) => match Dn::parse(sup) {
@@ -1625,6 +1659,26 @@ fn project_attributes(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod protected_attribute_tests {
+    use super::*;
+
+    #[test]
+    fn a_kdc_attribute_anywhere_in_the_list_is_refused_by_name() {
+        let r = protected_attribute(["cn", "sAMAccountName", "krbKey;binary"]).unwrap();
+        assert_eq!(r.result_code, ResultCode::UnwillingToPerform);
+        assert!(r.diagnostic_message.contains("krbKey;binary"), "{}", r.diagnostic_message.as_str());
+        assert!(protected_attribute(["cn", "userPassword", "objectClass"]).is_none());
+    }
+
+    #[test]
+    fn rdn_attrs_cover_multi_valued_rdns() {
+        let dn = Dn::parse("cn=x+krbPrincipalName=krbtgt/A@B,dc=lo").unwrap();
+        assert!(protected_attribute(rdn_attrs(&dn)).is_some());
+        assert!(protected_attribute(rdn_attrs(&Dn::parse("cn=x,dc=lo").unwrap())).is_none());
+    }
 }
 
 #[cfg(test)]

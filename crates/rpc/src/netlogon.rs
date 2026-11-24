@@ -58,7 +58,7 @@ pub const NETLOGON_NEG_SUPPORTS_AES: u32 = 0x0100_0000;
 /// (out of scope this pass, see crate docs): provisioned directly (e.g.
 /// via `iron-rpc-ctl set-computer-secret`) so this handshake has a real
 /// shared secret to authenticate against.
-pub const NTOWF_ATTR: &str = "netlogonntowf";
+pub const NTOWF_ATTR: &str = iron_kdc::secret::ATTR_NETLOGON_NTOWF;
 
 pub struct NetlogonState {
     pub store: Mutex<Store>,
