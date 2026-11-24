@@ -49,12 +49,16 @@ for _ in $(seq 100); do curl -sf "http://127.0.0.1:$((P + 1))/health" >/dev/null
 E=http://127.0.0.1:$((P + 1))
 
 cargo build --locked --release -p iron-bootstrap --bin iron-bootstrap -p iron-kdc --bin iron-kdcd --bin iron-kdc-ctl \
-  -p iron-rpc --bin iron-rpcd 2>&1 | tail -1
+  -p iron-rpc --bin iron-rpcd > "$W/cargo.log" 2>&1 || { tail -30 "$W/cargo.log"; fail "building irondirectory"; }
 B=${CARGO_TARGET_DIR:-target}/release
 
 git clone -q https://github.com/glennswest/rocketsmbd "$W/rocketsmbd"
 git -C "$W/rocketsmbd" checkout -q "$RSMB_REF"
-cargo build --locked --release --features kerberos --manifest-path "$W/rocketsmbd/Cargo.toml" 2>&1 | tail -1
+# The clone sits under this checkout, so cargo would take it for a member of
+# our workspace; an empty [workspace] table makes it its own.
+grep -q '^\[workspace\]' "$W/rocketsmbd/Cargo.toml" || printf '\n[workspace]\n' >> "$W/rocketsmbd/Cargo.toml"
+cargo build --locked --release --features kerberos --manifest-path "$W/rocketsmbd/Cargo.toml" > "$W/rsmb-build.txt" 2>&1 ||
+  { tail -40 "$W/rsmb-build.txt"; fail "rocketsmbd did not build at $RSMB_REF"; }
 RSMB=$B/rocketsmbd
 [ -x "$RSMB" ] || fail "rocketsmbd did not build at $RSMB_REF"
 echo "== rocketsmbd $(git -C "$W/rocketsmbd" rev-parse --short=12 HEAD), kerberos feature"
