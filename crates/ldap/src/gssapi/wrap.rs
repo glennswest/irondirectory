@@ -151,6 +151,51 @@ pub fn unwrap(ctx: &FipsContext, enctype: Enctype, session_key: &[u8], key_usage
     }
 }
 
+/// TOK_ID of an RFC 4121 §4.2.6.1 MIC token.
+pub const TOK_ID_MIC: [u8; 2] = [0x04, 0x04];
+
+/// The 16-byte MIC token header: TOK_ID, Flags, five 0xFF filler bytes,
+/// SND_SEQ (RFC 4121 §4.2.6.1).
+fn mic_header(flags: u8, seq: u64) -> [u8; 16] {
+    let mut h = [0xFFu8; 16];
+    h[0..2].copy_from_slice(&TOK_ID_MIC);
+    h[2] = flags;
+    h[8..16].copy_from_slice(&seq.to_be_bytes());
+    h
+}
+
+/// GSS_GetMIC as the acceptor (RFC 4121 §4.2.6.1): the header, then the
+/// checksum over `message || header` under `key_usage` (23,
+/// KG-USAGE-ACCEPTOR-SIGN, for ours). SPNEGO's mechListMIC (#88).
+pub fn get_mic(ctx: &FipsContext, enctype: Enctype, session_key: &[u8], key_usage: u32, seq: u64, message: &[u8]) -> Result<Vec<u8>, Error> {
+    let header = mic_header(SENT_BY_ACCEPTOR, seq);
+    let cksum = kerberos::checksum(ctx, enctype, session_key, key_usage, &sign_input(message, &header))?;
+    let mut out = Vec::with_capacity(16 + cksum.len());
+    out.extend_from_slice(&header);
+    out.extend_from_slice(&cksum);
+    Ok(out)
+}
+
+/// GSS_VerifyMIC of a token the initiator sent (`key_usage` 25,
+/// KG-USAGE-INITIATOR-SIGN): the header's shape and the checksum.
+pub fn verify_mic(ctx: &FipsContext, enctype: Enctype, session_key: &[u8], key_usage: u32, token: &[u8], message: &[u8]) -> Result<(), Error> {
+    if token.len() < 16 {
+        return Err(Error::Truncated);
+    }
+    if token[0..2] != TOK_ID_MIC {
+        return Err(Error::WrongTokId);
+    }
+    if token[3..8] != [0xFF; 5] {
+        return Err(Error::HeaderMismatch);
+    }
+    let header: [u8; 16] = token[0..16].try_into().unwrap();
+    let expected = kerberos::checksum(ctx, enctype, session_key, key_usage, &sign_input(message, &header))?;
+    if !constant_time_eq(&expected, &token[16..]) {
+        return Err(Error::BadChecksum);
+    }
+    Ok(())
+}
+
 /// RFC 4121 §4.2.4: "the checksum SHALL be calculated first over the
 /// to-be-signed plaintext data, and then over the ... header" -- i.e.
 /// over the concatenation `plaintext || header`.
@@ -194,6 +239,23 @@ mod tests {
                 let unwrapped = unwrap(&ctx, enctype, &key, 22, &wrapped).unwrap();
                 assert_eq!(unwrapped, plaintext, "roundtrip mismatch for {enctype:?} sealed={sealed}");
             }
+        }
+    }
+
+    #[test]
+    fn get_mic_verifies_and_a_changed_message_or_token_does_not() {
+        let ctx = FipsContext::new().unwrap();
+        for enctype in [Enctype::Aes256CtsHmacSha1_96, Enctype::Aes256CtsHmacSha384_192] {
+            let key = krb::random_bytes(&ctx, enctype.key_len()).unwrap();
+            let mic = get_mic(&ctx, enctype, &key, 23, 0, b"mechTypes").unwrap();
+            assert_eq!(&mic[0..8], &[0x04, 0x04, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+            assert_eq!(mic.len(), 16 + enctype.hmac_len());
+            verify_mic(&ctx, enctype, &key, 23, &mic, b"mechTypes").unwrap();
+            assert!(verify_mic(&ctx, enctype, &key, 23, &mic, b"mechTypeX").is_err());
+            assert!(verify_mic(&ctx, enctype, &key, 25, &mic, b"mechTypes").is_err(), "wrong key usage verified");
+            let mut bad = mic.clone();
+            bad[9] ^= 1; // SND_SEQ is covered
+            assert!(verify_mic(&ctx, enctype, &key, 23, &bad, b"mechTypes").is_err());
         }
     }
 

@@ -705,9 +705,13 @@ async fn handle_sasl_bind(
     sasl_state: &mut SaslState,
     channel: crate::gssapi::accept::Channel<'_>,
 ) -> (BindResponse, Option<String>, Option<SecurityLayer>) {
+    if creds.mechanism.as_str() == "GSS-SPNEGO" {
+        *sasl_state = SaslState::None;
+        return handle_spnego_bind(store, fips, creds, channel).await;
+    }
     if creds.mechanism.as_str() != "GSSAPI" {
         *sasl_state = SaslState::None;
-        return (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "only the GSSAPI SASL mechanism is supported".into(), None, None), None, None);
+        return (BindResponse::new(ResultCode::AuthMethodNotSupported, String::new().into(), "only the GSSAPI and GSS-SPNEGO SASL mechanisms are supported".into(), None, None), None, None);
     }
     let Some(fips) = fips else {
         *sasl_state = SaslState::None;
@@ -816,6 +820,82 @@ async fn handle_sasl_bind(
         }
     };
     (resp, None, None)
+}
+
+/// A GSS-SPNEGO SASL bind (#88): SPNEGO (RFC 4178) around the same
+/// Kerberos acceptor GSSAPI uses, in one round trip -- see
+/// `gssapi::spnego`. As on AD there is no RFC 4752 security-layer
+/// negotiation: the layer is what the client asked for in the GSS flags of
+/// its Authenticator (`GSS_C_CONF_FLAG`: sealed, else `GSS_C_INTEG_FLAG`:
+/// signed, else none), in effect from the message after the bind response,
+/// framed like GSSAPI's (4-octet length + Wrap token). Like AD, a signed
+/// or sealed bind on a TLS connection is refused.
+async fn handle_spnego_bind(
+    store: &mut Store,
+    fips: Option<&iron_crypto::FipsContext>,
+    creds: &SaslCredentials,
+    channel: crate::gssapi::accept::Channel<'_>,
+) -> (BindResponse, Option<String>, Option<SecurityLayer>) {
+    use crate::gssapi::{accept, spnego, wrap};
+    let fail = |code: ResultCode, msg: String| (BindResponse::new(code, String::new().into(), msg.into(), None, None), None, None);
+    let Some(fips) = fips else {
+        return fail(ResultCode::UnwillingToPerform, "FIPS provider not active -- SASL/GSS-SPNEGO unavailable".into());
+    };
+    let Some(input) = &creds.credentials else {
+        return fail(ResultCode::ProtocolError, "GSS-SPNEGO bind requires an initial token".into());
+    };
+    let init = match spnego::parse_init(input) {
+        Ok(i) => i,
+        Err(e) => return fail(ResultCode::ProtocolError, e.to_string()),
+    };
+    let (mech, ap_req) = match init.kerberos_first() {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::info!("GSS-SPNEGO bind refused: {e}");
+            return fail(ResultCode::AuthMethodNotSupported, e.to_string());
+        }
+    };
+    let Some(any_dn) = store.registry().iter().next().map(|p| p.base_dn.clone()) else {
+        return fail(ResultCode::Other, "no partition configured".into());
+    };
+    let lookup = move |sname: PrincipalName, realm: String| async move {
+        let principal_fqn = format!("{}@{realm}", iron_kdc::principal_name_to_string(&sname));
+        let dns = store.lookup_by_index(&any_dn, iron_kdc::principal::ATTR_PRINCIPAL_NAME, &principal_fqn).await.ok()?;
+        let dn = dns.into_iter().next()?;
+        let entry = store.get_entry(&dn).await.ok()??;
+        iron_kdc::principal::keys(&entry).ok()
+    };
+    let is_tls = channel.tls_binding.is_some();
+    let accepted = match accept::accept(fips, ap_req, channel, lookup).await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::info!("GSS-SPNEGO bind refused: {e}");
+            return fail(ResultCode::InvalidCredentials, e.to_string());
+        }
+    };
+    let sealed = accepted.gss_flags & accept::GSS_C_CONF_FLAG != 0;
+    let signed = sealed || accepted.gss_flags & accept::GSS_C_INTEG_FLAG != 0;
+    if signed && is_tls {
+        return fail(ResultCode::UnwillingToPerform, "cannot bind using sign/seal on a connection on which TLS is in effect".into());
+    }
+    // KG-USAGE-ACCEPTOR-SIGN (23); the acceptor's SND_SEQ 0, so a layer's
+    // first Wrap token is 1, as after GSSAPI's challenge.
+    let mic = match wrap::get_mic(fips, accepted.enctype, &accepted.session_key, 23, 0, &init.mech_types_der) {
+        Ok(m) => m,
+        Err(e) => return fail(ResultCode::OperationsError, e.to_string()),
+    };
+    let resp = spnego::build_resp(spnego::ACCEPT_COMPLETED, Some(mech), accepted.output_token.as_deref(), Some(&mic));
+    let layer = signed.then(|| SecurityLayer { session_key: accepted.session_key.clone(), enctype: accepted.enctype, sealed, send_seq: AtomicU64::new(1) });
+    tracing::info!(
+        client = %accepted.client_principal,
+        layer = %if sealed { "confidentiality" } else if signed { "integrity" } else { "none" },
+        "GSS-SPNEGO bind succeeded"
+    );
+    (
+        BindResponse::new(ResultCode::Success, String::new().into(), String::new().into(), None, Some(resp.into())),
+        Some(format!("u:{}", accepted.client_principal)),
+        layer,
+    )
 }
 
 /// Builds the RFC 4752 §3.2 security-layer negotiation challenge: 4

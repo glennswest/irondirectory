@@ -11,7 +11,12 @@
 /// Kerberos/GSSAPI implementations and RFC 4121's own examples; derived
 /// here from first principles (base-128 OID component encoding) and
 /// cross-checked against that well-known constant.
-const KRB5_MECH_OID_DER: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02];
+pub const KRB5_MECH_OID_DER: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02];
+
+/// Microsoft's Kerberos OID (1.2.840.48018.1.2.2, `06 09 2a 86 48 82 f7
+/// 12 01 02 02`): Windows lists it first in SPNEGO (#88), and some
+/// initiators frame their AP-REQ with it. Accepted as Kerberos V5.
+pub const MS_KRB5_MECH_OID_DER: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x82, 0xf7, 0x12, 0x01, 0x02, 0x02];
 
 pub const TOK_ID_AP_REQ: [u8; 2] = [0x01, 0x00];
 pub const TOK_ID_AP_REP: [u8; 2] = [0x02, 0x00];
@@ -74,7 +79,8 @@ pub fn parse_initial_context_token(buf: &[u8]) -> Result<&[u8], Error> {
     let mut pos = 1;
     let len = read_ber_length(buf, &mut pos)?;
     let body = buf.get(pos..pos + len).ok_or(Error::Truncated)?;
-    if !body.starts_with(KRB5_MECH_OID_DER) {
+    // Both OIDs are 11 bytes.
+    if !body.starts_with(KRB5_MECH_OID_DER) && !body.starts_with(MS_KRB5_MECH_OID_DER) {
         return Err(Error::UnknownMechanism);
     }
     Ok(&body[KRB5_MECH_OID_DER.len()..])
@@ -124,6 +130,14 @@ mod tests {
         // 0x60 <len=7> 06 03 2a 03 04 (a made-up, non-krb5 OID) AA BB
         let token = [0x60, 0x07, 0x06, 0x03, 0x2a, 0x03, 0x04, 0xAA, 0xBB];
         assert_eq!(parse_initial_context_token(&token), Err(Error::UnknownMechanism));
+    }
+
+    #[test]
+    fn the_microsoft_kerberos_oid_is_kerberos_too() {
+        let mut token = vec![0x60, 0x0d];
+        token.extend_from_slice(MS_KRB5_MECH_OID_DER);
+        token.extend_from_slice(&[0x01, 0x00]);
+        assert_eq!(parse_initial_context_token(&token).unwrap(), &[0x01, 0x00]);
     }
 
     #[test]

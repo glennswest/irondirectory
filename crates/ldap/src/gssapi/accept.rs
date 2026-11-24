@@ -67,6 +67,8 @@ pub enum Error {
 pub const CLOCK_SKEW_SECS: i64 = 300;
 const GSS_CHECKSUM_TYPE: i32 = 0x8003;
 pub const GSS_C_MUTUAL_FLAG: u32 = 2;
+pub const GSS_C_CONF_FLAG: u32 = 0x10;
+pub const GSS_C_INTEG_FLAG: u32 = 0x20;
 
 /// When a GSSAPI bind over TLS must carry channel bindings -- AD's "LDAP
 /// server channel binding token requirements" (`LdapEnforceChannelBinding`).
@@ -142,6 +144,10 @@ pub struct AcceptedContext {
     /// Whether the client's channel bindings were checked and matched
     /// this TLS connection (`false`: it sent none).
     pub channel_bound: bool,
+    /// The GSS flags of the Authenticator's checksum (RFC 4121 §4.1.1.1):
+    /// GSS-SPNEGO binds take their security layer from
+    /// `GSS_C_INTEG_FLAG`/`GSS_C_CONF_FLAG` (#88).
+    pub gss_flags: u32,
 }
 
 fn gss_checksum_flags(bytes: &[u8]) -> Result<u32, Error> {
@@ -257,6 +263,7 @@ where
         enctype: tkt_enctype,
         output_token,
         channel_bound,
+        gss_flags,
     })
 }
 

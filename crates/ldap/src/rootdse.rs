@@ -55,13 +55,8 @@ pub fn build(registry: &PartitionRegistry, fips_active: bool, highest_committed_
     // actually active (session.rs's handle_sasl_bind fails the bind
     // outright otherwise) -- match capability, don't just claim one.
     if fips_active {
-        // TEMPORARY test-only addition of GSS-SPNEGO (#20 diagnostic):
-        // NOT actually implemented server-side yet -- checking whether
-        // macOS's dsconfigad specifically requires seeing this exact
-        // mechanism name advertised (matching real Windows AD, which
-        // lists GSSAPI/GSS-SPNEGO/EXTERNAL/DIGEST-MD5) before it will
-        // even attempt a bind, independent of whether the bind itself
-        // would succeed.
+        // GSS-SPNEGO (#88): SPNEGO around the same Kerberos acceptor, what
+        // Windows' LDAP client binds with (session::handle_spnego_bind).
         attrs.push(attr("supportedSASLMechanisms", ["GSSAPI".to_string(), "GSS-SPNEGO".to_string()]));
     }
 

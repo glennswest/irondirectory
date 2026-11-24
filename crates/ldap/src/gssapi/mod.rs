@@ -20,5 +20,6 @@
 //! declined (see `accept`).
 
 pub mod accept;
+pub mod spnego;
 pub mod token;
 pub mod wrap;
