@@ -252,6 +252,14 @@ workspace unit tests, ldap-rebind-moddn + ldap-filters e2e PASS; step 5 of
 ldapsearch) PASS at 8d7218a, failed as expected on the old encoding. Names
 already stored with one of those characters are not migrated.
 
+## Done (2026-11-24): #88 GSS-SPNEGO SASL bind (for #20)
+
+`gssapi::spnego` + `session::handle_spnego_bind`: Kerberos-first, one round
+trip, mechListMIC via `wrap::get_mic`; layer from GSS flags; sign/seal on TLS
+refused (AD 00002029). Observed: MIT asserts CONF whenever maxssf > 0 and no
+flag at maxssf=0; impacket's NegTokenResp parser drops mechListMIC.
+`test/ldap-gss-spnego-e2e.sh` PASS (see the #88 closing comment).
+
 ## Done (2026-11-24): #87 DC-locator DNS records (for #20)
 
 `iron_dns::srv::dc_records` + `iron-dns-ctl dc`: 13 SRV records (MS-ADTS
@@ -425,7 +433,8 @@ ncacn_np + authenticated SAMR AES password set; rocketsmbd#83 IPC$ pipe
 forwarding. Windows VM: stormcentral#465. macOS: after #25.
 2026-11-24: #53 done, #52 done (below). Later the same day two more gaps a
 real join would hit first were found and filed: #87 DC-locator DNS records
-(done) and #88 GSS-SPNEGO SASL bind (rootDSE advertised it, unimplemented).
+(done) and #88 GSS-SPNEGO SASL bind (rootDSE advertised it, unimplemented;
+done). What remains needs the Windows VMs (stormcentral#465) or #25.
 Left, neither changeable from this repo: the real `Add-Computer` run needs
 wintest11/wintest2025 (stormcentral#465: built, but the master has not added
 the DHCP reservations/records or run `windows install`; `stormcentral

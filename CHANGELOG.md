@@ -6,6 +6,16 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-24
+- **feat:** the GSS-SPNEGO SASL bind (#88, for #20), which rootDSE had
+  advertised since the macOS work without implementing it. It's what Windows'
+  LDAP client and the join's `dNSHostName`/`servicePrincipalName` update bind
+  with. SPNEGO (RFC 4178) around the existing Kerberos acceptor, Kerberos-first,
+  in one round trip, with a `mechListMIC` (new `gssapi::wrap::get_mic`/
+  `verify_mic`, RFC 4121 §4.2.6.1). The security layer comes from the GSS
+  flags, as on AD; sign/seal over TLS is refused as AD does; NTLM and
+  NTLM-first negotiations are refused. `test/ldap-gss-spnego-e2e.sh` checks it
+  with Cyrus SASL/MIT SPNEGO (which verifies the MIC) and with impacket's own
+  SPNEGO encoder (MIC and AP-REP recomputed independently, integrity layer).
 - **feat:** `iron-dns-ctl dc <microdns-url> <domain> <forest> <domain-guid>
   <dc-host>` publishes the DC-locator SRV records (#87, for #20): the
   `_ldap._tcp.dc._msdcs`, site, PDC and domain-GUID names, `_kerberos.*` and

@@ -129,6 +129,21 @@ otherwise). Any other request name is answered `protocolError`
 "unsupported extended operation <OID>". `test/ldap-exop-e2e.sh` checks each
 with `ldapwhoami`, `ldappasswd` and raw BER.
 
+SASL mechanisms: `GSSAPI` (RFC 4752) and `GSS-SPNEGO` (#88), both Kerberos
+only and both needing the FIPS provider. GSS-SPNEGO is what Windows' LDAP
+client and the domain join bind with: a SPNEGO `negTokenInit` whose first
+mechanism is Kerberos (Microsoft's 1.2.840.48018.1.2.2 or 1.2.840.113554.1.2.2)
+carrying the AP-REQ, answered in one round trip by `accept-completed`, the
+client's OID, the AP-REP and a `mechListMIC`. As on AD there is no RFC 4752
+layer negotiation: the security layer is what the client's GSS flags ask for
+(`GSS_C_CONF_FLAG`: sealed; else `GSS_C_INTEG_FLAG`: signed; else none), and a
+signed or sealed bind over LDAPS/StartTLS is refused (`unwillingToPerform`,
+AD's 00002029; use `-O maxssf=0` over TLS, as SSSD advises for AD). NTLM is
+never negotiated (D4), and a client that prefers another mechanism over
+Kerberos is refused (`authMethodNotSupported`): that needs more round trips
+and a mandatory MIC exchange, which are not built. MIT's initiator asserts
+CONF whenever any SSF is allowed. `test/ldap-gss-spnego-e2e.sh`.
+
 Re-binds (#67): a bind on a connection with a SASL/GSSAPI security layer in
 effect (integrity or confidentiality) is read through that layer and answered
 through it. A failed bind, a simple or anonymous bind, or a GSSAPI bind that

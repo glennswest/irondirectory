@@ -17,7 +17,8 @@
 //! integrity and confidentiality, with LDAP traffic after the bind
 //! wrapped in whichever the client picks (`wrap`). Channel bindings are
 //! checked against TLS as Active Directory does (#65), and delegation is
-//! declined (see `accept`).
+//! declined (see `accept`). GSS-SPNEGO (#88) is `spnego` around the same
+//! acceptor, with `wrap::get_mic` for its mechListMIC.
 
 pub mod accept;
 pub mod spnego;
