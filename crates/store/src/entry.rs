@@ -130,40 +130,50 @@ pub struct SubtreeEvent {
     pub value: Vec<u8>,
 }
 
-/// Watches every key change under the subtree rooted at `dn` (inclusive),
-/// within partition `pid`. Returns the raw watch stream's first (creation)
-/// response consumed internally; call `.message()` on the returned stream
-/// for subsequent events, or use [`next_subtree_event`] for a
-/// higher-level poll.
-pub async fn watch_subtree(
-    client: &mut Client,
-    pid: &PartitionId,
-    dn: &Dn,
-) -> Result<etcd_client::WatchStream, StoreError> {
-    let prefix = key::subtree_prefix(pid, dn);
-    let stream = client
-        .watch(prefix, Some(WatchOptions::new().with_prefix()))
-        .await?;
-    Ok(stream)
+/// A watch on one subtree: the etcd watch stream plus the data events of
+/// the last response not handed out yet. One `WatchResponse` may carry many
+/// events (a multi-key transaction, or a backlog the watcher is catching up
+/// on); [`next_subtree_event`] returns every one of them, in order, before
+/// reading the next response (finding f7d57dd68673: it used to return the
+/// first and drop the rest, so iron-gc's live replica missed changes).
+pub struct SubtreeWatch {
+    stream: etcd_client::WatchStream,
+    pending: std::collections::VecDeque<SubtreeEvent>,
 }
 
-/// Pulls the next data event (put/delete) off a subtree watch stream,
-/// skipping bookkeeping-only responses (creation acks, progress notifies).
-pub async fn next_subtree_event(
-    stream: &mut etcd_client::WatchStream,
-) -> Result<Option<SubtreeEvent>, StoreError> {
-    while let Some(resp) = stream.message().await? {
-        if let Some(event) = resp.events().first() {
-            if let Some(kv) = event.kv() {
-                return Ok(Some(SubtreeEvent {
-                    key: kv.key_str().unwrap_or_default().to_string(),
-                    kind: event.event_type(),
-                    value: kv.value().to_vec(),
-                }));
-            }
-        }
+impl SubtreeWatch {
+    /// The next raw response off the stream, bypassing the event queue --
+    /// for reading the creation ack before any event has been taken.
+    pub async fn message(&mut self) -> Result<Option<etcd_client::WatchResponse>, StoreError> {
+        Ok(self.stream.message().await?)
     }
-    Ok(None)
+}
+
+/// Watches every key change under the subtree rooted at `dn` (inclusive),
+/// within partition `pid`. Read it with [`next_subtree_event`] or
+/// [`next_entry_change`].
+pub async fn watch_subtree(client: &mut Client, pid: &PartitionId, dn: &Dn) -> Result<SubtreeWatch, StoreError> {
+    let prefix = key::subtree_prefix(pid, dn);
+    let stream = client.watch(prefix, Some(WatchOptions::new().with_prefix())).await?;
+    Ok(SubtreeWatch { stream, pending: std::collections::VecDeque::new() })
+}
+
+/// Pulls the next data event (put/delete) off a subtree watch, skipping
+/// bookkeeping-only responses (creation acks, progress notifies). Every
+/// event of a response is returned, in order, before the next response is
+/// read. `None` when the stream ends.
+pub async fn next_subtree_event(watch: &mut SubtreeWatch) -> Result<Option<SubtreeEvent>, StoreError> {
+    loop {
+        if let Some(event) = watch.pending.pop_front() {
+            return Ok(Some(event));
+        }
+        let Some(resp) = watch.stream.message().await? else {
+            return Ok(None);
+        };
+        watch.pending.extend(resp.events().iter().filter_map(|event| {
+            event.kv().map(|kv| SubtreeEvent { key: kv.key_str().unwrap_or_default().to_string(), kind: event.event_type(), value: kv.value().to_vec() })
+        }));
+    }
 }
 
 /// A watched change, decoded into an [`crate::model::Entry`] on `Put`.
@@ -175,10 +185,8 @@ pub enum EntryChange {
 
 /// Like [`next_subtree_event`], but decodes `Put` values as
 /// [`crate::model::Entry`] rather than raw bytes.
-pub async fn next_entry_change(
-    stream: &mut etcd_client::WatchStream,
-) -> Result<Option<EntryChange>, StoreError> {
-    let Some(event) = next_subtree_event(stream).await? else {
+pub async fn next_entry_change(watch: &mut SubtreeWatch) -> Result<Option<EntryChange>, StoreError> {
+    let Some(event) = next_subtree_event(watch).await? else {
         return Ok(None);
     };
     Ok(Some(match event.kind {
