@@ -6,6 +6,18 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-24
+- **fix:** the TGS, kpasswd and iron-ldap's GSSAPI acceptor read the
+  Authenticator (and built the TGS-REP / AP-REP) in the *ticket's* enctype
+  instead of the session key's (finding bf4c13fcebad, #79). A TGT whose
+  session key differs in enctype from the ticket was refused ("failed to
+  decrypt authenticator"). The AS issues one when the krbtgt lacks the
+  client's pre-auth enctype, and a foreign KDC's cross-realm TGT often is one.
+  Now the session key's own `keytype` is used, and an Authenticator whose
+  etype is not it is refused. The GSSAPI context's enctype is the
+  Authenticator subkey's when there is one. `test/session-enctype-e2e.sh`:
+  impacket builds such tickets from the real keys and drives each path. Filed
+  #89 (the session key's enctype is chosen from the service key, not the
+  client's etype list).
 - **feat:** the GSS-SPNEGO SASL bind (#88, for #20), which rootDSE had
   advertised since the macOS work without implementing it. It's what Windows'
   LDAP client and the join's `dNSHostName`/`servicePrincipalName` update bind

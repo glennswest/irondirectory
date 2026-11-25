@@ -252,6 +252,16 @@ workspace unit tests, ldap-rebind-moddn + ldap-filters e2e PASS; step 5 of
 ldapsearch) PASS at 8d7218a, failed as expected on the old encoding. Names
 already stored with one of those characters are not migrated.
 
+## Done (2026-11-24): #79 finding bf4c13fcebad (session-key enctype)
+
+TGS (`tgs_exchange`, incl. referral replies), kpasswd and `gssapi::accept`
+read the Authenticator / build replies in `ticket.key.r#type`'s enctype and
+refuse an Authenticator etype that is not it; GSS base enctype = subkey's.
+`test/session-enctype-e2e.sh` (impacket forges 18-tickets with 17 session
+keys from exported keytabs) failed as expected on unfixed main, PASS on the
+fix. Filed #89 (session-key enctype from the client's etype list). impacket
+can't do aes-sha2 (20): make it ask for 18/17.
+
 ## Done (2026-11-24): #88 GSS-SPNEGO SASL bind (for #20)
 
 `gssapi::spnego` + `session::handle_spnego_bind`: Kerberos-first, one round
