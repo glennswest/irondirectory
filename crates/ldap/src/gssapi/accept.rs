@@ -201,7 +201,14 @@ where
     // session key regardless of any subkey it goes on to assert (RFC
     // 4120 5.5.1) -- the subkey only takes over as the base key for
     // everything *after* this point.
-    let auth_bytes = kerberos::decrypt(ctx, tkt_enctype, &ticket_session_key, 11, &ap_req.authenticator.cipher)
+    // The Authenticator and the AP-REP are under the ticket's session key,
+    // in that key's own enctype, not the ticket's outer one (finding
+    // bf4c13fcebad, the same mistake as the KDC's).
+    let session_enctype = Enctype::try_from(tgt.key.r#type).map_err(|_| Error::UnsupportedEnctype(tgt.key.r#type))?;
+    if ap_req.authenticator.etype != tgt.key.r#type {
+        return Err(Error::AuthenticatorDecryptFailed);
+    }
+    let auth_bytes = kerberos::decrypt(ctx, session_enctype, &ticket_session_key, 11, &ap_req.authenticator.cipher)
         .map_err(|_| Error::AuthenticatorDecryptFailed)?;
     let authenticator: Authenticator = rasn::der::decode(&auth_bytes)?;
 
@@ -230,7 +237,11 @@ where
     // it is present in the Authenticat[or]" -- easy to conflate the two
     // since they're adjacent steps in the same exchange, but they use
     // different keys.
-    let session_key = authenticator.subkey.as_ref().map(|k| k.value.to_vec()).unwrap_or_else(|| ticket_session_key.clone());
+    let (session_key, base_enctype) = match authenticator.subkey.as_ref() {
+        // The base key's enctype is the subkey's own when there is one.
+        Some(k) => (k.value.to_vec(), Enctype::try_from(k.r#type).map_err(|_| Error::UnsupportedEnctype(k.r#type))?),
+        None => (ticket_session_key.clone(), session_enctype),
+    };
 
     let output_token = if gss_flags & GSS_C_MUTUAL_FLAG != 0 {
         // RFC 4120 §3.2.4: "The timestamp and microsecond field used in
@@ -242,11 +253,11 @@ where
         let enc_bytes = rasn::der::encode(&enc_ap_rep_part)?;
         // Key usage 12, encrypted under the *ticket* session key (RFC
         // 4120 §3.2.5), not the subkey-derived base key.
-        let cipher = kerberos::encrypt(ctx, tkt_enctype, &ticket_session_key, 12, &enc_bytes)?;
+        let cipher = kerberos::encrypt(ctx, session_enctype, &ticket_session_key, 12, &enc_bytes)?;
         let ap_rep = ApRep {
             pvno: 5.into(),
             msg_type: 15.into(),
-            enc_part: EncryptedData { etype: tkt_enctype.etype_number(), kvno: None, cipher: cipher.into() },
+            enc_part: EncryptedData { etype: session_enctype.etype_number(), kvno: None, cipher: cipher.into() },
         };
         let ap_rep_bytes = rasn::der::encode(&ap_rep)?;
         let mut inner_out = Vec::with_capacity(2 + ap_rep_bytes.len());
@@ -260,7 +271,7 @@ where
     Ok(AcceptedContext {
         client_principal: format!("{}@{}", iron_kdc::principal_name_to_string(&tgt.cname), iron_kdc::realm_to_string(&tgt.crealm)),
         session_key,
-        enctype: tkt_enctype,
+        enctype: base_enctype,
         output_token,
         channel_bound,
         gss_flags,
@@ -326,6 +337,81 @@ mod tests {
         assert!(matches!(check_channel_binding(&c, tls(ChannelBindingPolicy::Always)), Err(Error::ChannelBindingRequired)));
         let always_plain = Channel { policy: ChannelBindingPolicy::Always, ..PLAIN };
         assert!(!check_channel_binding(&c, always_plain).unwrap());
+    }
+
+    /// Finding bf4c13fcebad: the Authenticator and the AP-REP are under the
+    /// session key in *its* enctype. A ticket encrypted with the service's
+    /// aes256-sha384 key but carrying an aes128-sha1 session key (what a
+    /// KDC may issue) must be accepted, the AP-REP be in aes128-sha1, and
+    /// the context's enctype be the session key's.
+    #[tokio::test]
+    async fn the_session_keys_enctype_is_used_not_the_tickets() {
+        use rasn_kerberos::{ApOptions, EncryptionKey, Ticket, TransitedEncoding};
+        let ctx = FipsContext::new().unwrap();
+        let realm = iron_kdc::string_to_gstring("EXAMPLE.LO");
+        let service = Enctype::Aes256CtsHmacSha384_192;
+        let session = Enctype::Aes128CtsHmacSha1_96;
+        let service_key = kerberos::random_bytes(&ctx, service.key_len()).unwrap();
+        let session_key = kerberos::random_bytes(&ctx, session.key_len()).unwrap();
+        let cname = iron_kdc::string_to_principal_name("alice");
+        let sname = iron_kdc::string_to_principal_name("ldap/dc1.example.lo");
+        let (now, usec) = iron_kdc::time::now();
+        let enc_ticket = EncTicketPart {
+            flags: iron_kdc::ticket_flags(&[]),
+            key: EncryptionKey { r#type: session.etype_number(), value: session_key.clone().into() },
+            crealm: realm.clone(),
+            cname: cname.clone(),
+            transited: TransitedEncoding { r#type: 0, contents: Vec::new().into() },
+            auth_time: now.clone(),
+            start_time: None,
+            end_time: iron_kdc::time::plus_seconds(3600),
+            renew_till: None,
+            caddr: None,
+            authorization_data: None,
+        };
+        let ticket_cipher = kerberos::encrypt(&ctx, service, &service_key, 2, &rasn::der::encode(&enc_ticket).unwrap()).unwrap();
+        let authenticator = Authenticator {
+            authenticator_vno: 5.into(),
+            crealm: realm.clone(),
+            cname,
+            cksum: Some(rasn_kerberos::Checksum { r#type: GSS_CHECKSUM_TYPE, checksum: checksum([0; 16]).into() }),
+            ctime: now,
+            cusec: usec,
+            subkey: None,
+            seq_number: None,
+            authorization_data: None,
+        };
+        let auth_cipher = kerberos::encrypt(&ctx, session, &session_key, 11, &rasn::der::encode(&authenticator).unwrap()).unwrap();
+        let ap_req = ApReq {
+            pvno: 5.into(),
+            msg_type: 14.into(),
+            ap_options: ApOptions::reserved(),
+            ticket: Ticket { tkt_vno: 5.into(), realm, sname, enc_part: EncryptedData { etype: service.etype_number(), kvno: Some(1), cipher: ticket_cipher.into() } },
+            authenticator: EncryptedData { etype: session.etype_number(), kvno: None, cipher: auth_cipher.into() },
+        };
+        let mut inner = token::TOK_ID_AP_REQ.to_vec();
+        inner.extend(rasn::der::encode(&ap_req).unwrap());
+        let input = token::build_initial_context_token(&inner);
+        let keys = vec![PrincipalKey { enctype: service, kvno: 1, key: service_key.clone() }];
+        let accepted = accept(&ctx, &input, PLAIN, |_, _| async move { Some(keys) }).await.unwrap();
+        assert_eq!(accepted.enctype, session);
+        assert_eq!(accepted.session_key, session_key);
+
+        // The AP-REP is in the session key's enctype and decrypts under it.
+        let out = accepted.output_token.unwrap();
+        let ap_rep_bytes = token::split_tok_id(token::parse_initial_context_token(&out).unwrap(), token::TOK_ID_AP_REP).unwrap();
+        let ap_rep: ApRep = rasn::der::decode(ap_rep_bytes).unwrap();
+        assert_eq!(ap_rep.enc_part.etype, session.etype_number());
+        kerberos::decrypt(&ctx, session, &session_key, 12, &ap_rep.enc_part.cipher).unwrap();
+
+        // An authenticator claiming another enctype than the session key's is refused.
+        let mut wrong = ap_req.clone();
+        wrong.authenticator.etype = service.etype_number();
+        let mut inner = token::TOK_ID_AP_REQ.to_vec();
+        inner.extend(rasn::der::encode(&wrong).unwrap());
+        let keys = vec![PrincipalKey { enctype: service, kvno: 1, key: service_key }];
+        let r = accept(&ctx, &token::build_initial_context_token(&inner), PLAIN, |_, _| async move { Some(keys) }).await;
+        assert!(matches!(r, Err(Error::AuthenticatorDecryptFailed)), "{:?}", r.err());
     }
 
     #[test]

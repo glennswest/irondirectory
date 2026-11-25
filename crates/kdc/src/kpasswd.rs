@@ -128,7 +128,7 @@ struct Authenticated {
     client_realm: String,
     initial: bool,
     ticket_session_key: Vec<u8>,
-    ticket_enctype: Enctype,
+    session_enctype: Enctype,
     /// The key the KRB-PRIVs are sealed with: the Authenticator's subkey,
     /// else the ticket session key.
     priv_key: Vec<u8>,
@@ -213,8 +213,15 @@ async fn verify_ap_req(app: &AppState, ap_req: &ApReq) -> Result<Authenticated, 
         return Err(refuse(result::AUTHERROR, "ticket expired"));
     }
 
+    // The Authenticator, the AP-REP and a subkey-less KRB-PRIV are under the
+    // ticket's session key, in that key's own enctype -- not the ticket's
+    // outer one (finding bf4c13fcebad).
     let ticket_session_key = ticket.key.value.to_vec();
-    let auth_bytes = kerberos::decrypt(&app.fips, ticket_enctype, &ticket_session_key, USAGE_AP_REQ_AUTH, &ap_req.authenticator.cipher)
+    let session_enctype = Enctype::try_from(ticket.key.r#type).map_err(|_| refuse(result::AUTHERROR, "unsupported session key enctype"))?;
+    if ap_req.authenticator.etype != ticket.key.r#type {
+        return Err(refuse(result::AUTHERROR, "authenticator enctype is not the session key's"));
+    }
+    let auth_bytes = kerberos::decrypt(&app.fips, session_enctype, &ticket_session_key, USAGE_AP_REQ_AUTH, &ap_req.authenticator.cipher)
         .map_err(|_| refuse(result::AUTHERROR, "authenticator does not decrypt"))?;
     let authenticator: Authenticator = rasn::der::decode(&auth_bytes).map_err(|e| refuse(result::AUTHERROR, format!("malformed authenticator: {e}")))?;
     if authenticator.cname != ticket.cname || authenticator.crealm != ticket.crealm {
@@ -231,14 +238,14 @@ async fn verify_ap_req(app: &AppState, ap_req: &ApReq) -> Result<Authenticated, 
 
     let (priv_key, priv_enctype) = match &authenticator.subkey {
         Some(sk) => (sk.value.to_vec(), Enctype::try_from(sk.r#type).map_err(|_| refuse(result::AUTHERROR, "unsupported subkey enctype"))?),
-        None => (ticket_session_key.clone(), ticket_enctype),
+        None => (ticket_session_key.clone(), session_enctype),
     };
     Ok(Authenticated {
         client: principal_name_to_string(&ticket.cname),
         client_realm: realm_to_string(&ticket.crealm),
         initial: crate::has_flag(&ticket.flags, crate::flag::INITIAL),
         ticket_session_key,
-        ticket_enctype,
+        session_enctype,
         priv_key,
         priv_enctype,
         authenticator,
@@ -372,8 +379,8 @@ fn frame(ap_rep: &[u8], body: &[u8]) -> Vec<u8> {
 fn sealed_reply(app: &AppState, auth: &Authenticated, seq: u32, local: IpAddr, code: u16, text: &[u8]) -> Result<Vec<u8>, String> {
     let rep_part = EncApRepPart { ctime: auth.authenticator.ctime.clone(), cusec: auth.authenticator.cusec.clone(), subkey: None, seq_number: Some(seq) };
     let rep_bytes = rasn::der::encode(&rep_part).map_err(|e| e.to_string())?;
-    let rep_cipher = kerberos::encrypt(&app.fips, auth.ticket_enctype, &auth.ticket_session_key, USAGE_AP_REP, &rep_bytes).map_err(|e| e.to_string())?;
-    let ap_rep = ApRep { pvno: 5.into(), msg_type: 15.into(), enc_part: EncryptedData { etype: auth.ticket_enctype.etype_number(), kvno: None, cipher: rep_cipher.into() } };
+    let rep_cipher = kerberos::encrypt(&app.fips, auth.session_enctype, &auth.ticket_session_key, USAGE_AP_REP, &rep_bytes).map_err(|e| e.to_string())?;
+    let ap_rep = ApRep { pvno: 5.into(), msg_type: 15.into(), enc_part: EncryptedData { etype: auth.session_enctype.etype_number(), kvno: None, cipher: rep_cipher.into() } };
     let ap_rep_bytes = rasn::der::encode(&ap_rep).map_err(|e| e.to_string())?;
 
     let (timestamp, usec) = crate::time::now();

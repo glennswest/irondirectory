@@ -125,8 +125,18 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
 
     // Verify the Authenticator (proves the client holds the TGT's
     // session key -- decryption succeeding at all is most of the proof).
+    // It is encrypted under the *session key*, whose enctype is the key's
+    // own type, not the ticket's outer one (finding bf4c13fcebad): the AS
+    // may issue a client-enctype session key in a TGT the krbtgt encrypts
+    // with another enctype, and a foreign KDC's cross-realm TGT often does.
     let session_key = tgt.key.value.clone();
-    let auth_bytes = match kerberos::decrypt(&app.fips, tkt_enctype, &session_key, 7, &ap_req.authenticator.cipher) {
+    let Ok(session_enctype) = Enctype::try_from(tgt.key.r#type) else {
+        return krberror::build(krberror::KRB_ERR_GENERIC, &realm_str, kdc_sname, Some("unsupported session key etype".into()), None).into();
+    };
+    if ap_req.authenticator.etype != tgt.key.r#type {
+        return krberror::build(KRB_AP_ERR_BAD_INTEGRITY, &realm_str, kdc_sname, Some("authenticator etype is not the session key's".into()), None).into();
+    }
+    let auth_bytes = match kerberos::decrypt(&app.fips, session_enctype, &session_key, 7, &ap_req.authenticator.cipher) {
         Ok(b) => b,
         Err(_) => return krberror::build(KRB_AP_ERR_BAD_INTEGRITY, &realm_str, kdc_sname, Some("failed to decrypt authenticator".into()), None).into(),
     };
@@ -146,7 +156,7 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     // lookup (and its ordinary S_PRINCIPAL_UNKNOWN failure) if no
     // one-hop trust or key is configured for that realm.
     if !realm_str.eq_ignore_ascii_case(&app.realm) {
-        if let Some(rep) = referral_tgs_rep(app, &mut store, &realm_str, &tgt, tkt_enctype, &session_key, authenticator.subkey.as_ref(), &req.req_body).await {
+        if let Some(rep) = referral_tgs_rep(app, &mut store, &realm_str, &tgt, session_enctype, &session_key, authenticator.subkey.as_ref(), &req.req_body).await {
             return rep;
         }
     }
@@ -276,9 +286,9 @@ pub async fn handle(app: &AppState, req: &KdcReq) -> KdcResponse {
     let (reply_key, reply_enctype, reply_usage): (&[u8], Enctype, u32) = match &authenticator.subkey {
         Some(sk) => match Enctype::try_from(sk.r#type) {
             Ok(enctype) => (sk.value.as_ref(), enctype, 9),
-            Err(_) => (&session_key, tkt_enctype, 8),
+            Err(_) => (&session_key, session_enctype, 8),
         },
-        None => (&session_key, tkt_enctype, 8),
+        None => (&session_key, session_enctype, 8),
     };
     let enc_part_cipher = match kerberos::encrypt(&ticket_fips, reply_enctype, reply_key, reply_usage, &enc_tgs_rep_bytes) {
         Ok(c) => c,
@@ -318,7 +328,7 @@ async fn referral_tgs_rep(
     store: &mut iron_store::store::Store,
     target_realm: &str,
     tgt: &EncTicketPart,
-    tkt_enctype: Enctype,
+    session_enctype: Enctype,
     session_key: &[u8],
     subkey: Option<&EncryptionKey>,
     req_body: &rasn_kerberos::KdcReqBody,
@@ -339,7 +349,7 @@ async fn referral_tgs_rep(
     let [key_dn] = key_dns.as_slice() else { return None };
     let key_entry = store.get_entry(key_dn).await.ok()??;
     let keys = crate::principal::keys(&key_entry).ok()?;
-    let referral_key = keys.iter().find(|k| k.enctype == tkt_enctype).or_else(|| keys.first())?;
+    let referral_key = keys.iter().find(|k| k.enctype == session_enctype).or_else(|| keys.first())?;
 
     let new_session_key_bytes = kerberos::random_bytes(&app.fips, referral_key.enctype.key_len()).ok()?;
     let new_session_key = EncryptionKey { r#type: referral_key.enctype.etype_number(), value: new_session_key_bytes.into() };
@@ -395,9 +405,9 @@ async fn referral_tgs_rep(
     let (reply_key, reply_enctype, reply_usage): (&[u8], Enctype, u32) = match subkey {
         Some(sk) => match Enctype::try_from(sk.r#type) {
             Ok(enctype) => (sk.value.as_ref(), enctype, 9),
-            Err(_) => (session_key, tkt_enctype, 8),
+            Err(_) => (session_key, session_enctype, 8),
         },
-        None => (session_key, tkt_enctype, 8),
+        None => (session_key, session_enctype, 8),
     };
     let enc_part_cipher = kerberos::encrypt(&ticket_fips, reply_enctype, reply_key, reply_usage, &enc_tgs_rep_bytes).ok()?;
 
