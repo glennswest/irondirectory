@@ -445,6 +445,10 @@ forwarding. Windows VM: stormcentral#465. macOS: after #25.
 real join would hit first were found and filed: #87 DC-locator DNS records
 (done) and #88 GSS-SPNEGO SASL bind (rootDSE advertised it, unimplemented;
 done). What remains needs the Windows VMs (stormcentral#465) or #25.
+2026-11-25: nothing changed on either (`stormcentral windows list` empty,
+#465 last updated 2026-10-19); no third speculative pass without a client --
+what Windows does next shows in its netsetup.log on the VM. #20 proposed
+`--after stormcentral#465 --after irondirectory#25` (item c0650cbd862a).
 Left, neither changeable from this repo: the real `Add-Computer` run needs
 wintest11/wintest2025 (stormcentral#465: built, but the master has not added
 the DHCP reservations/records or run `windows install`; `stormcentral
