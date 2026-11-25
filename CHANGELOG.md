@@ -5,6 +5,17 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-25
+- **fix:** concurrent writes could leave stale secondary indexes (finding
+  e925e45000f8, #80). `put_entry_indexed`/`delete_entry_indexed` read the old
+  entry, then committed without checking it was still current: two writers
+  that both read A and wrote B and C left the entry at C with B's index
+  behind, and a delete racing a write removed a stale value's indexes, so
+  principal/account lookups could return wrong or duplicate DNs. Every update
+  and delete transaction is now guarded on the entry key's `mod_revision` (or
+  its absence), and on a lost race the read and transaction are redone (up
+  to 64 times, then `StoreError::Contended`). `test/index-race-e2e.sh`.
+
 ### 2026-11-24
 - **fix:** the TGS, kpasswd and iron-ldap's GSSAPI acceptor read the
   Authenticator (and built the TGS-REP / AP-REP) in the *ticket's* enctype

@@ -252,6 +252,14 @@ workspace unit tests, ldap-rebind-moddn + ldap-filters e2e PASS; step 5 of
 ldapsearch) PASS at 8d7218a, failed as expected on the old encoding. Names
 already stored with one of those characters are not migrated.
 
+## Done (2026-11-25): #80 finding e925e45000f8 (stale secondary indexes)
+
+`iron_store::index`: put/delete transactions guarded on the read's
+`mod_revision` (or `version == 0`), redone on a lost race (64 tries, then
+`StoreError::Contended`). `test/index-race-e2e.sh` runs
+`crates/store/tests/index_race.rs` (16 writers, own clients) on a throwaway
+fastetcd; see the #80 closing comment for the before/after runs.
+
 ## Done (2026-11-24): #79 finding bf4c13fcebad (session-key enctype)
 
 TGS (`tgs_exchange`, incl. referral replies), kpasswd and `gssapi::accept`
