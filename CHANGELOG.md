@@ -6,6 +6,14 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 ## [Unreleased]
 
 ### 2026-11-25
+- **fix:** a subtree watch dropped all but the first event of each etcd
+  `WatchResponse` (finding f7d57dd68673, #81). A response carries several
+  events for a multi-key transaction or a backlog the watcher catches up on,
+  and iron-gc's live replica reads through this helper, so it could miss
+  entry changes until they changed again or the watch reconnected.
+  `watch_subtree` now returns a `SubtreeWatch` that queues each response's
+  events; `next_subtree_event`/`next_entry_change` hand out every one, in
+  order. `test/watch-batch-e2e.sh`.
 - **fix:** concurrent writes could leave stale secondary indexes (finding
   e925e45000f8, #80). `put_entry_indexed`/`delete_entry_indexed` read the old
   entry, then committed without checking it was still current: two writers

@@ -252,6 +252,13 @@ workspace unit tests, ldap-rebind-moddn + ldap-filters e2e PASS; step 5 of
 ldapsearch) PASS at 8d7218a, failed as expected on the old encoding. Names
 already stored with one of those characters are not migrated.
 
+## Done (2026-11-25): #81 finding f7d57dd68673 (watch dropped events)
+
+`iron_store::entry::SubtreeWatch` queues a WatchResponse's events;
+`next_subtree_event` returns each. `test/watch-batch-e2e.sh` runs
+`crates/store/tests/watch_batch.rs` (25-key put txn, 25-key delete txn, one
+lone put) on a throwaway fastetcd; see the #81 closing comment.
+
 ## Done (2026-11-25): #80 finding e925e45000f8 (stale secondary indexes)
 
 `iron_store::index`: put/delete transactions guarded on the read's
