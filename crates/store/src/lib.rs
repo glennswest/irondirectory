@@ -52,6 +52,8 @@ pub enum StoreError {
     RidPoolCorrupt(String, String),
     #[error("fastetcd TLS settings: {0}")]
     TlsSettings(String),
+    #[error("entry {0} kept changing under concurrent writes; the write was not applied")]
+    Contended(String),
 }
 
 /// The [`ClusterRef`] a binary reaches fastetcd with (#26): `endpoint`
