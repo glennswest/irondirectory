@@ -224,14 +224,15 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
-## In progress (2026-11-26): #43 bootstrap ldap/ + host/ service principals
+## Done (2026-11-26): #43 bootstrap ldap/ + host/ service principals
 
 `IRON_BOOTSTRAP_SERVICE_HOSTS` -> `ldap/<h>`, `host/<h>` (random keys,
-create-only, `cn=<svc>.<h>,<base>`). `test/bootstrap-service-principals-e2e.sh`
-(kvno each, real ldapwhoami -Y GSSAPI, rerun no-op, bad name refused).
-- [x] e2e committed alone at 895f6a0, sc-build SC_BUILD_EXPECT_FAIL submitted
-- [ ] fix + sc-build (clippy -D warnings, unit tests, e2e) PASS
-- [ ] close #43; operator side is irondirectory-operator#25
+create-only, `cn=<svc>.<h>,<base>`, no SID). `test/bootstrap-service-principals-e2e.sh`
+failed as expected at 895f6a0 (SC_BUILD_EXPECT_FAIL), PASS at 8d3e6c0 with
+clippy -D warnings, bootstrap unit tests and ldap-channel-binding e2e.
+Gotcha: Cyrus SASL forward-canonicalizes the URI host (`-N` stops only the
+reverse lookup; the build VM makes localhost localhost.g8.lo), so the e2e
+binds to 127.0.0.1. Operator side: irondirectory-operator#25.
 
 ## Done (2026-11-19): #69 live-infrastructure.md stub markers
 
