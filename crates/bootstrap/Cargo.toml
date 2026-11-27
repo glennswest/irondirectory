@@ -1,6 +1,6 @@
 [package]
 name = "iron-bootstrap"
-description = "Idempotent first-boot provisioning of a new domain (forest registry, domain SID, krbtgt, administrator) for irondirectory-operator pods (#25)."
+description = "Idempotent first-boot provisioning of a new domain (forest registry, domain SID, krbtgt, administrator, ldap/ and host/ service principals) for irondirectory-operator pods (#25)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

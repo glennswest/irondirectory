@@ -5,6 +5,18 @@ cross-project convention; the project uses [Semantic Versioning](https://semver.
 
 ## [Unreleased]
 
+### 2026-11-26
+- **feat:** iron-bootstrap creates `ldap/<host>` and `host/<host>` service
+  principals (#43). A domain it made had none, so a GSSAPI LDAP bind
+  (`ldapsearch -Y GSSAPI`, SSSD) to it failed with
+  KDC_ERR_S_PRINCIPAL_UNKNOWN unless someone ran `iron-kdc-ctl` by hand. New
+  optional `IRON_BOOTSTRAP_SERVICE_HOSTS` (comma-separated host names,
+  normalized and validated): each name gets both principals with random
+  keys, create-only like `krbtgt`, at the DN `iron-kdc-ctl set-password`
+  uses. irondirectory-operator passes the address Service's
+  `<name>.<namespace>.svc` and `spec.address.hostname` (operator#8, #25).
+  `test/bootstrap-service-principals-e2e.sh`.
+
 ### 2026-11-25
 - **fix:** a subtree watch dropped all but the first event of each etcd
   `WatchResponse` (finding f7d57dd68673, #81). A response carries several

@@ -289,6 +289,7 @@ members of one directory can run it at once and agree on one domain SID.
 | `IRON_BOOTSTRAP_REALM` | required | e.g. `CORP.EXAMPLE.LO` (upper-cased) |
 | `IRON_BOOTSTRAP_NETBIOS_NAME` | required | e.g. `CORP`, stored on the domain's registry record |
 | `IRON_BOOTSTRAP_ADMIN_PASSWORD_FILE` | required | file holding the administrator password (trailing newlines dropped; at least 8 bytes, a FIPS PBKDF2 limit) |
+| `IRON_BOOTSTRAP_SERVICE_HOSTS` | unset | comma-separated host names clients reach the directory by (#43), e.g. `dir.corp.svc,ldap.corp.example.lo`; each gets `ldap/<host>` and `host/<host>` service principals. Lower-cased, a trailing dot dropped; letters, digits, `-` and dots only (an IP literal is allowed), anything else stops bootstrap |
 | `IRON_BOOTSTRAP_ONESHOT` | unset | `1` exits 0 after provisioning instead of staying resident |
 
 It needs `OPENSSL_CONF` (FIPS) like the daemons. What it creates, if absent:
@@ -301,10 +302,13 @@ It needs `OPENSSL_CONF` (FIPS) like the daemons. What it creates, if absent:
 | base entry | `<base>`, `domainDNS`, `objectSid` = the domain SID |
 | `krbtgt/<REALM>@<REALM>` | `cn=krbtgt,<base>`, random key, RID 502 |
 | `administrator@<REALM>` | `cn=administrator,<base>`, RID 500, `userPassword` (LDAP bind) and Kerberos keys from the password file |
+| `ldap/<host>@<REALM>`, `host/<host>@<REALM>` for each `IRON_BOOTSTRAP_SERVICE_HOSTS` name | `cn=ldap.<host>,<base>` / `cn=host.<host>,<base>` (the DN `iron-kdc-ctl set-password` uses), random key, no SID. `ldap/` is what a GSSAPI LDAP bind to `<host>` asks the KDC for, and iron-ldapd's acceptor reads its key from the store, so no keytab is needed; `host/`'s key goes to sshd etc. with `iron-kdc-ctl export-keytab`. One that exists under any DN is left alone |
 
 A stored record with a different realm or base DN for the same partition id
 is reported as an error, never rewritten. Changing the password file later
-does not change the stored password.
+does not change the stored password. A name added to
+`IRON_BOOTSTRAP_SERVICE_HOSTS` later gets its principals on the next start;
+one removed keeps them (nothing is deleted).
 
 ## Operator CLIs
 

@@ -18,6 +18,7 @@ fn settings(endpoint: &str, pid: &str) -> Settings {
         realm: format!("{}.EXAMPLE.LO", pid.to_ascii_uppercase()),
         netbios_name: pid.to_ascii_uppercase(),
         admin_password: b"TestPass123!".to_vec(),
+        service_hosts: vec![format!("dir.{pid}.svc")],
     }
 }
 
@@ -67,6 +68,11 @@ async fn concurrent_members_agree_and_a_rerun_does_nothing() {
     let admin = format!("administrator@{}", s.realm);
     let admins = reports.iter().filter(|r| r.created.contains(&admin)).count();
     assert_eq!(admins, 1, "administrator created {admins} times: {reports:?}");
+    for service in iron_bootstrap::SERVICE_CLASSES {
+        let p = format!("{service}/dir.{pid}.svc@{}", s.realm);
+        let n = reports.iter().filter(|r| r.created.contains(&p)).count();
+        assert_eq!(n, 1, "{p} created {n} times: {reports:?}");
+    }
 
     // The administrator binds by password and has Kerberos keys.
     let mut store = store(&s).await;
@@ -75,6 +81,8 @@ async fn concurrent_members_agree_and_a_rerun_does_nothing() {
     let stored = &entry.get("userpassword").unwrap()[0];
     assert!(iron_crypto::pbkdf2::verify_password(&fips, b"TestPass123!", stored).unwrap());
     assert!(!iron_kdc::principal::keys(&entry).unwrap().is_empty());
+    let ldap = store.get_entry(&s.service_dn("ldap", &format!("dir.{pid}.svc")).unwrap()).await.unwrap().expect("ldap/ entry");
+    assert!(!iron_kdc::principal::keys(&ldap).unwrap().is_empty());
 
     // A restart with a different password changes nothing.
     let mut again = s.clone();

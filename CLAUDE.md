@@ -224,6 +224,15 @@ Not compile time: a clean `cargo build && cargo test` is 31 s on dev
 waiting for fastetcd for ever (now 30 s) and `cargo test` crashing without
 `OPENSSL_CONF` (now set by `.cargo/config.toml`).
 
+## In progress (2026-11-26): #43 bootstrap ldap/ + host/ service principals
+
+`IRON_BOOTSTRAP_SERVICE_HOSTS` -> `ldap/<h>`, `host/<h>` (random keys,
+create-only, `cn=<svc>.<h>,<base>`). `test/bootstrap-service-principals-e2e.sh`
+(kvno each, real ldapwhoami -Y GSSAPI, rerun no-op, bad name refused).
+- [x] e2e committed alone at 895f6a0, sc-build SC_BUILD_EXPECT_FAIL submitted
+- [ ] fix + sc-build (clippy -D warnings, unit tests, e2e) PASS
+- [ ] close #43; operator side is irondirectory-operator#25
+
 ## Done (2026-11-19): #69 live-infrastructure.md stub markers
 
 Three history passages quoted iron-ldap's old exop refusal or called built

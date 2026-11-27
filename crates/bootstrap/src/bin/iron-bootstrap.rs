@@ -8,7 +8,9 @@
 //! Env: `IRON_BOOTSTRAP_FASTETCD_ENDPOINT`, `IRON_BOOTSTRAP_PARTITION_ID`,
 //! `IRON_BOOTSTRAP_BASE_DN`, `IRON_BOOTSTRAP_REALM`,
 //! `IRON_BOOTSTRAP_NETBIOS_NAME`, `IRON_BOOTSTRAP_ADMIN_PASSWORD_FILE` (all
-//! required), and `OPENSSL_CONF` activating the FIPS provider.
+//! required), `IRON_BOOTSTRAP_SERVICE_HOSTS` (optional, comma-separated host
+//! names for `ldap/` and `host/` service principals, #43), and `OPENSSL_CONF`
+//! activating the FIPS provider.
 //! `IRON_BOOTSTRAP_ONESHOT=1` exits 0 after provisioning instead of staying
 //! resident (for use outside a pod).
 

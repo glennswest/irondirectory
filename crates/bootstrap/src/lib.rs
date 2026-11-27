@@ -13,7 +13,14 @@
 //! 3. `krbtgt/<REALM>`, with a random key (RID 502);
 //! 4. `cn=administrator,<base>` (RID 500), whose `userPassword` (PBKDF2, for
 //!    LDAP simple bind) and Kerberos keys both come from the admin password
-//!    file.
+//!    file;
+//! 5. for each name in `IRON_BOOTSTRAP_SERVICE_HOSTS` (#43), the service
+//!    principals `ldap/<name>@<REALM>` (what a GSSAPI LDAP bind asks the KDC
+//!    for, and whose key iron-ldapd's acceptor reads from the store) and
+//!    `host/<name>@<REALM>`, each with a random key, at
+//!    `cn=ldap.<name>,<base>` / `cn=host.<name>,<base>` -- the DN
+//!    `iron-kdc-ctl set-password` gives them. A principal that already exists
+//!    under any DN is left alone.
 //!
 //! Every write is create-only: one etcd transaction guarded on the key not
 //! existing yet ([`iron_store::store::Store::create_entry`]). Nothing that
@@ -56,6 +63,41 @@ pub struct Settings {
     pub realm: String,
     pub netbios_name: String,
     pub admin_password: Vec<u8>,
+    /// Host names to create `ldap/` and `host/` service principals for
+    /// (`IRON_BOOTSTRAP_SERVICE_HOSTS`, comma-separated; see [`service_hosts`]).
+    pub service_hosts: Vec<String>,
+}
+
+/// The service classes bootstrap creates a principal of for each host.
+pub const SERVICE_CLASSES: [&str; 2] = ["ldap", "host"];
+
+/// Parses `IRON_BOOTSTRAP_SERVICE_HOSTS`: comma-separated host names,
+/// trimmed, lower-cased (Kerberos host-based names are compared exactly, and
+/// clients lower-case the host part), one trailing dot dropped, duplicates
+/// dropped. A name must be DNS-shaped (letters, digits, `-`, dot-separated
+/// non-empty labels) -- an IP literal like `127.0.0.1` is too; anything else
+/// (a `/`, `@`, `,`, space, empty label) is refused rather than turned into
+/// a principal no client would ask for.
+pub fn service_hosts(raw: &str) -> anyhow::Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for part in raw.split(',') {
+        let mut name = part.trim().to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        if name.ends_with('.') {
+            name.pop();
+        }
+        let ok = name.len() <= 253
+            && name.split('.').all(|l| !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+        if !ok {
+            bail!("IRON_BOOTSTRAP_SERVICE_HOSTS: {:?} is not a host name", part.trim());
+        }
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    Ok(out)
 }
 
 impl Settings {
@@ -81,6 +123,7 @@ impl Settings {
             realm: var("IRON_BOOTSTRAP_REALM")?.to_ascii_uppercase(),
             netbios_name: var("IRON_BOOTSTRAP_NETBIOS_NAME")?.to_ascii_uppercase(),
             admin_password: password_from_file(&raw)?,
+            service_hosts: service_hosts(&std::env::var("IRON_BOOTSTRAP_SERVICE_HOSTS").unwrap_or_default())?,
         })
     }
 
@@ -102,6 +145,12 @@ impl Settings {
 
     pub fn krbtgt_dn(&self) -> anyhow::Result<Dn> {
         Ok(Dn::parse(&format!("cn=krbtgt,{}", self.base_dn))?)
+    }
+
+    /// `ldap/<host>` -> `cn=ldap.<host>,<base>`, as `iron-kdc-ctl
+    /// set-password` names a principal it creates.
+    pub fn service_dn(&self, service: &str, host: &str) -> anyhow::Result<Dn> {
+        Ok(Dn::parse(&format!("cn={service}.{host},{}", self.base_dn))?)
     }
 }
 
@@ -232,6 +281,23 @@ pub async fn provision(store: &mut Store, s: &Settings) -> anyhow::Result<Report
         }
     }
 
+    // 5. Service principals (#43).
+    for host in &s.service_hosts {
+        for service in SERVICE_CLASSES {
+            let principal = format!("{service}/{host}@{}", s.realm);
+            if principal_exists(store, s, &principal).await? {
+                continue;
+            }
+            let dn = s.service_dn(service, host)?;
+            let mut entry = service_entry(service, host);
+            let secret: String = iron_crypto::kerberos::random_bytes(&fips, 32)?.iter().map(|b| format!("{b:02x}")).collect();
+            iron_kdc::principal::set_password(&fips, &mut entry, &principal, secret.as_bytes())?;
+            if store.create_entry(&dn, &entry, &spec).await? {
+                report.created.push(principal);
+            }
+        }
+    }
+
     Ok(report)
 }
 
@@ -260,6 +326,16 @@ pub fn base_entry(base_dn: &Dn, domain_sid: &Sid) -> Entry {
         e.set("dc", [dc.value().to_string()]);
     }
     e.set(OBJECT_SID_ATTR, [encode_binary_attr(&domain_sid.encode())]);
+    e
+}
+
+/// A service principal's entry, the shape `iron-kdc-ctl set-password`
+/// creates (keys added by the caller). No `objectSid`: nothing logs on as
+/// it, so no PAC is ever built for it.
+pub fn service_entry(service: &str, host: &str) -> Entry {
+    let mut e = Entry::new();
+    e.set("objectclass", ["top"]);
+    e.set("cn", [format!("{service}.{host}")]);
     e
 }
 
@@ -304,6 +380,30 @@ mod tests {
     }
 
     #[test]
+    fn service_hosts_are_normalized() {
+        assert_eq!(service_hosts("").unwrap(), Vec::<String>::new());
+        assert_eq!(
+            service_hosts(" Dir.NS.svc , ldap.Example.LO., dir.ns.svc,,127.0.0.1").unwrap(),
+            ["dir.ns.svc", "ldap.example.lo", "127.0.0.1"]
+        );
+    }
+
+    #[test]
+    fn service_hosts_refuses_what_is_not_a_host_name() {
+        for bad in ["ldap/dir", "dir@REALM", "a b", "a..b", ".a", "a_b"] {
+            let e = service_hosts(bad).unwrap_err().to_string();
+            assert!(e.contains("not a host name"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn service_entry_matches_kdc_ctl() {
+        let e = service_entry("ldap", "dir.ns.svc");
+        assert_eq!(e.get("cn").unwrap()[0], "ldap.dir.ns.svc");
+        assert!(e.get(OBJECT_SID_ATTR).is_none());
+    }
+
+    #[test]
     fn account_gets_the_well_known_rid() {
         let e = account_entry(ADMINISTRATOR, &sid(), ADMINISTRATOR_RID);
         let raw = decode_binary_attr(&e.get(OBJECT_SID_ATTR).unwrap()[0]);
@@ -330,7 +430,9 @@ mod tests {
             realm: "CORP.EXAMPLE.LO".into(),
             netbios_name: "CORP".into(),
             admin_password: b"TestPass123!".to_vec(),
+            service_hosts: vec!["dir.ns.svc".into()],
         };
+        assert_eq!(s.service_dn("ldap", "dir.ns.svc").unwrap().to_string(), "cn=ldap.dir.ns.svc,dc=corp,dc=example,dc=lo");
         assert_eq!(s.config_dn().unwrap().to_string(), "cn=configuration,dc=corp,dc=example,dc=lo");
         assert_eq!(s.admin_dn().unwrap().to_string(), "cn=administrator,dc=corp,dc=example,dc=lo");
         assert_eq!(s.config_partition_id(), "corp-config");
