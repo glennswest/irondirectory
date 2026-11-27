@@ -3,12 +3,15 @@
 # with IRON_BOOTSTRAP_SERVICE_HOSTS answers a GSSAPI LDAP bind with no hand
 # provisioning. On a throwaway fastetcd, with real iron-ldapd/iron-kdcd and
 # real MIT kinit/kvno and OpenLDAP ldapwhoami (Cyrus SASL GSSAPI):
-#  1. iron-bootstrap with IRON_BOOTSTRAP_SERVICE_HOSTS="localhost, Dir.<pid>.SVC"
+#  1. iron-bootstrap with IRON_BOOTSTRAP_SERVICE_HOSTS="127.0.0.1, Dir.<pid>.SVC"
 #     creates ldap/ and host/ for both names (lower-cased);
 #  2. kinit administrator, then kvno gets a service ticket for each of the
-#     four, and one for a name not listed (ldap/127.0.0.1) is refused;
-#  3. ldapwhoami -Y GSSAPI -H ldap://localhost:<port> binds as
-#     u:administrator@REALM -- iron-ldapd's acceptor finds the key bootstrap made;
+#     four, and one for a name not listed (ldap/other.<pid>.svc) is refused;
+#  3. ldapwhoami -Y GSSAPI -H ldap://127.0.0.1:<port> binds as
+#     u:administrator@REALM -- iron-ldapd's acceptor finds the key bootstrap made.
+#     An IP, not localhost: Cyrus SASL forward-canonicalizes a name (-N stops
+#     only the reverse lookup), and the build VM turns localhost into
+#     localhost.g8.lo;
 #  4. a second run ("pod restart") creates nothing, and the bind still works;
 #  5. a value that is not a host name stops iron-bootstrap with the reason.
 # Needs curl, kinit, kvno, ldapwhoami (with the Cyrus SASL GSSAPI plugin) and
@@ -46,17 +49,17 @@ printf '%s\n' "$PW" > "$W/password"
 export IRON_BOOTSTRAP_FASTETCD_ENDPOINT=$E IRON_BOOTSTRAP_PARTITION_ID=$PID_ID IRON_BOOTSTRAP_BASE_DN=$BASE \
   IRON_BOOTSTRAP_REALM=$REALM IRON_BOOTSTRAP_NETBIOS_NAME=$(echo "$PID_ID" | tr a-z A-Z) \
   IRON_BOOTSTRAP_ADMIN_PASSWORD_FILE=$W/password IRON_BOOTSTRAP_ONESHOT=1 \
-  IRON_BOOTSTRAP_SERVICE_HOSTS="localhost, $(echo "$SVC" | tr a-z A-Z)"
+  IRON_BOOTSTRAP_SERVICE_HOSTS="127.0.0.1, $(echo "$SVC" | tr a-z A-Z)"
 ok=
 for attempt in 1 2 3 4 5; do
   timeout 60 $B/iron-bootstrap > "$W/bootstrap1.log" 2>&1 && grep -q "provisioned" "$W/bootstrap1.log" && { ok=1; break; }
   sleep 2
 done
 [ -n "$ok" ] || fail "iron-bootstrap did not provision"
-for p in ldap/localhost host/localhost "ldap/$SVC" "host/$SVC"; do
+for p in ldap/127.0.0.1 host/127.0.0.1 "ldap/$SVC" "host/$SVC"; do
   sed 's/\x1b\[[0-9;]*m//g' "$W/bootstrap1.log" | grep -qF "\"$p@$REALM\"" || fail "1. bootstrap did not report creating $p@$REALM"
 done
-echo "ok: 1. bootstrap created ldap/ and host/ for localhost and $SVC"
+echo "ok: 1. bootstrap created ldap/ and host/ for 127.0.0.1 and $SVC"
 
 export IRON_KDC_FASTETCD_ENDPOINT=$E IRON_KDC_PARTITION_ID=$PID_ID IRON_KDC_BASE_DN=$BASE IRON_KDC_REALM=$REALM
 IRON_KDC_LISTEN=127.0.0.1:$((P + 3)) IRON_KDC_KPASSWD_LISTEN=127.0.0.1:$((P + 4)) $B/iron-kdcd > "$W/kdcd.log" 2>&1 & pids+=($!)
@@ -83,15 +86,15 @@ export KRB5_CONFIG=$W/krb5.conf KRB5CCNAME=FILE:$W/cc
 client() { env -u OPENSSL_CONF "$@"; }
 sleep 1
 echo "$PW" | client kinit "administrator@$REALM" > "$W/out" 2>&1 || fail "kinit administrator@$REALM"
-for p in ldap/localhost host/localhost "ldap/$SVC" "host/$SVC"; do
+for p in ldap/127.0.0.1 host/127.0.0.1 "ldap/$SVC" "host/$SVC"; do
   client kvno "$p@$REALM" > "$W/out" 2>&1 || fail "2. kvno $p@$REALM"
 done
-if client kvno "ldap/127.0.0.1@$REALM" > "$W/out" 2>&1; then fail "2. kvno got a ticket for an unlisted name"; fi
-echo "ok: 2. kvno: service tickets for all four; unlisted ldap/127.0.0.1 refused ($(tr -d '\n' < "$W/out"))"
+if client kvno "ldap/other.$PID_ID.svc@$REALM" > "$W/out" 2>&1; then fail "2. kvno got a ticket for an unlisted name"; fi
+echo "ok: 2. kvno: service tickets for all four; unlisted ldap/other.$PID_ID.svc refused ($(tr -d '\n' < "$W/out"))"
 
 WANT="u:administrator@$REALM"
-whoami() { client ldapwhoami -Y GSSAPI -N -H "ldap://localhost:$((P + 6))" > "$W/out" 2>&1 && grep -qx "$WANT" "$W/out"; }
-whoami || fail "3. ldapwhoami -Y GSSAPI to ldap://localhost"
+whoami() { client ldapwhoami -Y GSSAPI -N -H "ldap://127.0.0.1:$((P + 6))" > "$W/out" 2>&1 && grep -qx "$WANT" "$W/out"; }
+whoami || fail "3. ldapwhoami -Y GSSAPI to ldap://127.0.0.1"
 echo "ok: 3. ldapwhoami -Y GSSAPI: $(grep -x "$WANT" "$W/out")"
 
 $B/iron-bootstrap > "$W/bootstrap2.log" 2>&1 || fail "4. second bootstrap run failed"
